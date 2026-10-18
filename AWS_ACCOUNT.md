@@ -49,4 +49,4 @@ and carries the tags `project=concordance` and `env=<env>`.
 | `concordance-sandbox-data`       | eu-west-2: private corpus bucket `concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4` (`raw/`, `text/`, `chunks/`, `media/`): versioned, SSE-S3, public access blocked, SSL enforced, noncurrent versions expire after 30 days, destroyed with the stack |
 | `concordance-sandbox-guardrails` | eu-west-2: the budget `concordance-sandbox-monthly` ($25 a month on tag `project=concordance`, email at 80% and 100% actual) and the parameter `/concordance/sandbox/agents/kill-switch` (created `off`)                                                         |
 
-Both stacks are `CREATE_COMPLETE` from `deploy.yml` run 39127857512 (2026-10-18).
+Both stacks were created by `deploy.yml` run 39127857512 and are `UPDATE_COMPLETE` from run 39134485616 (2026-10-18).
