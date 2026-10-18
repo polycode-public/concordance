@@ -35,12 +35,12 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "aws-cdk": "2.1144.0",
-    "aws-cdk-lib": "2.272.0",
+    "aws-cdk": "2.1145.0",
+    "aws-cdk-lib": "2.273.0",
     "constructs": "10.8.1",
-    "eslint": "10.11.0",
+    "eslint": "10.12.0",
     "globals": "17.13.0",
-    "prettier": "3.9.9",
-    "vitest": "5.0.3"
+    "prettier": "3.9.10",
+    "vitest": "5.0.4"
   }
 }
