@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
+import { isExpired, signIn, signOut } from "./auth.js";
 import { openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -22,11 +23,32 @@ let opening = null;
 
 const TAG = /\[E(\d+)\]/g;
 
-function connect() {
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${scheme}://${location.host}/ws`);
-  ws.addEventListener("open", () => (connectionEl.textContent = "connected"));
+/** @type {{ wsUrl: string, httpUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+let config;
+
+async function loadConfig() {
+  const res = await fetch("./config.json", { cache: "no-store" });
+  if (!res.ok) throw new Error(`config.json answered ${res.status}`);
+  return res.json();
+}
+
+async function connect() {
+  let url = config.wsUrl;
+  let token = null;
+  if (config.auth) {
+    connectionEl.textContent = "signed out";
+    token = await signIn(config.auth);
+    url = `${url}?token=${encodeURIComponent(token)}`;
+  }
+  let opened = false;
+  ws = new WebSocket(url);
+  ws.addEventListener("open", () => {
+    opened = true;
+    connectionEl.textContent = "connected";
+  });
   ws.addEventListener("close", () => {
+    // A $connect the authorizer denies closes before it opens.
+    if (token && (!opened || isExpired(token))) signOut();
     connectionEl.textContent = "disconnected; retrying";
     setTimeout(connect, 2000);
   });
@@ -90,7 +112,7 @@ function chip(block) {
 }
 
 function open(block) {
-  if (ws.readyState !== WebSocket.OPEN) {
+  if (ws?.readyState !== WebSocket.OPEN) {
     showViewerMessage("Not connected to the server.");
     return;
   }
@@ -158,7 +180,7 @@ function finish(message) {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = question.value.trim();
-  if (!text || ws.readyState !== WebSocket.OPEN) return;
+  if (!text || ws?.readyState !== WebSocket.OPEN) return;
   current = crypto.randomUUID();
   streamed = "";
   answerEl.textContent = "";
@@ -181,4 +203,9 @@ cancelButton.addEventListener("click", () => {
   if (current) ws.send(JSON.stringify({ type: "cancel", thread, turnId: current }));
 });
 
-connect();
+try {
+  config = await loadConfig();
+  await connect();
+} catch (err) {
+  connectionEl.textContent = `cannot start: ${err.message}`;
+}

@@ -12,6 +12,8 @@
 import { App, Tags } from "aws-cdk-lib";
 import { DataStack } from "../lib/dataStack.mjs";
 import { GuardrailsStack } from "../lib/guardrailsStack.mjs";
+import { StoreStack } from "../lib/storeStack.mjs";
+import { AppStack } from "../lib/appStack.mjs";
 
 export const WORKLOAD_REGION = "eu-west-2";
 export const PROJECT = "concordance";
@@ -24,9 +26,23 @@ const region = app.node.tryGetContext("region") ?? WORKLOAD_REGION;
 const env = { account, region };
 const stackName = (name) => `${PROJECT}-${envName}-${name}`;
 
-new DataStack(app, stackName("data"), {
+const dataStack = new DataStack(app, stackName("data"), {
   env,
   description: `${PROJECT} ${envName}: the private bucket for off-site copies of corpus files`,
+});
+
+const storeStack = new StoreStack(app, stackName("store"), {
+  env,
+  description: `${PROJECT} ${envName}: the Aurora Serverless v2 Postgres store behind the RDS Data API`,
+});
+
+new AppStack(app, stackName("app"), {
+  env,
+  corpusBucket: dataStack.bucket,
+  dbResourceArn: storeStack.cluster.clusterArn,
+  dbSecretArn: storeStack.secret.secretArn,
+  dbName: "concordance",
+  description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
 });
 
 new GuardrailsStack(app, stackName("guardrails"), {
