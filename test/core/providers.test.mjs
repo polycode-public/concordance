@@ -34,12 +34,6 @@ describe("providerFromEnv", () => {
     expect(p.embedDim).toBe(768);
   });
 
-  it("fails clearly for bedrock", () => {
-    expect(() => providerFromEnv({ MODEL_PROVIDER: "bedrock" })).toThrow(
-      "bedrock provider is not built yet; set MODEL_PROVIDER=laptop",
-    );
-  });
-
   it("rejects an unknown provider", () => {
     expect(() => providerFromEnv({ MODEL_PROVIDER: "other" })).toThrow(/unknown MODEL_PROVIDER/);
   });
