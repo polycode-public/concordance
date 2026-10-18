@@ -79,7 +79,13 @@ function stubQuery(blocks = BLOCKS) {
       answer: result.text,
       abstained: false,
       citations,
-      checks: { ...checks, model: result.model, promptVersion: PROMPT_VERSION },
+      checks: {
+        ...checks,
+        model: result.model,
+        promptVersion: PROMPT_VERSION,
+        usage: result.usage,
+        timings: { rewriting: 0, retrieving: 1, answering: 2, checking: 0 },
+      },
     };
   };
 }
@@ -178,6 +184,13 @@ describe("local server", () => {
     expect(order.indexOf("evidence")).toBeLessThan(order.indexOf("token"));
     expect(order.lastIndexOf("token")).toBeLessThan(order.indexOf("done"));
     expect(done).toMatchObject({ thread: "t1", turnId: "u1" });
+    expect(done.checks.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(Object.keys(done.checks.timings)).toEqual([
+      "rewriting",
+      "retrieving",
+      "answering",
+      "checking",
+    ]);
     expect(done.checks).toMatchObject({
       sentences: 2,
       supported: 1,

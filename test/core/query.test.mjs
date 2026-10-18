@@ -208,6 +208,24 @@ describe("runQuery", () => {
     chat: async () => reply,
   });
 
+  it("returns every stage time and passes the usage through", async () => {
+    const usage = { inputTokens: 12, outputTokens: 5 };
+    const result = await runQuery({
+      question: "q",
+      db,
+      provider: providerOf({ text: "Dark [E1].", model: "m", promptVersion: "v", usage }),
+    });
+    expect(Object.keys(result.checks.timings)).toEqual([
+      "rewriting",
+      "retrieving",
+      "answering",
+      "checking",
+    ]);
+    for (const ms of Object.values(result.checks.timings)) expect(ms).toBeGreaterThanOrEqual(0);
+    expect(result.checks.usage).toEqual(usage);
+    expect(result.checks).toMatchObject({ sentences: 1, supported: 1 });
+  });
+
   it("scores no sentence and cites nothing on an abstention", async () => {
     const result = await runQuery({
       question: "q",
@@ -227,6 +245,7 @@ describe("runQuery", () => {
       supported: 0,
       warning: false,
       marks: [],
+      usage: null,
     });
   });
 });

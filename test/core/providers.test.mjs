@@ -91,7 +91,20 @@ describe("ollama provider", () => {
       text: "Hello there.",
       model: "qwen2.5:7b-instruct",
       promptVersion: "v1",
+      usage: null,
     });
+  });
+
+  it("returns the token counts of the final message", async () => {
+    const p = createOllamaProvider({
+      fetchImpl: async () =>
+        ndjsonResponse([
+          { message: { content: "Hi" }, done: false },
+          { message: { content: "" }, done: true, prompt_eval_count: 1204, eval_count: 310 },
+        ]),
+    });
+    const result = await p.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.usage).toEqual({ inputTokens: 1204, outputTokens: 310 });
   });
 
   it("stops the chat stream when the signal aborts", async () => {

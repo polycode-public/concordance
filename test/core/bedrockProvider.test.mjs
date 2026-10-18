@@ -84,6 +84,7 @@ describe("bedrock provider", () => {
       text: "Hello there.",
       model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
       promptVersion: "v1",
+      usage: null,
     });
     const { input, options } = client.calls[0];
     expect(input.system).toEqual([{ text: "Be brief." }]);
@@ -94,6 +95,17 @@ describe("bedrock provider", () => {
     ]);
     expect(input.inferenceConfig).toEqual({ temperature: 0 });
     expect(options.abortSignal).toBeUndefined();
+  });
+
+  it("returns the token counts of the stream metadata event", async () => {
+    async function* withMetadata() {
+      yield { contentBlockDelta: { delta: { text: "Hi" } } };
+      yield { metadata: { usage: { inputTokens: 1204, outputTokens: 310, totalTokens: 1514 } } };
+    }
+    const client = fakeClient({ ConverseStreamCommand: () => ({ stream: withMetadata() }) });
+    const p = createBedrockProvider({}, { sdk, client });
+    const result = await p.chat({ messages: [{ role: "user", content: "hi" }] });
+    expect(result.usage).toEqual({ inputTokens: 1204, outputTokens: 310 });
   });
 
   it("rejects with AbortError when the signal aborts mid-stream", async () => {

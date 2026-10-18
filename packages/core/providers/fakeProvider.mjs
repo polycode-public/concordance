@@ -44,7 +44,12 @@ export function createFakeProvider({ tokens, delayMs = 20, embedDim = 4, embedFo
         text += token;
         onToken?.(token);
       }
-      return { text, model: "fake-chat", promptVersion };
+      return {
+        text,
+        model: "fake-chat",
+        promptVersion,
+        usage: { inputTokens: 0, outputTokens: 0 },
+      };
     },
   };
 }

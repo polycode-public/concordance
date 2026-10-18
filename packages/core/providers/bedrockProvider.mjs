@@ -89,8 +89,13 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
       });
       const response = await runtime.send(command, { abortSignal: signal });
       let text = "";
+      let usage = null;
       for await (const event of response.stream) {
         signal?.throwIfAborted();
+        if (event.metadata?.usage) {
+          const { inputTokens, outputTokens } = event.metadata.usage;
+          usage = { inputTokens, outputTokens };
+        }
         const piece = event.contentBlockDelta?.delta?.text;
         if (piece) {
           text += piece;
@@ -98,7 +103,7 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
         }
       }
       signal?.throwIfAborted();
-      return { text, model: chatModel, promptVersion };
+      return { text, model: chatModel, promptVersion, usage };
     },
 
     async extractJson({ prompt, schema, signal }) {

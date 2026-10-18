@@ -42,7 +42,13 @@ async function stubQuery({ question, provider, db, signal, onStage, onEvidence, 
     answer: result.text,
     abstained: false,
     citations,
-    checks: { ...checks, model: result.model, promptVersion: PROMPT_VERSION },
+    checks: {
+      ...checks,
+      model: result.model,
+      promptVersion: PROMPT_VERSION,
+      usage: result.usage,
+      timings: { rewriting: 0, retrieving: 1, answering: 2, checking: 0 },
+    },
   };
 }
 
@@ -142,6 +148,13 @@ describe("turn function", () => {
     const done = frames.at(-1);
     expect(done).toMatchObject({ thread: "t1", turnId: "u1" });
     expect(done.checks).toMatchObject({ sentences: 2, supported: 1, abstained: false });
+    expect(done.checks.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(Object.keys(done.checks.timings)).toEqual([
+      "rewriting",
+      "retrieving",
+      "answering",
+      "checking",
+    ]);
     expect(done.citations).toEqual([
       { evidence: 1, locator: { document: "IWS1", page: 3, paragraph: 11 } },
     ]);
