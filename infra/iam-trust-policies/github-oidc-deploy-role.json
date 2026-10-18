@@ -12,6 +12,8 @@
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           "token.actions.githubusercontent.com:sub": [
+            "repo:polycode-public@293237199/concordance@1424328841:ref:refs/heads/main",
+            "repo:polycode-public@293237199/concordance@1424328841:environment:sandbox",
             "repo:polycode-public/concordance:ref:refs/heads/main",
             "repo:polycode-public/concordance:environment:sandbox"
           ]
