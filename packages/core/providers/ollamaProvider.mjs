@@ -41,6 +41,7 @@ export function createOllamaProvider({
     name: "laptop",
     embedModel,
     embedDim,
+    extractModel,
 
     async embed(texts) {
       const res = await post("/api/embed", { model: embedModel, input: texts });
