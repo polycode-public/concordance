@@ -13,8 +13,6 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-only
 
-- [ ] **F2. The laptop models re-measured idle (Phase 0).** The first row in `PLAN_LAPTOP_STACK.md`'s measurements table (23 chunks a minute, 60 s to first token, 0.7 tokens a second) was taken at a load average above 40 while other sessions ran. Run `node scripts/measure-models.mjs` when `uptime` shows a load average under 4 and `ollama ps` is empty, as a background command (1 embed pass over 200 passages in batches of 32, 1 chat of about 300 tokens, bge-m3 and qwen2.5:7b-instruct), and replace the row and its note with the idle figures. **Size** 1 file. **Model** Haiku.
-
 ## Machine-ask
 
 - [ ] **A2. The media tools (Phase 5, needed from Phase 1 for video exhibits).** On the operator's yes: `brew install whisper-cpp ffmpeg`, then `whisper-cli --help` and `ffmpeg -version` recorded in `PLAN_LAPTOP_STACK.md`'s install list, and the `large-v3-turbo` model file placed under `models/` (gitignored) with its SHA-256 in the plan. **Size** 1 file. **Model** Haiku.

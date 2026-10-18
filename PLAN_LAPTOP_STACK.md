@@ -45,9 +45,7 @@ schedule is set from them. A 2,000-page slice is the dev corpus until the demo m
 
 | Machine         | Embed (chunks/min, bge-m3) | Chat first token (s) | Chat tokens/s | Extraction (pages/h) | Date       |
 | --------------- | -------------------------- | -------------------- | ------------- | -------------------- | ---------- |
-| Intel i9, 64 GB | 23                         | 60.3                 | 0.7           | not measured         | 2026-10-18 |
-
-The Intel row was measured at a load average above 40 while other sessions ran on the machine, so it is a ceiling on latency, not a floor; the idle measurement replaces it.
+| Intel i9, 64 GB | 146                        | 6.6                  | 6             | not measured         | 2026-10-18 |
 
 ## Postgres
 
