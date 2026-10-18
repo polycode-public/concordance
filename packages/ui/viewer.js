@@ -2,7 +2,7 @@
 // Copyright 2026 Polycode Limited
 //
 // The PDF viewer panel. PDF.js loads from cdnjs on first use; when the CDN is
-// unreachable the panel says so and links to the original.
+// unreachable the panel says so, and the link to the original stays either way.
 
 const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299";
 
@@ -11,6 +11,7 @@ const panel = $("viewer");
 const titleEl = $("viewer-title");
 const pageEl = $("viewer-page");
 const messageEl = $("viewer-message");
+const original = $("viewer-original");
 const canvas = $("viewer-canvas");
 const prev = $("viewer-prev");
 const next = $("viewer-next");
@@ -27,28 +28,28 @@ async function loadPdfjs() {
   return lib;
 }
 
-function message(text, link) {
-  messageEl.replaceChildren(text);
-  if (link) {
-    messageEl.append(
-      " ",
-      Object.assign(document.createElement("a"), {
-        href: link,
-        target: "_blank",
-        rel: "noopener",
-        textContent: "Open the original",
-      }),
-    );
-  }
+function show() {
+  panel.hidden = false;
+  document.body.dataset.viewer = "open";
+}
+
+function message(text) {
+  messageEl.textContent = text;
+}
+
+function linkOriginal(url, page) {
+  original.href = `${url}#page=${page}`;
+  original.hidden = false;
 }
 
 async function renderPage(n) {
-  const { doc } = current;
+  const { doc, url } = current;
   const page = Math.min(Math.max(1, n), doc.numPages);
   current.page = page;
-  pageEl.textContent = `p. ${page} of ${doc.numPages}`;
+  pageEl.textContent = `p.${page} of ${doc.numPages}`;
   prev.disabled = page <= 1;
   next.disabled = page >= doc.numPages;
+  linkOriginal(url, page);
   const pdfPage = await doc.getPage(page);
   const width = canvas.parentElement.clientWidth || 600;
   const base = pdfPage.getViewport({ scale: 1 });
@@ -73,8 +74,14 @@ async function renderPage(n) {
 
 /** Shows a message in the panel, for example an error from the server. */
 export function showViewerMessage(text) {
-  panel.hidden = false;
+  show();
   message(text);
+}
+
+/** Hides the panel; the document stays loaded for the next open. */
+export function closeViewer() {
+  panel.hidden = true;
+  delete document.body.dataset.viewer;
 }
 
 /**
@@ -82,16 +89,16 @@ export function showViewerMessage(text) {
  * @param {{ url: string, page: number, title: string }} target
  */
 export async function openPdf({ url, page, title }) {
-  panel.hidden = false;
+  show();
   titleEl.textContent = title;
-  const fallback = `${url}#page=${page}`;
-  message("Loading…");
+  linkOriginal(url, page);
+  message("Loading the page.");
   let lib;
   try {
     lib = await loadPdfjs();
   } catch {
     canvas.hidden = true;
-    message("The PDF viewer could not load from cdnjs.", fallback);
+    message("The PDF viewer could not load from cdnjs. Open the original instead.");
     return;
   }
   try {
@@ -105,10 +112,10 @@ export async function openPdf({ url, page, title }) {
   } catch (err) {
     current = { url: null, doc: null, page: 1 };
     canvas.hidden = true;
-    message(`The PDF could not be shown: ${err.message}.`, fallback);
+    message(`The PDF could not be shown: ${err.message}. Open the original instead.`);
   }
 }
 
 prev.addEventListener("click", () => current.doc && renderPage(current.page - 1));
 next.addEventListener("click", () => current.doc && renderPage(current.page + 1));
-$("viewer-close").addEventListener("click", () => (panel.hidden = true));
+$("viewer-close").addEventListener("click", closeViewer);

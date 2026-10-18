@@ -1,27 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 import { isExpired, signIn, signOut } from "./auth.js";
-import { openPdf, showViewerMessage } from "./viewer.js";
+import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
-const answerEl = $("answer");
-const statusEl = $("status");
-const scoreEl = $("score");
+const turnsEl = $("turns");
 const connectionEl = $("connection");
 const form = $("ask");
 const question = $("question");
 const cancelButton = $("cancel");
+const documentsEl = $("documents");
+const documentsCount = $("documents-count");
+const documentsEmpty = $("documents-empty");
 const evidenceEl = $("evidence");
+const evidenceCount = $("evidence-count");
+const evidenceEmpty = $("evidence-empty");
 
+const STAGES = ["rewriting", "retrieving", "answering", "checking"];
+const TAG = /\[E(\d+)\]/g;
 const thread = "main";
+
 let ws;
+/** @type {Turn | null} The turn whose frames are still arriving. */
 let current = null;
-let streamed = "";
-/** @type {Map<number, { evidence: number, documentId: string, locator: object, header: string }>} */
-let blocks = new Map();
+/** @type {Turn | null} The last turn started; the keys act on its chips. */
+let newest = null;
 let opening = null;
 
-const TAG = /\[E(\d+)\]/g;
+/**
+ * @typedef {{ evidence: number, documentId: string, locator: { page?: number, paragraph?: number },
+ *   header?: string | null, text?: string }} Block
+ * @typedef {{ id: string, blocks: Map<number, Block>, streamed: string, startedAt: number | null,
+ *   article: HTMLElement, stages: HTMLElement, answer: HTMLElement, score: HTMLElement,
+ *   note: HTMLElement }} Turn
+ */
+
+/** Every document cited this session, by document id. */
+const documents = new Map();
 
 /** @type {{ wsUrl: string, httpUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
@@ -65,88 +80,177 @@ function onFrame(frame) {
     if (opening) {
       showViewerMessage(frame.message);
       opening = null;
+    } else if (newest) {
+      newest.note.textContent = frame.message;
     } else {
-      statusEl.textContent = `error: ${frame.message}`;
+      connectionEl.textContent = frame.message;
     }
     return;
   }
-  if (frame.turnId !== current) return;
+  const turn = current;
+  if (!turn || frame.turnId !== turn.id) return;
   switch (frame.type) {
     case "status":
-      statusEl.textContent = `${frame.stage}…`;
+      turn.startedAt ??= performance.now();
+      renderStages(turn, frame.stage);
       break;
     case "evidence":
-      renderEvidence(frame.blocks);
+      turn.blocks = new Map(frame.blocks.map((b) => [b.evidence, b]));
+      renderEvidence(turn, new Set());
       break;
     case "token":
-      streamed += frame.text;
-      answerEl.textContent = streamed;
+      turn.streamed += frame.text;
+      turn.answer.textContent = turn.streamed;
       break;
     case "done":
-      renderChecked(frame.checks);
-      finish("");
+      renderChecked(turn, frame.checks);
+      finishStages(turn);
+      recordCitations(turn, frame.citations ?? []);
+      finish(turn, "");
       break;
     case "cancelled":
-      answerEl.append(
+      turn.answer.append(
         Object.assign(document.createElement("span"), {
           className: "interrupted",
           textContent: " interrupted",
         }),
       );
-      finish("cancelled");
+      finish(turn, "");
       break;
     case "error":
-      finish(`error: ${frame.message}`);
+      finish(turn, frame.message);
       break;
   }
+}
+
+/** The locator as the trade writes it: the document, its page, its paragraph. */
+function reference(block) {
+  const parts = [block.documentId];
+  if (block.locator?.page != null) parts.push(`p.${block.locator.page}`);
+  if (block.locator?.paragraph != null) parts.push(`¶${block.locator.paragraph}`);
+  return parts.join(" ");
+}
+
+function referenceName(block) {
+  const parts = [block.documentId];
+  if (block.locator?.page != null) parts.push(`page ${block.locator.page}`);
+  if (block.locator?.paragraph != null) parts.push(`paragraph ${block.locator.paragraph}`);
+  return `Evidence ${block.evidence}: ${parts.join(", ")}`;
 }
 
 function chip(block) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "chip";
-  button.textContent = `[E${block.evidence}]`;
-  button.title = block.header ?? block.documentId;
-  button.addEventListener("click", () => open(block));
+  button.className = "cite";
+  button.textContent = String(block.evidence);
+  button.title = reference(block);
+  button.setAttribute("aria-label", referenceName(block));
+  button.addEventListener("click", () => open(block.documentId, block.locator));
   return button;
 }
 
-function open(block) {
+function open(documentId, locator) {
   if (ws?.readyState !== WebSocket.OPEN) {
     showViewerMessage("Not connected to the server.");
     return;
   }
-  opening = block.documentId;
-  ws.send(JSON.stringify({ type: "open", docId: block.documentId, locator: block.locator }));
+  opening = documentId;
+  ws.send(JSON.stringify({ type: "open", docId: documentId, locator }));
 }
 
-function renderEvidence(list) {
-  blocks = new Map(list.map((b) => [b.evidence, b]));
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/** @returns {Turn} */
+function startTurn(text) {
+  const article = el("article", "turn");
+  const q = el("div", "question");
+  q.append(el("span", "label small", "You asked"), el("p", null, text));
+  const stages = el("ol", "stages small");
+  stages.setAttribute("aria-label", "Stages");
+  for (const stage of STAGES) {
+    const li = el("li", null, stage);
+    li.dataset.state = "pending";
+    stages.append(li);
+  }
+  const answer = el("p", "answer plain");
+  const score = el("p", "score");
+  const note = el("p", "note");
+  note.setAttribute("role", "alert");
+  article.append(q, stages, answer, score, note);
+  $("opening")?.remove();
+  turnsEl.append(article);
+  article.scrollIntoView({ block: "start" });
+  return {
+    id: crypto.randomUUID(),
+    blocks: new Map(),
+    streamed: "",
+    startedAt: null,
+    article,
+    stages,
+    answer,
+    score,
+    note,
+  };
+}
+
+function renderStages(turn, stage) {
+  const index = STAGES.indexOf(stage);
+  [...turn.stages.children].forEach((li, i) => {
+    if (li.classList.contains("elapsed")) return;
+    li.dataset.state = i < index ? "done" : i === index ? "current" : "pending";
+    if (i === index) li.setAttribute("aria-current", "step");
+    else li.removeAttribute("aria-current");
+  });
+}
+
+function finishStages(turn) {
+  for (const li of turn.stages.children) {
+    li.dataset.state = "done";
+    li.removeAttribute("aria-current");
+  }
+  if (turn.startedAt !== null) {
+    const seconds = ((performance.now() - turn.startedAt) / 1000).toFixed(1);
+    turn.stages.append(el("li", "elapsed", `${seconds} s`));
+  }
+}
+
+function renderEvidence(turn, cited) {
+  const blocks = [...turn.blocks.values()];
+  evidenceCount.textContent = blocks.length ? ` ${blocks.length}` : "";
+  evidenceEmpty.hidden = blocks.length > 0;
   evidenceEl.replaceChildren(
-    ...list.map((block) => {
-      const item = document.createElement("li");
-      const header = Object.assign(document.createElement("span"), {
-        className: "chip-header",
-        textContent: block.header ?? block.documentId,
-      });
-      item.append(chip(block), " ", header);
+    ...blocks.map((block) => {
+      const item = el("li", "block");
+      item.dataset.cited = cited.size === 0 || cited.has(block.evidence) ? "yes" : "no";
+      const heading = el("div", "heading");
+      const ref = el("button", "reference quiet small", reference(block));
+      ref.type = "button";
+      ref.addEventListener("click", () => open(block.documentId, block.locator));
+      heading.append(chip(block), ref);
+      item.append(heading);
+      if (block.text) item.append(el("blockquote", "quote", block.text));
       return item;
     }),
   );
 }
 
 /** Splits a sentence into text and citation chips. */
-function withChips(text) {
+function withChips(turn, text) {
   const parts = [];
   let last = 0;
   for (const match of text.matchAll(TAG)) {
     if (match.index > last) parts.push(text.slice(last, match.index));
-    const block = blocks.get(Number(match[1]));
+    const block = turn.blocks.get(Number(match[1]));
     parts.push(
       block
         ? chip(block)
         : Object.assign(document.createElement("span"), {
-            className: "dropped",
+            className: "dropped-tag",
             title: "no such evidence block",
             textContent: match[0],
           }),
@@ -157,23 +261,76 @@ function withChips(text) {
   return parts;
 }
 
-function renderChecked(checks) {
-  answerEl.replaceChildren(
+function renderChecked(turn, checks) {
+  turn.answer.classList.remove("plain");
+  turn.answer.replaceChildren(
     ...checks.marks.map((mark) => {
       const span = document.createElement("span");
       span.className = mark.supported ? "supported" : "unsupported";
       span.title = mark.supported ? "cites evidence" : "unsupported";
-      span.append(...withChips(mark.text), " ");
+      span.append(...withChips(turn, mark.text), " ");
       return span;
     }),
   );
-  scoreEl.textContent = `${checks.supported} of ${checks.sentences} sentences supported`;
-  scoreEl.classList.toggle("warning", checks.warning);
+  turn.score.classList.toggle("warning", Boolean(checks.warning) && !checks.abstained);
+  turn.score.classList.toggle("abstained", Boolean(checks.abstained));
+  if (checks.abstained) {
+    turn.score.textContent = "No claim made";
+    return;
+  }
+  turn.score.textContent = `${checks.supported} of ${checks.sentences} sentences supported`;
+  if (checks.droppedCitations > 0) {
+    const n = checks.droppedCitations;
+    turn.score.append(el("span", "dropped", `${n} citation${n === 1 ? "" : "s"} dropped`));
+  }
 }
 
-function finish(message) {
-  statusEl.textContent = message;
-  current = null;
+function recordCitations(turn, citations) {
+  const cited = new Set();
+  for (const citation of citations) {
+    const block = turn.blocks.get(citation.evidence);
+    if (!block) continue;
+    cited.add(citation.evidence);
+    const entry = documents.get(block.documentId) ?? {
+      documentId: block.documentId,
+      header: block.header,
+      locator: block.locator,
+      count: 0,
+    };
+    entry.count += 1;
+    documents.set(block.documentId, entry);
+  }
+  renderEvidence(turn, cited);
+  renderDocuments();
+}
+
+const times = (n) => (n === 1 ? "cited once" : `cited ${n} times`);
+
+function renderDocuments() {
+  const entries = [...documents.values()];
+  documentsCount.textContent = entries.length ? ` ${entries.length}` : "";
+  documentsEmpty.hidden = entries.length > 0;
+  documentsEl.replaceChildren(
+    ...entries.map((entry) => {
+      const item = el("li", "document");
+      const text = el("div");
+      text.append(
+        el("div", "reference", entry.documentId),
+        el("div", "meta small", times(entry.count)),
+      );
+      const page = entry.locator?.page;
+      const button = el("button", "quiet small", page != null ? `Open at p.${page}` : "Open");
+      button.type = "button";
+      button.addEventListener("click", () => open(entry.documentId, entry.locator));
+      item.append(text, button);
+      return item;
+    }),
+  );
+}
+
+function finish(turn, message) {
+  turn.note.textContent = message;
+  if (current === turn) current = null;
   cancelButton.disabled = true;
 }
 
@@ -181,15 +338,12 @@ form.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = question.value.trim();
   if (!text || ws?.readyState !== WebSocket.OPEN) return;
-  current = crypto.randomUUID();
-  streamed = "";
-  answerEl.textContent = "";
-  blocks = new Map();
-  evidenceEl.replaceChildren();
-  scoreEl.textContent = "";
-  scoreEl.classList.remove("warning");
+  const turn = startTurn(text);
+  current = turn;
+  newest = turn;
+  question.value = "";
   cancelButton.disabled = false;
-  ws.send(JSON.stringify({ type: "turn", thread, turnId: current, text, attachments: [] }));
+  ws.send(JSON.stringify({ type: "turn", thread, turnId: turn.id, text, attachments: [] }));
 });
 
 question.addEventListener("keydown", (event) => {
@@ -199,9 +353,59 @@ question.addEventListener("keydown", (event) => {
   }
 });
 
-cancelButton.addEventListener("click", () => {
-  if (current) ws.send(JSON.stringify({ type: "cancel", thread, turnId: current }));
+function cancel() {
+  if (current) ws.send(JSON.stringify({ type: "cancel", thread, turnId: current.id }));
+}
+
+cancelButton.addEventListener("click", cancel);
+
+const isTyping = (target) =>
+  target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+
+/** Moves focus among the newest answer's chips; `step` is +1 or -1. */
+function focusChip(step) {
+  if (!newest) return;
+  const chips = [...newest.answer.querySelectorAll(".cite")];
+  if (!chips.length) return;
+  const at = chips.indexOf(document.activeElement);
+  const next =
+    at === -1 ? (step > 0 ? 0 : chips.length - 1) : (at + step + chips.length) % chips.length;
+  chips[next].focus();
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (isTyping(event.target)) {
+    if (event.key === "Escape" && current) cancel();
+    return;
+  }
+  switch (event.key) {
+    case "]":
+      event.preventDefault();
+      focusChip(1);
+      break;
+    case "[":
+      event.preventDefault();
+      focusChip(-1);
+      break;
+    case "o":
+      event.preventDefault();
+      if (document.activeElement?.classList.contains("cite")) document.activeElement.click();
+      else newest?.answer.querySelector(".cite")?.click();
+      break;
+    case "Escape":
+      closeViewer();
+      break;
+    case "/":
+      event.preventDefault();
+      question.focus();
+      break;
+  }
 });
+
+if (new URLSearchParams(location.search).has("present")) {
+  document.documentElement.dataset.present = "";
+}
 
 try {
   config = await loadConfig();
