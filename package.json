@@ -30,6 +30,13 @@
     "deploy": "cdk deploy --all --require-approval never"
   },
   "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1152.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1152.0",
+    "@aws-sdk/client-dynamodb": "^3.1152.0",
+    "@aws-sdk/client-rds-data": "^3.1152.0",
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@aws-sdk/s3-request-presigner": "^3.1152.0",
+    "aws-jwt-verify": "^5.2.1",
     "pg": "^8.16.3",
     "ws": "^8.18.3"
   },
@@ -38,6 +45,7 @@
     "aws-cdk": "2.1145.0",
     "aws-cdk-lib": "2.273.0",
     "constructs": "10.8.1",
+    "esbuild": "^0.28.2",
     "eslint": "10.12.0",
     "globals": "17.13.0",
     "prettier": "3.9.10",
