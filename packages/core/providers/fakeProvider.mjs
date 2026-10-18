@@ -3,21 +3,27 @@
 
 /**
  * A deterministic provider for tests. It streams fixed tokens with a delay per token and
- * honours the abort signal.
- * @param {{ tokens: string[], delayMs?: number }} options
+ * honours the abort signal. embed() returns a vector of embedDim zeros with a 1 in the last
+ * position, or embedFor(text) when given. extractJson() returns extractJson(args) when given,
+ * else an empty object.
+ * @param {{ tokens: string[], delayMs?: number, embedDim?: number,
+ *   embedFor?: (text: string) => number[],
+ *   extractJson?: (args: { prompt: string, schema?: object }) => object }} options
  */
-export function createFakeProvider({ tokens, delayMs = 20 }) {
+export function createFakeProvider({ tokens, delayMs = 20, embedDim = 4, embedFor, extractJson }) {
   const calls = [];
+  const unitVector = Array.from({ length: embedDim }, (_, i) => (i === embedDim - 1 ? 1 : 0));
   return {
     name: "fake",
     embedModel: "fake-embed",
-    embedDim: 4,
+    embedDim,
+    extractModel: "fake-extract",
     calls,
     async embed(texts) {
-      return texts.map(() => [0, 0, 0, 1]);
+      return texts.map((text) => (embedFor ? embedFor(text) : [...unitVector]));
     },
-    async extractJson() {
-      return {};
+    async extractJson(args) {
+      return extractJson ? extractJson(args) : {};
     },
     async chat({ messages, signal, onToken, promptVersion = "unversioned" }) {
       calls.push({ messages });
