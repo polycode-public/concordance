@@ -13,9 +13,9 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-only
 
-## Machine-ask
+- [ ] **C5. The deployed smoke, remainder (Phase 1).** Proven on 2026-10-19: the live Bedrock tier (four model calls), the CloudFront page (200, `config.json` with the WebSocket, HTTP API and Cognito ids), the operator's sign-in as `demo` and a turn over the empty store answering "The corpus does not say." with `status`, `token` and `done` frames. Left: `deploy.yml` gains a post-deploy step that fetches the CloudFront page (expects 200) and prints the five stacks' outputs in the job summary (the `SiteUrl` output of `concordance-sandbox-app` read with `aws cloudformation describe-stacks`); the page's score line reads "0 of 1 sentences supported" on an abstention because `checkAnswer` in `packages/core/query.mjs` scores the abstention sentence as unsupported, so `isAbstention` short-circuits the score line to "no claim made" in `renderChecked` (`packages/ui/app.js`) and the `done` frame's checks carry `abstained: true`; the paused cluster's resume time read from the `concordance-sandbox-app` turn function's CloudWatch logs (the first turn after a pause) and recorded in `PLAN_AWS_SANDBOX.md`'s store table. **Size** ~4 files. **Model** Sonnet.
 
-- [ ] **C5. The deployed smoke (Phase 1).** The store and app stacks are deployed (run 39168340123). The live Bedrock tier (`CONCORDANCE_BEDROCK_TESTS=1`, three calls) from the laptop under `AWS_PROFILE=polycode-sandbox`; the one Cognito user's permanent password set on the operator's yes with `aws --profile polycode-sandbox --region eu-west-2 cognito-idp admin-set-user-password --user-pool-id eu-west-2_XvxzifuNb --username demo --permanent --password <chosen>` and kept outside the repository; a turn sent over the empty store from the CloudFront page that returns `status`, `token` and `done` frames with the abstention phrase (`ABSTAIN_PHRASE` in `packages/core/prompt.mjs`); the paused cluster's resume time recorded in `PLAN_AWS_SANDBOX.md`; `deploy.yml` gains a post-deploy step that fetches the CloudFront page (200) and prints the stack outputs in the job summary. Exit: the smoke step green on `main`; the abstention turn and its frames in the closing commit. The ask is the password write. **Size** ~2 files. **Model** Sonnet.
+## Machine-ask
 
 ## Human-driven
 
