@@ -124,6 +124,17 @@ describe("local server", () => {
     expect(body.ollama).toBe("down");
   });
 
+  it("serves a config.json that points the page at its own WebSocket without sign-in", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    const res = await fetch(`http://127.0.0.1:${app.port}/config.json`);
+    expect(res.headers.get("content-type")).toMatch(/^application\/json/);
+    expect(await res.json()).toEqual({
+      wsUrl: `ws://127.0.0.1:${app.port}/ws`,
+      httpUrl: "",
+      auth: null,
+    });
+  });
+
   it("serves the UI with the correct content types", async () => {
     app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
     const base = `http://127.0.0.1:${app.port}`;
