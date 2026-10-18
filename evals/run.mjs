@@ -84,7 +84,14 @@ export function score(scored) {
   };
 }
 
-export async function run(argv, { runQuery, providerFor } = {}) {
+/**
+ * Runs every gold question through runQuery and prints the metrics. A database
+ * that the caller passes stays open; one this function opens is closed at the end.
+ * @param {string[]} argv
+ * @param {{ runQuery?: Function, providerFor?: Function, db?: { query: Function },
+ *   openDb?: () => { query: Function, close: () => Promise<void> } }} [deps]
+ */
+export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
   const args = parseArgs(argv);
   const goldPath = path.resolve(args.gold);
   const rows = parseGold(await readFile(goldPath, "utf8"), args.gold);
@@ -99,14 +106,20 @@ export async function run(argv, { runQuery, providerFor } = {}) {
       MODEL_PROVIDER: kind,
     });
   const provider = await providerFor(args.provider);
-  const scored = [];
-  for (const row of rows) {
-    const result = await runQuery({ question: row.question, provider });
-    scored.push({ row, result });
+  openDb ??= async () => (await import("../packages/core/db.mjs")).createDb();
+  const owned = db ? null : await openDb();
+  try {
+    const scored = [];
+    for (const row of rows) {
+      const result = await runQuery({ question: row.question, provider, db: db ?? owned });
+      scored.push({ row, result });
+    }
+    const metrics = score(scored);
+    console.log(JSON.stringify({ provider: args.provider, gold: args.gold, ...metrics }, null, 2));
+    return metrics;
+  } finally {
+    await owned?.close();
   }
-  const metrics = score(scored);
-  console.log(JSON.stringify({ provider: args.provider, gold: args.gold, ...metrics }, null, 2));
-  return metrics;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

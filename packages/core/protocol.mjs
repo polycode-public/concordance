@@ -12,6 +12,7 @@ export const SERVER_FRAME_TYPES = Object.freeze([
   "done",
   "cancelled",
   "error",
+  "opened",
 ]);
 export const STAGES = Object.freeze(["rewriting", "retrieving", "answering", "checking"]);
 
@@ -79,7 +80,21 @@ export const serverFrame = {
   },
   token: (thread, turnId, text) => ({ type: "token", thread, turnId, text }),
   evidence: (thread, turnId, blocks) => ({ type: "evidence", thread, turnId, blocks }),
-  done: (thread, turnId, checks) => ({ type: "done", thread, turnId, checks }),
+  done: (thread, turnId, checks, citations = []) => ({
+    type: "done",
+    thread,
+    turnId,
+    checks,
+    citations,
+  }),
   cancelled: (thread, turnId) => ({ type: "cancelled", thread, turnId }),
   error: (message, thread, turnId) => ({ type: "error", thread, turnId, message }),
+  opened: (docId, { url, title, page, locator }) => ({
+    type: "opened",
+    docId,
+    url,
+    title,
+    page,
+    locator,
+  }),
 };

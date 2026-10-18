@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
+import { openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
 const answerEl = $("answer");
@@ -9,11 +10,17 @@ const connectionEl = $("connection");
 const form = $("ask");
 const question = $("question");
 const cancelButton = $("cancel");
+const evidenceEl = $("evidence");
 
 const thread = "main";
 let ws;
 let current = null;
 let streamed = "";
+/** @type {Map<number, { evidence: number, documentId: string, locator: object, header: string }>} */
+let blocks = new Map();
+let opening = null;
+
+const TAG = /\[E(\d+)\]/g;
 
 function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -27,8 +34,18 @@ function connect() {
 }
 
 function onFrame(frame) {
+  if (frame.type === "opened") {
+    if (frame.docId === opening) openPdf(frame);
+    opening = null;
+    return;
+  }
   if (frame.type === "error" && !frame.turnId) {
-    statusEl.textContent = `error: ${frame.message}`;
+    if (opening) {
+      showViewerMessage(frame.message);
+      opening = null;
+    } else {
+      statusEl.textContent = `error: ${frame.message}`;
+    }
     return;
   }
   if (frame.turnId !== current) return;
@@ -37,6 +54,7 @@ function onFrame(frame) {
       statusEl.textContent = `${frame.stage}…`;
       break;
     case "evidence":
+      renderEvidence(frame.blocks);
       break;
     case "token":
       streamed += frame.text;
@@ -61,13 +79,69 @@ function onFrame(frame) {
   }
 }
 
+function chip(block) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chip";
+  button.textContent = `[E${block.evidence}]`;
+  button.title = block.header ?? block.documentId;
+  button.addEventListener("click", () => open(block));
+  return button;
+}
+
+function open(block) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    showViewerMessage("Not connected to the server.");
+    return;
+  }
+  opening = block.documentId;
+  ws.send(JSON.stringify({ type: "open", docId: block.documentId, locator: block.locator }));
+}
+
+function renderEvidence(list) {
+  blocks = new Map(list.map((b) => [b.evidence, b]));
+  evidenceEl.replaceChildren(
+    ...list.map((block) => {
+      const item = document.createElement("li");
+      const header = Object.assign(document.createElement("span"), {
+        className: "chip-header",
+        textContent: block.header ?? block.documentId,
+      });
+      item.append(chip(block), " ", header);
+      return item;
+    }),
+  );
+}
+
+/** Splits a sentence into text and citation chips. */
+function withChips(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(TAG)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    const block = blocks.get(Number(match[1]));
+    parts.push(
+      block
+        ? chip(block)
+        : Object.assign(document.createElement("span"), {
+            className: "dropped",
+            title: "no such evidence block",
+            textContent: match[0],
+          }),
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 function renderChecked(checks) {
   answerEl.replaceChildren(
     ...checks.marks.map((mark) => {
       const span = document.createElement("span");
       span.className = mark.supported ? "supported" : "unsupported";
       span.title = mark.supported ? "cites evidence" : "unsupported";
-      span.textContent = `${mark.text} `;
+      span.append(...withChips(mark.text), " ");
       return span;
     }),
   );
@@ -88,6 +162,8 @@ form.addEventListener("submit", (event) => {
   current = crypto.randomUUID();
   streamed = "";
   answerEl.textContent = "";
+  blocks = new Map();
+  evidenceEl.replaceChildren();
   scoreEl.textContent = "";
   scoreEl.classList.remove("warning");
   cancelButton.disabled = false;
