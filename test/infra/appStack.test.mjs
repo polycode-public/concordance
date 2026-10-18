@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
@@ -12,6 +14,15 @@ const SECRET = "arn:aws:secretsmanager:eu-west-2:111111111111:secret:concordance
 
 let template;
 let dataTemplate;
+let assembly;
+
+function assetFiles(name) {
+  return readdirSync(assembly.directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("asset."))
+    .map((entry) => path.join(assembly.directory, entry.name, name))
+    .filter((file) => existsSync(file));
+}
+
 beforeAll(() => {
   const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
   const data = new Stack(app, "Data", { env });
@@ -25,7 +36,8 @@ beforeAll(() => {
   });
   template = Template.fromStack(stack);
   dataTemplate = Template.fromStack(data);
-});
+  assembly = app.synth();
+}, 120000);
 
 describe("AppStack", () => {
   it("routes the WebSocket API through a REQUEST authorizer on $connect", () => {
@@ -129,6 +141,14 @@ describe("AppStack", () => {
       },
     });
     template.resourceCountIs("Custom::CDKBucketDeployment", 1);
+  });
+
+  it("writes the corpus into config.json", () => {
+    const configs = assetFiles("config.json").map((file) => readFileSync(file, "utf8"));
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toContain('"corpus":{"id":"grenfell"');
+    expect(configs[0]).toContain('"title":"Grenfell Tower Inquiry"');
+    expect(configs[0]).toContain('"subtitle":"witness statements"');
   });
 
   it("lets a browser range-read the presigned originals", () => {

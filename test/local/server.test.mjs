@@ -138,6 +138,7 @@ describe("local server", () => {
       wsUrl: `ws://127.0.0.1:${app.port}/ws`,
       httpUrl: "",
       auth: null,
+      corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
     });
   });
 

@@ -45,11 +45,17 @@ export class AppStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string }} props
+   *   dbSecretArn: string, dbName: string, corpusId?: string, corpusTitle?: string,
+   *   corpusSubtitle?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
     const { corpusBucket, dbResourceArn, dbSecretArn, dbName } = props;
+    const {
+      corpusId = "grenfell",
+      corpusTitle = "Grenfell Tower Inquiry",
+      corpusSubtitle = "witness statements",
+    } = props;
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
@@ -238,6 +244,7 @@ export class AppStack extends Stack {
             userPoolId: userPool.userPoolId,
             clientId: client.userPoolClientId,
           },
+          corpus: { id: corpusId, title: corpusTitle, subtitle: corpusSubtitle },
         }),
       ],
       distribution,

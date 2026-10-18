@@ -47,6 +47,13 @@ async function loadConfig() {
   return res.json();
 }
 
+function nameCorpus({ title, subtitle }) {
+  const name = `${title}: ${subtitle}`;
+  $("corpus-name").textContent = name;
+  $("signin-corpus").textContent = name;
+  document.title = `Concordance: ${title} ${subtitle}`;
+}
+
 async function connect() {
   let url = config.wsUrl;
   let token = null;
@@ -422,6 +429,7 @@ if (new URLSearchParams(location.search).has("present")) {
 
 try {
   config = await loadConfig();
+  nameCorpus(config.corpus);
   await connect();
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;

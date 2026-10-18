@@ -69,7 +69,9 @@ describe("the page's tokens", () => {
     expect(html.indexOf('href="/tokens.css"')).toBeLessThan(html.indexOf('href="/styles.css"'));
   });
 
-  it("names the inquiry in the header", () => {
-    expect(read("index.html")).toMatch(/<header[\s\S]*Grenfell Tower Inquiry[\s\S]*<\/header>/);
+  it("writes the corpus title and subtitle from config.json into the header", () => {
+    expect(read("index.html")).toMatch(/<header[\s\S]*id="corpus-name"[\s\S]*<\/header>/);
+    expect(read("app.js")).toMatch(/\$\("corpus-name"\)\.textContent = name/);
+    expect(read("app.js")).toContain("nameCorpus(config.corpus)");
   });
 });

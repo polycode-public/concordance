@@ -15,6 +15,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATIC = path.resolve(here, "..", "ui");
 const DEFAULT_CORPORA = path.resolve(here, "..", "..", "corpora");
 
+export const DEFAULT_CORPUS = {
+  id: "grenfell",
+  title: "Grenfell Tower Inquiry",
+  subtitle: "witness statements",
+};
+
 export const NO_DATABASE = "the database is not configured";
 
 const MIME = {
@@ -145,6 +151,7 @@ export async function createServer({
           wsUrl: `ws://${req.headers.host}/ws`,
           httpUrl: "",
           auth: null,
+          corpus: DEFAULT_CORPUS,
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
