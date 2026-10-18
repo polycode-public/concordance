@@ -29,7 +29,7 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-ask
 
-- [ ] **F3b. Sync the first slice to the originals bucket (Phase 2).** The importer is on `claude/ember-corpus` (PR pending): `corpora/grenfell/sources.json` (50 statements) and `manifest.jsonl` (11 fetched) committed, 11 PDFs under `corpora/grenfell/raw/`. On the operator's yes, one write: `aws --profile polycode-sandbox s3 sync corpora/grenfell/raw/ s3://concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4/grenfell/raw/ --exclude downloads.jsonl` then `aws --profile polycode-sandbox s3 cp corpora/grenfell/manifest.jsonl s3://concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4/grenfell/manifest.jsonl` and the same for `sources.json`; then `aws s3 ls` of the prefix as the proof (11 PDFs, two files). Exit: the bucket holds what the manifest lists. Blocked on the ember batch merging. **Size** 0 files. **Model** Haiku.
+- [ ] **F3b. Sync the first slice to the originals bucket (Phase 2).** The importer is on `main` (PR #10): `corpora/grenfell/sources.json` (50 statements) and `manifest.jsonl` (11 fetched) committed, 11 PDFs under `corpora/grenfell/raw/`. On the operator's yes, one write: `aws --profile polycode-sandbox s3 sync corpora/grenfell/raw/ s3://concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4/grenfell/raw/ --exclude downloads.jsonl` then `aws --profile polycode-sandbox s3 cp corpora/grenfell/manifest.jsonl s3://concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4/grenfell/manifest.jsonl` and the same for `sources.json`; then `aws s3 ls` of the prefix as the proof (11 PDFs, two files). Exit: the bucket holds what the manifest lists. The ask is the sync. **Size** 0 files. **Model** Haiku.
 
 ## Human-driven
 
