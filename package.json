@@ -26,6 +26,8 @@
     "models:pull": "bash scripts/models-pull.sh",
     "dev": "node packages/local/server.mjs",
     "eval": "node evals/run.mjs",
+    "corpus:grenfell:index": "node corpora/grenfell/discovery.mjs --floors 16-20 --include IWS00000490",
+    "corpus:grenfell:import": "node corpora/grenfell/import.mjs",
     "synth": "cdk synth",
     "deploy": "cdk deploy --all --require-approval never"
   },
