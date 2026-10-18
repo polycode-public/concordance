@@ -1,0 +1,74 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright 2026 Polycode Limited */
+
+/* Every colour, face, size, space and rule the page uses. No other file under
+   packages/ui names a colour; dark mode redefines the same tokens. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Paper and ink */
+  --paper: #fbfbf9;
+  --paper-deep: #f0f0ec;
+  --rule: #cfd0cb;
+  --ink: #16191d;
+  --ink-soft: #4a4f57;
+  --grey: #6b7079;
+  --red-ink: #a1232b;
+  --amber: #8a5a00;
+  --highlight: #f7e36b;
+  --highlight-deep: #e9cf3a;
+  --focus: #0b5bd3;
+  --button-ink: #fbfbf9;
+  --scrim: color-mix(in srgb, var(--ink) 60%, transparent);
+
+  /* Faces */
+  --face-tool: "Source Sans 3", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --face-witness: "Source Serif 4", "Times New Roman", Times, serif;
+  --weight-prose: 400;
+  --weight-label: 600;
+
+  /* Scale, in rem on the root */
+  --size-small: 0.875rem;
+  --line-small: 1.4;
+  --size-body: 1rem;
+  --line-body: 1.55;
+  --size-lead: 1.125rem;
+  --line-lead: 1.45;
+  --size-title: 1.25rem;
+  --line-title: 1.3;
+  --size-tab: 0.8125rem;
+  --measure: 68ch;
+
+  /* Space and rule */
+  --unit: 0.5rem;
+  --gutter: calc(var(--unit) * 2);
+  --target: 2.75rem;
+  --rule-width: 1px;
+  --radius: 2px;
+
+  /* Motion */
+  --quick: 150ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17191c;
+    --paper-deep: #21242a;
+    --rule: #3a3e45;
+    --ink: #ecedef;
+    --ink-soft: #b5b9c0;
+    --grey: #8a9099;
+    --red-ink: #f0787e;
+    --amber: #e3b04b;
+    --highlight: #5c4e0f;
+    --highlight-deep: #75651a;
+    --focus: #7fb0ff;
+    --button-ink: #17191c;
+  }
+}
+
+html[data-present] {
+  font-size: 20px;
+  --gutter: calc(var(--unit) * 3);
+}

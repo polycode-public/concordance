@@ -5,16 +5,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>concordance</title>
+    <title>Concordance: Grenfell Tower Inquiry witness statements</title>
+    <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/styles.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
     <header class="bar">
-      <h1>concordance</h1>
-      <span id="connection" class="muted">connecting</span>
+      <h1>Concordance</h1>
+      <p class="inquiry">Grenfell Tower Inquiry: witness statements</p>
+      <p id="connection" class="small soft" role="status">connecting</p>
     </header>
     <form id="signin" class="signin" hidden>
+      <h2>Sign in to Concordance</h2>
+      <p class="soft">Grenfell Tower Inquiry: witness statements</p>
       <label for="signin-user">User name</label>
       <input id="signin-user" name="username" autocomplete="username" required />
       <label for="signin-password">Password</label>
@@ -26,41 +30,70 @@
         required
       />
       <button type="submit">Sign in</button>
-      <p id="signin-message" class="muted" aria-live="polite"></p>
+      <p id="signin-message" class="message" role="alert"></p>
     </form>
-    <div class="layout">
-      <main>
-        <section id="answer" class="answer" aria-live="polite"></section>
-        <p id="score" class="score"></p>
-        <p id="status" class="status muted"></p>
-        <section class="evidence" aria-labelledby="evidence-title">
-          <h2 id="evidence-title" class="muted">Evidence</h2>
-          <ol id="evidence" class="evidence-list"></ol>
+    <div class="desk">
+      <main class="conversation" aria-label="Conversation">
+        <section id="turns" class="turns" aria-live="polite">
+          <p id="opening" class="opening">
+            Ask a question about the witness statements. Every sentence of the answer carries its
+            reference, and a reference opens the page it came from.
+          </p>
         </section>
+        <div class="ask">
+          <form id="ask">
+            <textarea
+              id="question"
+              rows="2"
+              placeholder="Ask about the witness statements"
+              aria-label="Ask about the witness statements"
+              required
+            ></textarea>
+            <div class="buttons">
+              <button type="submit" id="send">Send</button>
+              <button type="button" id="cancel" class="quiet" disabled>Cancel</button>
+            </div>
+          </form>
+          <p class="keys small">
+            Keys: <kbd>]</kbd> next citation, <kbd>[</kbd> previous, <kbd>o</kbd> open the source,
+            <kbd>Esc</kbd> close the viewer, <kbd>/</kbd> ask
+          </p>
+        </div>
       </main>
       <aside id="viewer" class="viewer" hidden aria-labelledby="viewer-title">
         <div class="viewer-bar">
           <strong id="viewer-title" class="viewer-title"></strong>
-          <button type="button" id="viewer-prev" class="small" aria-label="Previous page">‹</button>
-          <span id="viewer-page" class="muted"></span>
-          <button type="button" id="viewer-next" class="small" aria-label="Next page">›</button>
-          <button type="button" id="viewer-close" class="small" aria-label="Close viewer">×</button>
+          <button type="button" id="viewer-prev" class="quiet icon" aria-label="Previous page">
+            ‹
+          </button>
+          <span id="viewer-page" class="page small"></span>
+          <button type="button" id="viewer-next" class="quiet icon" aria-label="Next page">
+            ›
+          </button>
+          <a id="viewer-original" class="original small" target="_blank" rel="noopener" hidden>
+            Open the original
+          </a>
+          <button type="button" id="viewer-close" class="quiet">Close</button>
         </div>
-        <p id="viewer-message" class="viewer-message muted"></p>
+        <p id="viewer-message" class="viewer-message small" role="status"></p>
         <div class="viewer-body"><canvas id="viewer-canvas"></canvas></div>
       </aside>
+      <aside class="bundle" aria-label="Bundle">
+        <section aria-labelledby="documents-title">
+          <h2 id="documents-title">
+            Referenced documents<span id="documents-count" class="count"></span>
+          </h2>
+          <ol id="documents"></ol>
+          <p id="documents-empty" class="empty small">No document cited yet.</p>
+        </section>
+        <section aria-labelledby="evidence-title">
+          <h2 id="evidence-title">
+            Evidence this turn<span id="evidence-count" class="count"></span>
+          </h2>
+          <ol id="evidence"></ol>
+          <p id="evidence-empty" class="empty small">Ask a question to retrieve evidence.</p>
+        </section>
+      </aside>
     </div>
-    <form id="ask" class="ask">
-      <textarea
-        id="question"
-        rows="2"
-        placeholder="Ask about the witness statements"
-        required
-      ></textarea>
-      <div class="buttons">
-        <button type="submit" id="send">Send</button>
-        <button type="button" id="cancel" disabled>Cancel</button>
-      </div>
-    </form>
   </body>
 </html>
