@@ -148,12 +148,12 @@ roadmap slide, revisited after Phase 7.
 
 ## Open questions
 
-| Key | Question                                                                                                                                                                          | Decides                                      |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| H1  | Repository visibility: private, or public after a secrets pass                                                                                                                    | when the repo flips to public                |
-| H3  | SPARQL live or export only; voice in the demo or not                                                                                                                              | Phase 5 export, Phase 6 scope                |
-| O1  | A fine-grained token for the agent workflows                                                                                                                                      | when the agent workflows leave dispatch-only |
-| O2  | How the Grenfell files arrive: the inquiry site is archived at The National Archives (robots disallow, WAF challenge); browser download, session-driven Chrome, or a bulk request | the Phase 2 import                           |
+| Key | Question                                                                                                                                                                                                            | Decides                                      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| H1  | Repository visibility: private, or public after a secrets pass                                                                                                                                                      | when the repo flips to public                |
+| H3  | SPARQL live or export only; voice in the demo or not                                                                                                                                                                | Phase 5 export, Phase 6 scope                |
+| O1  | A fine-grained token for the agent workflows                                                                                                                                                                        | when the agent workflows leave dispatch-only |
+| O2  | How the Grenfell PDF bytes arrive: the catalogue index comes from the Discovery API (series GTI 2); the files by browser from the record pages, or by fetcher if a record's download URL is stable and unchallenged | the Phase 2 import                           |
 
 ## Related documents
 
