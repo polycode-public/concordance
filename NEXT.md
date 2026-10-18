@@ -7,7 +7,7 @@ Open work only. A row leaves this file in the same commit that closes it; comple
 
 The board runs in five sections, in this order. The section is the classification: what it takes to carry the row to completion. `machine-ask` is work a session drives with a human present to authenticate or approve (an SSO login, an AWS write, a GitHub setting, a brew install). `human-driven` is work a person must do themselves (a decision between named alternatives, a purchase, a signature).
 
-**Deployed:** nothing yet. `main` carries Phase 0 (the factory, `test.yml`, `deploy.yml` waiting on A1, the schema, the Ollama provider, the WebSocket server with cancel, the minimal page, the eval runner). **GitHub:** `github.com/polycode-public/concordance` (private).
+**Deployed:** `concordance-sandbox-data` (bucket `concordance-sandbox-data-corpusbucket36de2aaa-7jolgc2qi4a4`) and `concordance-sandbox-guardrails` (budget `concordance-sandbox-monthly`, $25; kill switch `/concordance/sandbox/agents/kill-switch` = `off`) in polycode-sandbox, from `deploy.yml` run 39127857512 of `1890926` (2026-10-18). `main` carries Phase 0 (the factory, `test.yml`, `deploy.yml`, the schema, the Ollama provider, the WebSocket server with cancel, the minimal page, the eval runner). **GitHub:** `github.com/polycode-public/concordance` (private); variable `CONCORDANCE_DEPLOY_ROLE_ARN`; environment `sandbox` deploys from `main` only.
 
 ## In flight
 
@@ -25,13 +25,9 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-ask
 
-- [ ] **A1. The GitHub OIDC provider, deploy role and `sandbox` environment (Phase 0).** With the operator present: `aws sso login --profile polycode-sandbox`, then `bash infra/provision-github-oidc.sh` (creates `token.actions.githubusercontent.com` and the role `concordance-github-deploy`; trust on `repo:polycode-public/concordance:ref:refs/heads/main` and `repo:polycode-public/concordance:environment:sandbox`; inline policies `sts:AssumeRole` on `cdk-hnb659fds-*` and the read-only operations set in `infra/iam-trust-policies/github-deploy-operations.json`; every step idempotent), then `gh api -X PUT repos/polycode-public/concordance/environments/sandbox -f deployment_branch_policy[protected_branches]=false -f deployment_branch_policy[custom_branch_policies]=true` and `gh api -X POST repos/polycode-public/concordance/environments/sandbox/deployment-branch-policies -f name=main` so the environment deploys from `main` only, then `gh variable set CONCORDANCE_DEPLOY_ROLE_ARN --repo polycode-public/concordance --body <arn>`, then `gh workflow run deploy.yml --repo polycode-public/concordance` and `/watch` until both `concordance-sandbox-*` stacks are `CREATE_COMPLETE`; write the bucket name into `AWS_ACCOUNT.md`. `bash scripts/bootstrap-sandbox.sh` prints the sequence. Unblocks F7. **Size** 1 file. **Model** Haiku.
-
 - [ ] **A2. The media tools (Phase 5, needed from Phase 1 for video exhibits).** On the operator's yes: `brew install whisper-cpp ffmpeg`, then `whisper-cli --help` and `ffmpeg -version` recorded in `PLAN_LAPTOP_STACK.md`'s install list, and the `large-v3-turbo` model file placed under `models/` (gitignored) with its SHA-256 in the plan. **Size** 1 file. **Model** Haiku.
 
-- [ ] **A3. The `project` cost allocation tag activated in polycode-management (Phase 0).** With the operator present: `aws --profile polycode-management ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=project,Status=Active`, then confirm with `list-cost-allocation-tags`; until it is active the $25 budget in `concordance-sandbox-guardrails` filters on a tag Cost Explorer does not see. **Size** 0 files. **Model** Haiku.
-
-- [ ] **A4. Tokens for the agent workflows (Phase 0, when the operator wants them).** `agent-board.yml`, `agent-code.yml` and `agent-pr.yml` are dispatch-only until two repository secrets exist: `AGENT_TOKEN` (a fine-grained PAT or GitHub App installation token on this repository with contents: write, pull requests: write, issues: write) and `AUTO_MERGE_TOKEN` (a merge-capable token whose pushes trigger `on: push` workflows). On the operator's go: create them on github.com, `gh secret set AGENT_TOKEN --repo polycode-public/concordance` and `gh secret set AUTO_MERGE_TOKEN --repo polycode-public/concordance` from a file the operator names, then `gh workflow run agent-board.yml -f write-back=false` and read the job summary. The kill switch is the SSM parameter `/concordance/sandbox/agents/kill-switch` from the guardrails stack (A1 first). **Size** 0 files. **Model** Haiku.
+- [ ] **A4. Tokens for the agent workflows (Phase 0, when the operator wants them).** `agent-board.yml`, `agent-code.yml` and `agent-pr.yml` are dispatch-only until two repository secrets exist: `AGENT_TOKEN` (a fine-grained PAT or GitHub App installation token on this repository with contents: write, pull requests: write, issues: write) and `AUTO_MERGE_TOKEN` (a merge-capable token whose pushes trigger `on: push` workflows). On the operator's go: create them on github.com, `gh secret set AGENT_TOKEN --repo polycode-public/concordance` and `gh secret set AUTO_MERGE_TOKEN --repo polycode-public/concordance` from a file the operator names, then `gh workflow run agent-board.yml -f write-back=false` and read the job summary. The kill switch is the SSM parameter `/concordance/sandbox/agents/kill-switch` from the guardrails stack **Size** 0 files. **Model** Haiku.
 
 ## Human-driven
 
@@ -44,8 +40,6 @@ The board runs in five sections, in this order. The section is the classificatio
 ## Blocked
 
 - [ ] **F6. The first gold set and a scored eval (Phase 2).** 20 rows in `evals/grenfell/gold.jsonl` built from the Phase 1 report's findings about the F3 witnesses, each with the report paragraph and the statement locator; `npm run eval -- --provider=laptop` prints the four metrics for them; the figures go into the row's closing commit message, not a plan. Blocked on F5. **Size** ~2 files. **Model** Sonnet.
-
-- [ ] **F7. The first sandbox deploy proven (Phase 0).** After A1: the `deploy.yml` run on `main` green, `aws --profile polycode-sandbox cloudformation describe-stacks` showing `concordance-sandbox-data` and `concordance-sandbox-guardrails`, the bucket name and the budget name in `AWS_ACCOUNT.md`'s stacks table, and `NEXT.md`'s Deployed line updated. Blocked on A1. **Size** 2 files. **Model** Haiku.
 
 ## Discipline
 

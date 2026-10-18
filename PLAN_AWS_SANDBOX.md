@@ -18,18 +18,14 @@ Deploy path: `deploy.yml` on a push to `main` that touches code, assuming
 `CONCORDANCE_DEPLOY_ROLE_ARN` by OIDC, then `cdk deploy --all`. The job skips until the variable
 exists.
 
-### Operator steps before the first deploy (rows A1 and A3 in `NEXT.md`)
+### Provisioned (2026-10-18)
 
-1. `aws sso login --profile polycode-sandbox`
-2. `bash infra/provision-github-oidc.sh` (creates the `token.actions.githubusercontent.com`
-   provider and the `concordance-github-deploy` role; idempotent)
-3. Create the `sandbox` environment on the repository, deployable from `main` only (the job's OIDC
-   subject is `repo:…:environment:sandbox`, which the role trusts).
-4. `gh variable set CONCORDANCE_DEPLOY_ROLE_ARN --repo polycode-public/concordance --body <arn>`
-5. In polycode-management, activate the `project` cost allocation tag so the budget filter sees it.
-6. `gh workflow run deploy.yml --repo polycode-public/concordance`
-
-`bash scripts/bootstrap-sandbox.sh` prints the sequence.
+The `token.actions.githubusercontent.com` provider, the role `concordance-github-deploy`, the
+`sandbox` environment limited to `main`, the repository variable and the `project` cost allocation
+tag exist; `deploy.yml` run 39127857512 created both stacks. `bash scripts/bootstrap-sandbox.sh`
+still prints the sequence for a second account. The trust lists GitHub's immutable subject form
+(`repo:polycode-public@293237199/concordance@1424328841:…`) beside the plain one, because the
+repository has immutable subject claims on.
 
 ## Later: the AWS form of each component (Phase 7)
 
