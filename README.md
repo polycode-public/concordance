@@ -27,7 +27,7 @@ npm run dev                             # http://localhost:8787
 ```
 
 `npm test` runs offline. `CONCORDANCE_DB_TESTS=1` and `CONCORDANCE_OLLAMA_TESTS=1` add the
-Postgres and Ollama tiers. `npm run eval -- --provider=bedrock` scores the gold set on the deployed
+Postgres and Ollama tiers. `CONCORDANCE_BROWSER_TESTS=1` adds the headless Chrome tier (`test/browser`). `npm run eval -- --provider=bedrock` scores the gold set on the deployed
 form; `--provider=laptop` is the port check.
 
 ## Layout
