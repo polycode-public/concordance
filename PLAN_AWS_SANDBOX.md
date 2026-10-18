@@ -42,12 +42,12 @@ repository has immutable subject claims on.
 
 ### The store: the cheapest-option table
 
-| Option                                                            | Idle cost                      | Visibility               | Verdict                                                                |
-| ----------------------------------------------------------------- | ------------------------------ | ------------------------ | ---------------------------------------------------------------------- |
-| Aurora Serverless v2, 0 ACU minimum, Data API, Lambda outside VPC | storage only                   | one stack, no networking | chosen: the same SQL and migrations as the laptop; resume about 15 s   |
-| Aurora Serverless v2 with Lambda in the VPC over the `pg` driver  | storage, plus NAT or endpoints | subnets, security groups | more parts for the same SQL                                            |
-| RDS Postgres on a small instance                                  | about $12 a month              | one instance             | costs at idle                                                          |
-| S3 Vectors with DynamoDB                                          | none                           | two stores               | loses `tsvector` and SQL over assertions; a rewrite of the store layer |
+| Option                                                            | Idle cost                      | Visibility               | Verdict                                                                                                           |
+| ----------------------------------------------------------------- | ------------------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| Aurora Serverless v2, 0 ACU minimum, Data API, Lambda outside VPC | storage only                   | one stack, no networking | chosen: the same SQL and migrations as the laptop; resume measured 16.6 to 17.5 s on the first turn after a pause |
+| Aurora Serverless v2 with Lambda in the VPC over the `pg` driver  | storage, plus NAT or endpoints | subnets, security groups | more parts for the same SQL                                                                                       |
+| RDS Postgres on a small instance                                  | about $12 a month              | one instance             | costs at idle                                                                                                     |
+| S3 Vectors with DynamoDB                                          | none                           | two stores               | loses `tsvector` and SQL over assertions; a rewrite of the store layer                                            |
 
 Budget from the specification: $11 to $19 for the Grenfell slice against the $25 cap, a billing
 alarm at $20, the ingest state machine reading the budget before each batch. Run rate after ingest

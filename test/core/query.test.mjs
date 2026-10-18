@@ -185,6 +185,52 @@ describe("abstention and prompt", () => {
   });
 });
 
+describe("runQuery", () => {
+  const row = {
+    id: "1",
+    document_id: "doc1",
+    level: "passage",
+    text: "The stairs were dark.",
+    header: "[h]",
+    locator: { page: 3, paragraph: 11 },
+    prev_id: null,
+    next_id: null,
+    parent_id: null,
+  };
+  const db = {
+    query: async (text) => ({ rows: /SELECT id FROM/.test(text) ? [{ id: "1" }] : [row] }),
+  };
+  const providerOf = (reply) => ({
+    name: "p",
+    embedModel: "m",
+    embedDim: 1024,
+    embed: async () => [new Array(1024).fill(0.5)],
+    chat: async () => reply,
+  });
+
+  it("scores no sentence and cites nothing on an abstention", async () => {
+    const result = await runQuery({
+      question: "q",
+      db,
+      provider: providerOf({
+        text: "The corpus does not say.",
+        model: "m",
+        promptVersion: "v",
+        usage: null,
+      }),
+    });
+    expect(result.abstained).toBe(true);
+    expect(result.citations).toEqual([]);
+    expect(result.checks).toMatchObject({
+      abstained: true,
+      sentences: 0,
+      supported: 0,
+      warning: false,
+      marks: [],
+    });
+  });
+});
+
 describe("retrieval guards", () => {
   it("rejects an embedding of the wrong length", () => {
     expect(() => halfvecLiteral([1, 2, 3])).toThrow(/3 dimensions/);

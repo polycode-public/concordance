@@ -117,10 +117,24 @@ export async function runQuery({ question, provider, db, signal, onToken, onStag
   signal?.throwIfAborted();
 
   onStage?.("checking");
-  const { citations, checks } = checkAnswer(answer, evidenceBlocks);
+  const abstained = isAbstention(answer, evidenceBlocks);
+  const scored = checkAnswer(answer, evidenceBlocks);
+  const citations = abstained ? [] : scored.citations;
+  const checks = abstained
+    ? {
+        ...scored.checks,
+        abstained: true,
+        sentences: 0,
+        supported: 0,
+        flaggedRatio: 0,
+        warning: false,
+        droppedCitations: 0,
+        marks: [],
+      }
+    : scored.checks;
   return {
     answer,
-    abstained: isAbstention(answer, evidenceBlocks),
+    abstained,
     citations,
     checks: { ...checks, model, promptVersion: PROMPT_VERSION },
     evidenceBlocks,
