@@ -136,11 +136,13 @@ roadmap slide, revisited after Phase 6.
 
 ## Open questions
 
-| Key | Question                                                       | Decides                                      |
-| --- | -------------------------------------------------------------- | -------------------------------------------- |
-| H1  | Repository visibility: private, or public after a secrets pass | when the repo flips to public                |
-| H2  | The demo machine: this Intel i9, or an M-series laptop         | chat model size, first-token budget, Phase 6 |
-| H3  | SPARQL live or export only; voice in the demo or not           | Phase 4 export, Phase 5 scope                |
+| Key | Question                                                                                                                                                                          | Decides                                      |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| H1  | Repository visibility: private, or public after a secrets pass                                                                                                                    | when the repo flips to public                |
+| H2  | The demo machine: this Intel i9, or an M-series laptop                                                                                                                            | chat model size, first-token budget, Phase 6 |
+| H3  | SPARQL live or export only; voice in the demo or not                                                                                                                              | Phase 4 export, Phase 5 scope                |
+| O1  | A fine-grained token for the agent workflows                                                                                                                                      | when the agent workflows leave dispatch-only |
+| O2  | How the Grenfell files arrive: the inquiry site is archived at The National Archives (robots disallow, WAF challenge); browser download, session-driven Chrome, or a bulk request | the Phase 1 fetch                            |
 
 ## Related documents
 
