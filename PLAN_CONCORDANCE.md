@@ -17,6 +17,16 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
   "We will just be building 'Laptop port (MacBook Pro, 64 GB or more)' here": the AWS form is the
   build; the laptop form is the port check.
 - "deploy to the polycode-sandbox account like we did for chat-with-diya-gl" (2026-10-18).
+- "Please have a Fable-sub-agent reviewing the web ui and not only improving what's there but finding
+  ideal ways to present what we have and what we plan to add. Do a survey of what's in docs or
+  implemented for the current ui and pull that all into the review with the outcome being changed
+  existing code and docs and new tasks on the board and we should but skills to work from
+  /frontend-design:frontend-design and /ui-ux-pro-max and also swith over to use the chat from
+  ../../polycode-unpublished/chat-with-diya-gl (if we are not already) and add tasks to bring over a
+  view buts from that that could be useful such as building a database of conversations and the
+  bedrock spend banner and the ability to create docs." (2026-10-19). The chat there is React with
+  Vite under a proprietary licence; this repository's raw-ESM and AGPL decisions yield to the
+  operator's direction where the review (U1) shows the adoption pays, with the licence change named.
 - From the specification's scope line: "single-tenant demo, Grenfell only, about 15,000 pages plus
   media transcribed on the laptop, cloud ingest spend capped at $25 with a billing alarm, no real
   ICC evidence touches the system."
