@@ -28,6 +28,7 @@ import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import { stagePageAssets } from "../../scripts/stage-page-assets.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AWS_DIR = path.join(ROOT, "packages", "aws");
@@ -236,6 +237,7 @@ export class AppStack extends Stack {
       destinationBucket: siteBucket,
       sources: [
         s3deploy.Source.asset(UI_DIR),
+        s3deploy.Source.asset(stagePageAssets()),
         s3deploy.Source.jsonData("config.json", {
           wsUrl: stage.url,
           httpUrl: httpApi.apiEndpoint,

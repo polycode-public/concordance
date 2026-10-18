@@ -5,3 +5,4 @@ corpora/*/text
 corpora/*/chunks
 package-lock.json
 docs/SPEC_WITNESS_RESEARCH_TOOL.md
+.page-assets

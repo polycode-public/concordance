@@ -156,6 +156,19 @@ describe("local server", () => {
     expect((await fetch(`${base}/..%2fserver.mjs`)).status).toBeGreaterThanOrEqual(400);
   });
 
+  it("serves PDF.js and the faces from the site", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    const base = `http://127.0.0.1:${app.port}`;
+    const lib = await fetch(`${base}/vendor/pdf.min.mjs`);
+    expect(lib.status).toBe(200);
+    expect(lib.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect((await fetch(`${base}/vendor/pdf.worker.min.mjs`)).status).toBe(200);
+    const face = await fetch(`${base}/fonts/source-sans-3-latin-400-normal.woff2`);
+    expect(face.status).toBe(200);
+    expect(face.headers.get("content-type")).toBe("font/woff2");
+    expect((await fetch(`${base}/fonts/missing.woff2`)).status).toBe(404);
+  });
+
   it("streams a turn through the stages and reports citation checks", async () => {
     const provider = createFakeProvider({ tokens: TOKENS, delayMs: 5 });
     app = await turnServer(provider);

@@ -151,6 +151,23 @@ describe("AppStack", () => {
     expect(configs[0]).toContain('"subtitle":"witness statements"');
   });
 
+  it("stages PDF.js and the faces beside the page", () => {
+    const staged = assetFiles("vendor");
+    expect(staged).toHaveLength(1);
+    const root = path.dirname(staged[0]);
+    expect(readdirSync(path.join(root, "vendor")).sort()).toEqual([
+      "pdf.min.mjs",
+      "pdf.worker.min.mjs",
+    ]);
+    expect(readdirSync(path.join(root, "fonts")).sort()).toEqual([
+      "source-sans-3-latin-400-normal.woff2",
+      "source-sans-3-latin-600-normal.woff2",
+      "source-serif-4-latin-400-normal.woff2",
+    ]);
+    const deployment = Object.values(template.findResources("Custom::CDKBucketDeployment"))[0];
+    expect(deployment.Properties.SourceBucketNames).toHaveLength(3);
+  });
+
   it("lets a browser range-read the presigned originals", () => {
     dataTemplate.hasResourceProperties("AWS::S3::Bucket", {
       CorsConfiguration: {
