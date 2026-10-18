@@ -1,0 +1,35 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright 2026 Polycode Limited -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>concordance</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="bar">
+      <h1>concordance</h1>
+      <span id="connection" class="muted">connecting</span>
+    </header>
+    <main>
+      <section id="answer" class="answer" aria-live="polite"></section>
+      <p id="score" class="score"></p>
+      <p id="status" class="status muted"></p>
+    </main>
+    <form id="ask" class="ask">
+      <textarea
+        id="question"
+        rows="2"
+        placeholder="Ask about the witness statements"
+        required
+      ></textarea>
+      <div class="buttons">
+        <button type="submit" id="send">Send</button>
+        <button type="button" id="cancel" disabled>Cancel</button>
+      </div>
+    </form>
+  </body>
+</html>

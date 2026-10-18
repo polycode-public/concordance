@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: concordance
+      POSTGRES_PASSWORD: concordance
+      POSTGRES_DB: concordance
+    ports:
+      - "5432:5432"
+    volumes:
+      - concordance-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U concordance -d concordance"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  concordance-pgdata:

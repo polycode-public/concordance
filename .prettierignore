@@ -1,0 +1,7 @@
+node_modules
+cdk.out
+corpora/*/raw
+corpora/*/text
+corpora/*/chunks
+package-lock.json
+docs/SPEC_WITNESS_RESEARCH_TOOL.md

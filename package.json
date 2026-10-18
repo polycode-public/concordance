@@ -1,0 +1,46 @@
+{
+  "name": "@polycode-public/concordance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Witness research tool: hybrid retrieval, per-sentence citations and a contradiction engine over public inquiry witness statements. Laptop first, AWS behind the same interface.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polycode-public/concordance.git"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "check:format": "prettier --check .",
+    "check:lint": "eslint .",
+    "check:synth": "cdk synth --quiet",
+    "check:all": "npm run test:unit && npm run check:format && npm run check:lint && npm run check:synth",
+    "format": "prettier --write .",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "models:pull": "bash scripts/models-pull.sh",
+    "dev": "node packages/local/server.mjs",
+    "eval": "node evals/run.mjs",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --all --require-approval never"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "aws-cdk": "2.1144.0",
+    "aws-cdk-lib": "2.272.0",
+    "constructs": "10.8.1",
+    "eslint": "10.11.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.9",
+    "vitest": "5.0.3"
+  }
+}

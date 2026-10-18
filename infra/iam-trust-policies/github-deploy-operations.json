@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListStacksForTheBoard",
+      "Effect": "Allow",
+      "Action": "cloudformation:ListStacks",
+      "Resource": "*"
+    },
+    {
+      "Sid": "DescribeConcordanceStacks",
+      "Effect": "Allow",
+      "Action": "cloudformation:DescribeStacks",
+      "Resource": "arn:aws:cloudformation:eu-west-2:687443513271:stack/concordance-*/*"
+    },
+    {
+      "Sid": "ReadAndSetTheAgentKillSwitch",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:PutParameter"],
+      "Resource": "arn:aws:ssm:eu-west-2:687443513271:parameter/concordance/*/agents/kill-switch"
+    },
+    {
+      "Sid": "AgentsRunOnBedrockThroughEuInferenceProfiles",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:eu-west-2:687443513271:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:eu-west-2:687443513271:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+      ]
+    },
+    {
+      "Sid": "ClaudeCodeListsInferenceProfiles",
+      "Effect": "Allow",
+      "Action": "bedrock:ListInferenceProfiles",
+      "Resource": "*"
+    }
+  ]
+}

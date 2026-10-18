@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+self-hosted-runner:
+  labels: []
+
+# Configuration variables the workflows read (repository settings).
+config-variables:
+  - CONCORDANCE_DEPLOY_ROLE_ARN

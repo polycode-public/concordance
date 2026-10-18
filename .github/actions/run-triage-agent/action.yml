@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+name: "Run a triage agent"
+description: "Runs claude -p on Bedrock against a prompt file with the given model and writes its --output-format json result to a file. One definition for every triage-shaped invocation, so they cannot diverge. Never fails the step on the agent's own exit code or content: the caller judges the result from the output file."
+
+inputs:
+  model-id:
+    description: "value for ANTHROPIC_MODEL, an eu. inference profile id"
+    required: true
+  small-fast-model-id:
+    description: "value for ANTHROPIC_SMALL_FAST_MODEL, an eu. inference profile id"
+    required: true
+  output-file:
+    description: "path to write claude's --output-format json result to"
+    required: true
+  prompt-file:
+    description: "path to the prompt template, expanded with envsubst before it is passed to claude -p"
+    required: true
+  allowed-tools:
+    description: "value for claude's --allowedTools"
+    required: false
+    default: "Read,Grep,Glob,Bash(aws cloudformation describe-stacks:*),Bash(aws cloudformation list-stacks:*)"
+  max-turns:
+    description: "value for claude's --max-turns"
+    required: false
+    default: "60"
+  echo-output:
+    description: "'false' writes the result to output-file only, keeping it out of the job log (a public repository's logs are public)"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        CLAUDE_CODE_USE_BEDROCK: "1"
+        AWS_REGION: "eu-west-2"
+        ANTHROPIC_MODEL: ${{ inputs.model-id }}
+        ANTHROPIC_SMALL_FAST_MODEL: ${{ inputs.small-fast-model-id }}
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192"
+        DISABLE_TELEMETRY: "1"
+        DISABLE_ERROR_REPORTING: "1"
+        DISABLE_AUTOUPDATER: "1"
+        OUTPUT_FILE: ${{ inputs.output-file }}
+        PROMPT_FILE: ${{ inputs.prompt-file }}
+        ALLOWED_TOOLS: ${{ inputs.allowed-tools }}
+        MAX_TURNS: ${{ inputs.max-turns }}
+        ECHO_OUTPUT: ${{ inputs.echo-output }}
+      run: |
+        set -o pipefail
+        PROMPT=$(envsubst < "$PROMPT_FILE")
+        CLAUDE_ARGS=(-p "$PROMPT" --max-turns "$MAX_TURNS" --output-format json --permission-mode default --allowedTools "$ALLOWED_TOOLS")
+        if [ "$ECHO_OUTPUT" = "false" ]; then
+          claude "${CLAUDE_ARGS[@]}" > "$OUTPUT_FILE" 2>&1 || true
+        else
+          claude "${CLAUDE_ARGS[@]}" 2>&1 | tee "$OUTPUT_FILE" || true
+        fi
+        # The caller reads $OUTPUT_FILE's content to decide success, escalation and failure, so
+        # a crash here must not also fail this step: that would stop the job before the caller's
+        # judgement of the result ever runs.

@@ -1,0 +1,137 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright 2026 Polycode Limited */
+
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #8a8a8a;
+  --border: #d9d9d9;
+  --accent: #1f4e8c;
+  --warning: #9a5b00;
+  --gap: 16px;
+  --radius: 6px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --fg: #f2f2f2;
+    --muted: #7d7d7d;
+    --border: #333333;
+    --accent: #7fa8e0;
+    --warning: #e0a050;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 var(--font);
+}
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--gap);
+  border-bottom: 1px solid var(--border);
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: var(--gap);
+}
+
+.answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.supported {
+  color: var(--fg);
+}
+
+.unsupported {
+  color: var(--muted);
+}
+
+.interrupted {
+  color: var(--warning);
+  font-style: italic;
+}
+
+.score {
+  font-weight: 600;
+}
+
+.score.warning {
+  color: var(--warning);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.ask {
+  position: sticky;
+  bottom: 0;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: var(--gap);
+  display: flex;
+  gap: 8px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.ask textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: vertical;
+}
+
+.buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button {
+  padding: 8px 14px;
+  font: inherit;
+  color: var(--bg);
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

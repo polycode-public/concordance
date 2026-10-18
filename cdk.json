@@ -1,0 +1,6 @@
+{
+  "app": "node infra/bin/app.mjs",
+  "output": "cdk.out",
+  "watch": { "include": ["infra/**"], "exclude": ["node_modules", "cdk.out"] },
+  "context": { "@aws-cdk/aws-iam:minimizePolicies": true }
+}

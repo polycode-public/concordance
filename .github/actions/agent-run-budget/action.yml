@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+name: "Stop an agent path once its daily run budget is spent"
+description: "Counts how many runs of the named workflow have already reached the named step (in the named job) with a success conclusion in the last 24 hours, and reports whether the caller is over its daily budget. Shared by every unattended agent path so this counting logic exists once."
+
+inputs:
+  workflow-file:
+    description: "workflow file to count runs of, e.g. agent-board.yml"
+    required: true
+  job-name:
+    description: "name of the job whose steps to inspect, e.g. board"
+    required: true
+  step-name:
+    description: "name of the step whose success conclusion counts as a posted result, e.g. Push the board update"
+    required: true
+  budget:
+    description: "maximum number of posted results allowed in a rolling 24-hour window"
+    required: true
+
+outputs:
+  over-budget:
+    description: "true once `budget` posted results have already landed in the last 24 hours"
+    value: ${{ steps.guard.outputs.over-budget }}
+  count:
+    description: "how many runs posted a result in the last 24 hours"
+    value: ${{ steps.guard.outputs.count }}
+  since:
+    description: "the start of the 24-hour window that was counted"
+    value: ${{ steps.guard.outputs.since }}
+  reason:
+    description: "why over-budget is true: budget (spent) or api-error (the runs could not be counted)"
+    value: ${{ steps.guard.outputs.reason }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Count runs that already posted a result in the last 24 hours
+      id: guard
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WORKFLOW_FILE: ${{ inputs.workflow-file }}
+        JOB_NAME: ${{ inputs.job-name }}
+        STEP_NAME: ${{ inputs.step-name }}
+        BUDGET: ${{ inputs.budget }}
+      run: |
+        set -euo pipefail
+
+        gh_api_with_retry() {
+          local api_path="$1"
+          local jq_filter="$2"
+          local max_attempts=3
+          local attempt=1
+
+          while [ $attempt -le $max_attempts ]; do
+            if gh api "$api_path" --jq "$jq_filter" 2>/dev/null; then
+              return 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              if [ $attempt -eq 1 ]; then
+                sleep 5
+              else
+                sleep 15
+              fi
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          return 1
+        }
+
+        SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+        # Every triggering event starts a run, including the ones this guard or an earlier
+        # check stops, so counting every run that merely started would let a burst of skips
+        # exhaust the budget without a single run actually acting. A run only counts
+        # once it has posted a result: the named step's own per-step conclusion (not the job's
+        # overall conclusion) is the only signal that distinguishes an acted-on run from a
+        # skipped one.
+        COUNT=0
+
+        if ! RUN_IDS=$(gh_api_with_retry \
+          "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_FILE}/runs?created=%3E${SINCE}&per_page=100" \
+          '.workflow_runs[].id'); then
+          echo "::warning::Could not read workflow run list (transient GitHub API error); skipping budget check"
+          echo "over-budget=true" | tee -a "$GITHUB_OUTPUT"
+          echo "count=unknown" | tee -a "$GITHUB_OUTPUT"
+          echo "since=${SINCE}" | tee -a "$GITHUB_OUTPUT"
+          echo "reason=api-error" | tee -a "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        for RUN_ID in $RUN_IDS; do
+          if [ "${RUN_ID}" = "${{ github.run_id }}" ]; then continue; fi
+          if ! POSTED=$(gh_api_with_retry \
+            "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
+            ".jobs[] | select(.name == \"${JOB_NAME}\") | .steps[]? | select(.name == \"${STEP_NAME}\") | .conclusion // empty"); then
+            echo "::warning::Could not read job details for run ${RUN_ID} (transient GitHub API error); skipping budget check"
+            echo "over-budget=true" | tee -a "$GITHUB_OUTPUT"
+            echo "count=unknown" | tee -a "$GITHUB_OUTPUT"
+            echo "since=${SINCE}" | tee -a "$GITHUB_OUTPUT"
+            echo "reason=api-error" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${POSTED}" = "success" ]; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+
+        echo "${WORKFLOW_FILE} runs that posted a result in the last 24 hours: ${COUNT}"
+        echo "count=${COUNT}" | tee -a "$GITHUB_OUTPUT"
+        echo "since=${SINCE}" | tee -a "$GITHUB_OUTPUT"
+        echo "reason=budget" | tee -a "$GITHUB_OUTPUT"
+        if [ "${COUNT}" -gt $(( BUDGET - 1 )) ]; then
+          echo "over-budget=true" | tee -a "$GITHUB_OUTPUT"
+        else
+          echo "over-budget=false" | tee -a "$GITHUB_OUTPUT"
+        fi

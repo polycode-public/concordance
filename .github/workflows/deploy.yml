@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited
+
+# Deploys every concordance stack to polycode-sandbox from main. The job federates through the
+# account's GitHub OIDC provider into CONCORDANCE_DEPLOY_ROLE_ARN, whose only deploy permission
+# is to assume the CDK bootstrap roles (AWS_ACCOUNT.md). It skips until that repository variable
+# exists, so the workflow can land before the role does.
+
+name: deploy
+run-name: "deploy sandbox from ${{ github.sha }}"
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+  workflow_dispatch:
+
+# A deploy cancelled mid-flight leaves a stack half updated, so a later push waits its turn.
+concurrency:
+  group: deploy-sandbox
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-2
+
+jobs:
+  deploy:
+    name: deploy sandbox
+    if: vars.CONCORDANCE_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The OIDC subject of a job in an environment is repo:<repo>:environment:sandbox. The role
+    # trusts that subject, and the environment allows deployments from main only.
+    environment: sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Configure AWS role via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.CONCORDANCE_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-concordance-${{ github.run_id }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: CDK synth
+        run: npx cdk synth --quiet
+
+      - name: CDK deploy
+        run: npx cdk deploy --all --require-approval never
+
+      - name: List the deployed stacks
+        run: |
+          set -euo pipefail
+          {
+            echo "## concordance stacks"
+            echo
+            echo "| Stack | Status | Updated |"
+            echo "| --- | --- | --- |"
+            for stack in $(npx cdk list 2>/dev/null); do
+              aws cloudformation describe-stacks --stack-name "$stack" \
+                --query 'Stacks[0].[StackName,StackStatus,LastUpdatedTime || CreationTime]' \
+                --output text | awk -F'\t' '{ printf "| `%s` | %s | %s |\n", $1, $2, $3 }'
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"

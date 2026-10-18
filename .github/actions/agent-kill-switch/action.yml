@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+name: "Stop when the agent kill switch is on"
+description: "Reads /concordance/<env>/agents/kill-switch and fails the job when it is on, so one dispatch of agent-kill-switch.yml stops every unattended agent path"
+
+inputs:
+  environment-name:
+    description: "The environment whose flag to read. The AWS credentials already configured decide the account."
+    required: false
+    default: "sandbox"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Read the kill switch
+      shell: bash
+      env:
+        KILL_SWITCH_PARAMETER: /concordance/${{ inputs.environment-name }}/agents/kill-switch
+      run: |
+        set -o pipefail
+        if ! state=$(aws ssm get-parameter --name "$KILL_SWITCH_PARAMETER" --query 'Parameter.Value' --output text 2>&1); then
+          if printf '%s' "$state" | grep -q ParameterNotFound; then
+            # The parameter arrives with the guardrails stack (concordance-<env>-guardrails);
+            # until that deploys the switch is off, and the line below says so in the log.
+            echo "kill switch: $KILL_SWITCH_PARAMETER does not exist yet, treating it as off" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::kill switch: could not read $KILL_SWITCH_PARAMETER: $state"
+          exit 1
+        fi
+        case "$state" in
+          on)
+            echo "::error::kill switch: $KILL_SWITCH_PARAMETER is on, so this agent run stops here. Turn it off with: gh workflow run agent-kill-switch.yml -f state=off"
+            echo "kill switch on: run stopped before the agent acted" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+            ;;
+          off)
+            echo "kill switch: $KILL_SWITCH_PARAMETER is off"
+            ;;
+          *)
+            echo "::error::kill switch: $KILL_SWITCH_PARAMETER holds '$state', which is neither on nor off; stopping"
+            exit 1
+            ;;
+        esac

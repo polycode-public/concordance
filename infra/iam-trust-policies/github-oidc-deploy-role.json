@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GitHubOidcMainBranchAndSandboxEnvironmentOfConcordance",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::687443513271:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": [
+            "repo:polycode-public/concordance:ref:refs/heads/main",
+            "repo:polycode-public/concordance:environment:sandbox"
+          ]
+        }
+      }
+    }
+  ]
+}

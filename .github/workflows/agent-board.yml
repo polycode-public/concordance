@@ -1,0 +1,300 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+name: agent-board
+
+run-name: "board${{ inputs.write-back == 'false' && ' (render only)' || '' }}"
+
+# Renders the open-work board with the repository's own `/board` skill, and writes the statuses
+# back to NEXT.md when - and only when - doing so would change what the next reader does.
+#
+# The render is most of the value: an account of deployments, origin branches and every open
+# row, in the job summary, for a time nobody was looking. The write-back is the rest, and it is
+# deliberately reluctant. A no-op commit to main every few hours is noise that teaches everyone
+# to ignore the file's history, so the brief lists the conditions that justify a commit and
+# instructs the agent to say "already true" and commit nothing otherwise.
+#
+# The one piece of GitHub state it may change is a tracking comment on an issue it has just added
+# to the board - both halves or neither, so the two records never disagree.
+#
+# Triggers are commented out for this first drop. Prove it by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      write-back:
+        description: "Allow the NEXT.md commit and issue tracking comments (false = render only)"
+        type: choice
+        required: true
+        default: "false"
+        options:
+          - "false"
+          - "true"
+  # schedule:
+  #   # Twice a day is plenty: the board changes when work lands, and work landing already has its
+  #   # own signals. Offset from the hour.
+  #   - cron: '52 7,19 * * *'
+
+concurrency:
+  group: agent-board
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC for Bedrock, the stack reads and the kill switch
+  contents: read
+  issues: write # the tracking comment on an issue newly added to the board
+  pull-requests: read
+  actions: read
+
+env:
+  NODE_VERSION: "24"
+  AWS_REGION: "eu-west-2"
+  CLAUDE_CODE_VERSION: "2.0.30"
+  # The one place this number is written. The commented schedule above is twice a day; this
+  # leaves headroom for a manual dispatch on top.
+  BOARD_BUDGET_PER_DAY: "4"
+
+jobs:
+  board:
+    name: "board"
+    # The agent runs on Bedrock through the sandbox role, so with no role there is nothing to run.
+    if: vars.CONCORDANCE_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    # The OIDC subject of a job in an environment is repo:<repo>:environment:sandbox, which the
+    # role trusts; the environment allows main only.
+    environment: sandbox
+    timeout-minutes: 25
+    steps:
+      - name: Require an agent token when writing back
+        if: inputs.write-back == 'true'
+        env:
+          AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AGENT_TOKEN}" ]; then
+            echo "::error::AGENT_TOKEN is not set, so the NEXT.md commit cannot be pushed."
+            echo "::error::Dispatch with write-back=false to render without writing."
+            exit 1
+          fi
+
+      # The brief and the skill are read from the default branch, so a branch cannot weaken them.
+      # Credentials persist: the "Push the board update" step pushes from this checkout.
+      - name: Checkout the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_TOKEN || github.token }}
+
+      # The budget guard is a local action; the checkout above already put the full repository
+      # on disk, so this reuses it rather than adding a sparse checkout of its own.
+      - name: Stop once ${{ env.BOARD_BUDGET_PER_DAY }} board runs have already posted a result today
+        id: budget-guard
+        uses: ./.github/actions/agent-run-budget
+        with:
+          workflow-file: agent-board.yml
+          job-name: board
+          step-name: Require a usable render
+          budget: ${{ env.BOARD_BUDGET_PER_DAY }}
+
+      - name: Record that the daily run budget is spent
+        if: steps.budget-guard.outputs.over-budget == 'true'
+        env:
+          BUDGET_REASON: ${{ steps.budget-guard.outputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ "${BUDGET_REASON}" = "api-error" ]; then
+            MESSAGE="Board run skipped: the daily run budget could not be counted because the GitHub API failed after three attempts."
+          else
+            MESSAGE="Board run skipped: the budget of ${{ env.BOARD_BUDGET_PER_DAY }} runs per 24 hours is already used (${{ steps.budget-guard.outputs.count }} posted a result since ${{ steps.budget-guard.outputs.since }})."
+          fi
+          echo "$MESSAGE" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Require the brief and the skill
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: |
+          set -euo pipefail
+          for f in .github/prompts/board-ci.md .claude/skills/board/SKILL.md; do
+            test -s "$f" || { echo "::error::$f is missing on the default branch"; exit 1; }
+          done
+
+      # `git commit` is in the agent's allow-list below (the write-back path commits NEXT.md
+      # itself, unlike agent-code.yml's push-and-PR step), so this identity has to exist before
+      # it runs or the commit fails with "Please tell me who you are".
+      - name: Configure the commit identity
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "Claude"
+          git config user.email "noreply@anthropic.com"
+
+      - name: Set up Node
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # One role for everything this job does in AWS: Bedrock for the agent, the stack reads the
+      # board reports, and the kill-switch read (iam-trust-policies/github-deploy-operations.json).
+      - name: Configure AWS role via GitHub OIDC
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.CONCORDANCE_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-concordance-board-${{ github.run_id }}
+          audience: sts.amazonaws.com
+          role-skip-session-tagging: true
+          retry-max-attempts: 3
+
+      - name: Stop when the agent kill switch is on
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        id: kill-switch
+        uses: ./.github/actions/agent-kill-switch
+        with:
+          environment-name: sandbox
+
+      # The board skill runs `npx vitest run test/repo/nextShape.test.mjs` before committing a
+      # NEXT.md write-back; without node_modules that either fails outright or fetches vitest
+      # fresh from the registry on every run.
+      - name: Install dependencies
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: timeout 120 npm ci --prefer-offline || { sleep 30; timeout 180 npm ci; }
+
+      - name: Install Claude Code
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      # Remember the starting point so the guard below can prove nothing but NEXT.md moved.
+      - name: Record the tree before the agent runs
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Run the board skill
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        id: run
+        env:
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ANTHROPIC_MODEL: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+          ANTHROPIC_SMALL_FAST_MODEL: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "16384"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+          DISABLE_AUTOUPDATER: "1"
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN || github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          WRITE_BACK: ${{ inputs.write-back }}
+        run: |
+          set -o pipefail
+          export RUN_ID RUN_URL
+          PROMPT="/board
+
+          $(envsubst < .github/prompts/board-ci.md)"
+          if [ "${WRITE_BACK}" != "true" ]; then
+            PROMPT="${PROMPT}
+
+          ## This run is render only
+
+          Do not edit NEXT.md, do not commit, do not push, and do not comment on any issue. Where
+          you would have written a status back, say what you would have changed and why instead.
+          That list is this run's product."
+          fi
+
+          # No merge, no workflow dispatch, no push to anything but main's NEXT.md - and that push
+          # is made by the step below, not by the agent, so the guard runs first.
+          claude -p "$PROMPT" \
+            --max-turns 60 \
+            --output-format json \
+            --permission-mode default \
+            --disallowedTools "Bash(git push:*),Bash(gh pr merge:*),Bash(gh workflow run:*),Bash(gh issue close:*),Bash(gh issue edit:*)" \
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(git branch:*),Bash(git ls-remote:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git add:*),Bash(git commit:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh api:*),Bash(aws cloudformation list-stacks:*),Bash(aws cloudformation describe-stacks:*),Bash(aws ssm get-parameter:*),Bash(npx prettier:*),Bash(npx vitest:*),Bash(date:*)" \
+            2>&1 | tee /tmp/board.json
+
+      - name: Require a usable render
+        if: always() && steps.run.outcome != 'skipped'
+        id: require-render
+        run: |
+          set -euo pipefail
+          test -s /tmp/board.json || { echo "::error::no output from the agent"; exit 1; }
+          result=$(jq -r '.result // empty' /tmp/board.json)
+          if [ -z "$result" ]; then
+            echo "::error::the agent produced no result field. Raw output:"
+            head -c 4000 /tmp/board.json
+            exit 1
+          fi
+          { echo "$result"; } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE GUARD. The agent is trusted to decide whether NEXT.md should change; it is not trusted
+      # to decide that anything else may reach main this way. The docs exception covers .md only,
+      # and this workflow narrows that further to the one file it exists to maintain.
+      - name: Refuse anything that is not NEXT.md
+        if: always() && steps.run.outcome == 'success'
+        id: guard-scope
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "${{ steps.before.outputs.sha }}" HEAD; git diff --name-only; git ls-files --others --exclude-standard)
+          unexpected=$(echo "$changed" | sed '/^$/d' | sort -u | grep -v '^NEXT\.md$' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::this workflow may only change NEXT.md. Also changed:"
+            echo "$unexpected"
+            exit 1
+          fi
+          echo "Only NEXT.md changed (or nothing did)."
+
+      # Pushes with AGENT_TOKEN (the checkout's persisted credentials), so the push to main is a
+      # real push event for anything that watches main. A docs-only commit does not start
+      # deploy.yml (its paths-ignore covers **.md).
+      - name: Push the board update
+        if: inputs.write-back == 'true' && steps.run.outcome == 'success'
+        id: push-board
+        env:
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          set -euo pipefail
+          BEFORE="${{ steps.before.outputs.sha }}"
+          if git diff --quiet "$BEFORE" HEAD && git diff --quiet; then
+            echo "The board was already true. Nothing committed, nothing pushed."
+            echo "The board was already true; nothing committed." >> "$GITHUB_STEP_SUMMARY"
+            echo "pushed=false" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          npx prettier --check NEXT.md
+          # An edit the agent left uncommitted lands as one commit in the agent's own form.
+          if ! git diff --quiet; then
+            git add NEXT.md
+            printf 'Board: update NEXT.md\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nClaude-Run: %s\n' "$RUN_URL" \
+              | git commit -q -F -
+          fi
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          for ATTEMPT in 1 2 3; do
+            if git push origin "HEAD:${DEFAULT_BRANCH}" 2>/tmp/push.log; then
+              echo "Pushed $(git rev-parse --short HEAD) to ${DEFAULT_BRANCH}." | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "pushed=true" | tee -a "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat /tmp/push.log >&2
+            # The head moved after the checkout. The edit is NEXT.md alone, so it applies on the
+            # new head unchanged as long as main's NEXT.md still matches what this run read.
+            if ! grep -qE 'rejected|fetch first|non-fast-forward' /tmp/push.log || [ "$ATTEMPT" -eq 3 ]; then
+              exit 1
+            fi
+            git fetch origin "$DEFAULT_BRANCH"
+            if ! git diff --quiet "$BEFORE" "origin/${DEFAULT_BRANCH}" -- NEXT.md; then
+              echo "main's NEXT.md changed during the run; not pushed" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "pushed=false" | tee -a "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git rebase -q "origin/${DEFAULT_BRANCH}"
+          done
+
+      - name: Upload the raw agent output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-board-${{ github.run_id }}
+          path: /tmp/board.json
+          if-no-files-found: warn
+          retention-days: 14

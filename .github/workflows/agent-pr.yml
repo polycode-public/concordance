@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026 Polycode Limited; adapted from DIY Accounting Limited's factory workflows
+
+name: agent-pr
+
+run-name: "auto merge${{ inputs.pr-number && format(' #{0}', inputs.pr-number) || ' (all open PRs)' }}${{ inputs.dry-run == 'false' && '' || ' [dry run]' }}"
+
+# Runs the repository's own `/auto-merge` skill, so CI and the terminal share one definition of
+# what "ready to merge" means. The skill is the source of truth; this file only supplies it with a
+# checkout, a model and a token.
+#
+# Every event trigger is deliberately commented out for this first drop. Prove it by hand with
+# workflow_dispatch and dry-run first, then uncomment. The commented block is the intended shape,
+# not a sketch: `workflow_run` is what fires when the last gate (all workflows green) changes,
+# the concurrency group below collapses a burst of completions into one run, and the hourly
+# schedule is the backstop for state changes GitHub emits no clean event for - review thread
+# resolution in particular, which is one of the skill's gates.
+#
+# The asymmetry that makes aggressive debouncing safe: a missed merge costs at most one hour,
+# because the sweep catches it. A wrong merge cannot be undone. Tune conservative, never eager.
+on:
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR to consider (blank = every open PR, as the skill does in the terminal)"
+        type: string
+        required: false
+      dry-run:
+        description: "Gather and report, change nothing (runs /auto-merge-dry-run)"
+        type: choice
+        required: true
+        default: "true"
+        options:
+          - "true"
+          - "false"
+  # schedule:
+  #   # The backstop. Catches what the events below miss - a resolved review thread, a draft
+  #   # flipped by hand, a check that went green on a re-run. Offset from the hour so it does not
+  #   # land with every other cron in this repository.
+  #   - cron: '17 * * * *'
+  # workflow_run:
+  #   # Fires when the gate that changes last changes. Only workflows on the default branch can
+  #   # trigger this, which is also why the skill is read from the default branch below.
+  #   workflows: ['test', 'deploy']
+  #   types: [completed]
+  # pull_request:
+  #   types: [ready_for_review, reopened]
+  # pull_request_review:
+  #   types: [submitted, dismissed]
+
+# Never two merges at once: each merge to main starts a deploy, and deploy.yml queues rather than
+# cancels, so two merges would deploy twice in a row. cancel-in-progress is what turns a burst of
+# workflow_run completions into a single evaluation.
+concurrency:
+  group: agent-pr-${{ inputs.pr-number || 'all' }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write # OIDC for Bedrock and the kill switch
+  contents: read
+  pull-requests: read
+  actions: read # the runs API the budget guard reads
+
+env:
+  NODE_VERSION: "24"
+  AWS_REGION: "eu-west-2"
+  CLAUDE_CODE_VERSION: "2.0.30"
+  # The one place this number is written. The commented schedule above is hourly (24 runs a
+  # day); this leaves headroom for a manual dispatch on top of it.
+  AUTO_MERGE_BUDGET_PER_DAY: "30"
+
+jobs:
+  auto-merge:
+    name: "auto merge"
+    # The Claude process below runs on Bedrock through the sandbox role; with no role it skips.
+    if: vars.CONCORDANCE_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    # The OIDC subject of a job in an environment is repo:<repo>:environment:sandbox, which the
+    # role trusts; the environment allows main only.
+    environment: sandbox
+    timeout-minutes: 20
+    steps:
+      # A merge performed with GITHUB_TOKEN does not trigger `on: push` workflows - GitHub's own
+      # loop prevention. The post-merge deploy of main would silently never run, which is the
+      # whole reason for merging. So this workflow refuses to start without a real token rather
+      # than merging into a pipeline that has stopped moving.
+      - name: Require a merge token that can trigger downstream workflows
+        env:
+          MERGE_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MERGE_TOKEN}" ]; then
+            echo "::error::AUTO_MERGE_TOKEN is not set. GITHUB_TOKEN cannot be used: a merge made"
+            echo "::error::with it does not trigger on:push workflows, so the sandbox deploy would"
+            echo "::error::never fire. Create a GitHub App installation token or a PAT with"
+            echo "::error::contents:write and pull-requests:write, and set it as AUTO_MERGE_TOKEN."
+            exit 1
+          fi
+          echo "Merge token present."
+
+      # THE SECURITY GATE. Check out the DEFAULT BRANCH, never the pull request's head.
+      #
+      # The skill being run decides whether to merge the pull request. If this checked out the PR,
+      # the PR could edit .claude/skills/auto-merge/SKILL.md - or CLAUDE.md - and weaken the gates
+      # that judge it. Reading both from the default branch means a change to the merge criteria
+      # has to be merged before it can govern anything, which is the point.
+      - name: Checkout the default branch (never the PR head)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The budget guard is a local action; the checkout above already put the full repository
+      # on disk, so this reuses it rather than adding a sparse checkout of its own.
+      - name: Stop once ${{ env.AUTO_MERGE_BUDGET_PER_DAY }} auto-merge runs have already posted a result today
+        id: budget-guard
+        uses: ./.github/actions/agent-run-budget
+        with:
+          workflow-file: agent-pr.yml
+          job-name: auto merge
+          step-name: Require a usable result
+          budget: ${{ env.AUTO_MERGE_BUDGET_PER_DAY }}
+
+      - name: Record that the daily run budget is spent
+        if: steps.budget-guard.outputs.over-budget == 'true'
+        env:
+          BUDGET_REASON: ${{ steps.budget-guard.outputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ "${BUDGET_REASON}" = "api-error" ]; then
+            MESSAGE="Auto-merge run skipped: the daily run budget could not be counted because the GitHub API failed after three attempts."
+          else
+            MESSAGE="Auto-merge run skipped: the budget of ${{ env.AUTO_MERGE_BUDGET_PER_DAY }} runs per 24 hours is already used (${{ steps.budget-guard.outputs.count }} posted a result since ${{ steps.budget-guard.outputs.since }})."
+          fi
+          echo "$MESSAGE" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Require the skills
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: |
+          set -euo pipefail
+          for f in .claude/skills/auto-merge/SKILL.md .claude/skills/auto-merge-dry-run/SKILL.md; do
+            test -s "$f" || { echo "::error::$f is missing on the default branch"; exit 1; }
+          done
+
+      - name: Refuse to run against a fork
+        if: inputs.pr-number != '' && steps.budget-guard.outputs.over-budget == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          cross_repo=$(gh pr view "$PR" --repo "${{ github.repository }}" --json isCrossRepository --jq '.isCrossRepository')
+          if [ "$cross_repo" = "true" ]; then
+            echo "::error::PR #$PR comes from a fork. This workflow holds a merge-capable token and"
+            echo "::error::takes PR text as model input, so fork PRs are merged by a human only."
+            exit 1
+          fi
+
+      - name: Set up Node
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # /auto-merge reads GitHub only, but the Claude process below runs on Bedrock, and the
+      # kill switch is an SSM parameter; the sandbox role grants both
+      # (iam-trust-policies/github-deploy-operations.json).
+      - name: Configure AWS role via GitHub OIDC
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.CONCORDANCE_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-concordance-auto-merge-${{ github.run_id }}
+          audience: sts.amazonaws.com
+          role-skip-session-tagging: true
+          retry-max-attempts: 3
+
+      - name: Stop when the agent kill switch is on
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        uses: ./.github/actions/agent-kill-switch
+        with:
+          environment-name: sandbox
+
+      - name: Install Claude Code
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Run the auto-merge skill
+        if: steps.budget-guard.outputs.over-budget == 'false'
+        id: run
+        env:
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ANTHROPIC_MODEL: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+          ANTHROPIC_SMALL_FAST_MODEL: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192"
+          DISABLE_TELEMETRY: "1"
+          DISABLE_ERROR_REPORTING: "1"
+          DISABLE_AUTOUPDATER: "1"
+          # The merge-capable token. `gh` picks this up; nothing else in the job has it.
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
+          PR_SCOPE: ${{ inputs.pr-number }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -o pipefail
+          if [ "${DRY_RUN}" = "false" ]; then SKILL='/auto-merge'; else SKILL='/auto-merge-dry-run'; fi
+          SCOPE_LINE="Consider every open pull request, exactly as the skill describes."
+          if [ -n "${PR_SCOPE}" ]; then SCOPE_LINE="Consider ONLY pull request #${PR_SCOPE}. Ignore all others."; fi
+
+          PROMPT="${SKILL}
+
+          You are running inside a GitHub Actions step, not a terminal session. Six things differ:
+
+          - ${SCOPE_LINE}
+          - There is no local worktree and no local checkout of any PR branch, so the skill's gates
+            about uncommitted worktree changes and local branches ahead of origin are satisfied by
+            construction. Say so rather than pretending to have checked a worktree that is absent.
+          - The checkout above has \`fetch-depth: 0\`, so \`origin/main~1\` and every \`origin/<ref>\`
+            resolve without an extra fetch; run the overlap check (\`git diff --name-only
+            origin/main~1..origin/main\` against \`origin/main...origin/<headRef>\`) exactly as the
+            skill describes. After a merge, \`git fetch origin\` before diffing again, so
+            \`origin/main\` reflects what just landed rather than the pre-merge tree.
+          - The remaining-PR rebase (\`git worktree add\`, \`git rebase\`, \`git push
+            --force-with-lease\`) does not run here: there is no worktree to rebase in and no
+            terminal session to watch it. A conflicting or overlapping PR is reported in Part 7 as
+            work for the terminal session, never rebased from this runner.
+          - Do not invoke /watch at the end. This runner exits; a background monitor cannot outlive
+            it. Instead, end your output with what a watcher would have been asked to observe.
+          - Render every table the skill requires into your output. It becomes the job summary and
+            it is the only record of why a merge did or did not happen."
+
+          claude -p "$PROMPT" \
+            --max-turns 40 \
+            --output-format json \
+            --permission-mode default \
+            --allowedTools "Read,Grep,Glob,Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr merge:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh api:*),Bash(git log:*),Bash(git ls-remote:*),Bash(git diff:*),Bash(git fetch:*)" \
+            2>&1 | tee /tmp/auto-merge.json
+
+      # A run that stops early - max-turns, a denied tool, a Bedrock entitlement error - still
+      # exits 0 with a JSON result carrying no usable answer. Gate on the content, so every
+      # failure shape fails the step with its reason.
+      - name: Require a usable result
+        if: always() && steps.run.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          test -s /tmp/auto-merge.json || { echo "::error::no output from the agent"; exit 1; }
+          result=$(jq -r '.result // empty' /tmp/auto-merge.json)
+          if [ -z "$result" ]; then
+            echo "::error::the agent produced no result field. Raw output:"
+            head -c 4000 /tmp/auto-merge.json
+            exit 1
+          fi
+          { echo "## auto merge"; echo; echo "$result"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the raw agent output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-pr-output-${{ github.run_id }}
+          path: /tmp/auto-merge.json
+          if-no-files-found: warn
+          retention-days: 14
