@@ -11,11 +11,12 @@ automated judgment is reversible by a person.
 
 ## Status
 
-Phase 0, the foundations. The laptop path is the build: Postgres in Docker, Ollama for models,
-Node 24 behind a small HTTP and WebSocket server, a raw ESM page. The plan is `PLAN_CONCORDANCE.md`;
-open work is `NEXT.md`; the specification is `docs/SPEC_WITNESS_RESEARCH_TOOL.md`.
+Phase 0, the foundations, and Phase 1 under way: the AWS form is the build (Bedrock, Aurora
+Serverless v2 with pgvector, Lambda, CloudFront), deployed from `main` to polycode-sandbox. The
+laptop form below is the port check. The plan is `PLAN_CONCORDANCE.md`; open work is `NEXT.md`;
+the specification is `docs/SPEC_WITNESS_RESEARCH_TOOL.md`.
 
-## Quick start (macOS)
+## The laptop port (macOS)
 
 ```bash
 npm ci
@@ -26,7 +27,8 @@ npm run dev                             # http://localhost:8787
 ```
 
 `npm test` runs offline. `CONCORDANCE_DB_TESTS=1` and `CONCORDANCE_OLLAMA_TESTS=1` add the
-Postgres and Ollama tiers. `npm run eval -- --provider=laptop` scores the gold set.
+Postgres and Ollama tiers. `npm run eval -- --provider=bedrock` scores the gold set on the deployed
+form; `--provider=laptop` is the port check.
 
 ## Layout
 

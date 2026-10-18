@@ -9,10 +9,11 @@ finds where witnesses agree and contradict. The demo corpus is the Grenfell Towe
 specification is `docs/SPEC_WITNESS_RESEARCH_TOOL.md`; the plan of record is `PLAN_CONCORDANCE.md`;
 open work is `NEXT.md`.
 
-**The build here is the laptop path.** Postgres 16 with pgvector in Docker, Ollama for models,
-Node 24 behind a small HTTP and WebSocket server, a raw ESM page. AWS stays behind the provider
-interface: a thin sandbox stack deploys from `main` so the pipeline is proven, and the full port is
-a later phase (`PLAN_AWS_SANDBOX.md`).
+**The build here is the AWS path.** Bedrock for models, Aurora Serverless v2 with pgvector behind
+the RDS Data API, Lambda behind API Gateway WebSocket, CloudFront and S3 for the raw ESM page, all
+deployed from `main` by `deploy.yml` (`PLAN_AWS_SANDBOX.md`). The laptop form (Postgres in Docker,
+Ollama, `packages/local/server.mjs`) exists to show the AWS form ports to a machine the court can
+run; it is proven by the eval on both providers and never built ahead (`PLAN_LAPTOP_STACK.md`).
 
 ## Start of every session, and after every compaction
 
@@ -31,7 +32,8 @@ and track it as a task.
 | -------------- | ---------------------------------------------------------------------------------------------------------- |
 | Runtime        | Node >= 24, ES modules (`"type": "module"`), plain JS (`.mjs`), no TypeScript, no framework                |
 | Core           | `packages/core/` (providers, ingest, chunking, retrieval, checks, facts, protocol); provider-neutral       |
-| Laptop server  | `packages/local/server.mjs` (HTTP + WebSocket; `npm run dev`)                                              |
+| AWS handlers   | `packages/aws/` (Lambda handlers around the core modules: the turn, the document route, ingest)            |
+| Laptop server  | `packages/local/server.mjs` (HTTP + WebSocket; `npm run dev`); the port check                              |
 | Page           | `packages/ui/` (raw ESM, CSS custom properties)                                                            |
 | Database       | `docker-compose.yml` (pgvector/pgvector:pg16), `db/migrations/*.sql`, `npm run db:migrate`                 |
 | Models         | Ollama; `scripts/models-pull.sh`; names in `.env` (`EMBED_MODEL`, `CHAT_MODEL`, `EXTRACT_MODEL`)           |
@@ -79,13 +81,15 @@ CONCORDANCE_OLLAMA_TESTS=1 npm test   # adds the Ollama tier
   the system.
 - **The contradiction engine is the product; chat is the on-ramp.**
 
-### Laptop first (hard rule)
+### AWS first, portable by construction (hard rule)
 
-The local provider is the one prompts are tuned on. A feature is complete when it runs with
-`MODEL_PROVIDER=laptop` and its eval passes there. The Bedrock provider implements the same
-interface later; nothing in `packages/core/` imports an AWS SDK. This dev machine is a 64 GB Intel
-i9 (CPU inference), so the defaults are 7B-class models; sizes for the demo machine are in
-`PLAN_LAPTOP_STACK.md`.
+A feature is complete when it runs deployed with `MODEL_PROVIDER=bedrock` and its eval passes
+there. Every component keeps a laptop form behind the same seam: models through
+`packages/core/providers/modelProvider.mjs`, the store through the `{ query, close }` shape of
+`packages/core/db.mjs`, text extraction through `textTool`. `packages/core/` loads an AWS SDK only
+behind a dynamic import inside a factory, so the offline suite and the laptop path never touch it.
+The laptop port is checked with `npm run eval -- --provider=laptop` when the operator names a
+machine; nothing on the laptop is built ahead of its AWS form.
 
 ### Licence headers
 
@@ -154,13 +158,14 @@ batch that stacks problems faster than it lands them, and `/wake` lifts it on th
 ## Test the blast radius, not the whole suite
 
 Mid-task, run what your change can reach: the file you edited, what imports it, and what the
-change's reason names. The full set (`npm run check:all`, plus the Postgres and Ollama tiers when
-the ingest or query path changed) runs once, when the change becomes someone else's problem: a
-push, a pull request. A radius you cannot see is a reason to run everything; say so.
+change's reason names. The full set (`npm run check:all`) runs once, when the change becomes
+someone else's problem: a push, a pull request. `main`'s `deploy.yml` run and its smoke step are
+the integration proof; the Postgres and Ollama tiers run only for a laptop-port row. A radius you
+cannot see is a reason to run everything; say so.
 
-**Model calls cost time, not money, on the laptop; they still cost minutes.** A test that calls
-Ollama is in the opt-in tier and names the model and the number of calls in its brief. An eval run
-is a background command.
+**Model calls cost money on Bedrock.** A test that calls a model is in an opt-in tier and names the
+profile and the number of calls in its brief. A run that invokes Bedrock is a background command,
+and its closing commit records the spend read from Cost Explorer.
 
 ## Tee before you filter
 
