@@ -28,5 +28,22 @@ describe.skipIf(!enabled)(
       expect(tokens.length).toBeGreaterThan(0);
       expect(result.text.toLowerCase()).toContain("ready");
     }, 300_000);
+    it("rejects with an AbortError after an abort and emits no further tokens", async () => {
+      const controller = new AbortController();
+      let count = 0;
+      let afterAbort = 0;
+      const run = provider.chat({
+        messages: [{ role: "user", content: "Count from one to fifty in words." }],
+        signal: controller.signal,
+        onToken: () => {
+          count += 1;
+          if (controller.signal.aborted) afterAbort += 1;
+          if (count === 2) controller.abort();
+        },
+      });
+      await expect(run).rejects.toMatchObject({ name: "AbortError" });
+      expect(afterAbort).toBe(0);
+      expect(count).toBe(2);
+    }, 300_000);
   },
 );

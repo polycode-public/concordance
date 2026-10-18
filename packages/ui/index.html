@@ -14,11 +14,28 @@
       <h1>concordance</h1>
       <span id="connection" class="muted">connecting</span>
     </header>
-    <main>
-      <section id="answer" class="answer" aria-live="polite"></section>
-      <p id="score" class="score"></p>
-      <p id="status" class="status muted"></p>
-    </main>
+    <div class="layout">
+      <main>
+        <section id="answer" class="answer" aria-live="polite"></section>
+        <p id="score" class="score"></p>
+        <p id="status" class="status muted"></p>
+        <section class="evidence" aria-labelledby="evidence-title">
+          <h2 id="evidence-title" class="muted">Evidence</h2>
+          <ol id="evidence" class="evidence-list"></ol>
+        </section>
+      </main>
+      <aside id="viewer" class="viewer" hidden aria-labelledby="viewer-title">
+        <div class="viewer-bar">
+          <strong id="viewer-title" class="viewer-title"></strong>
+          <button type="button" id="viewer-prev" class="small" aria-label="Previous page">‹</button>
+          <span id="viewer-page" class="muted"></span>
+          <button type="button" id="viewer-next" class="small" aria-label="Next page">›</button>
+          <button type="button" id="viewer-close" class="small" aria-label="Close viewer">×</button>
+        </div>
+        <p id="viewer-message" class="viewer-message muted"></p>
+        <div class="viewer-body"><canvas id="viewer-canvas"></canvas></div>
+      </aside>
+    </div>
     <form id="ask" class="ask">
       <textarea
         id="question"

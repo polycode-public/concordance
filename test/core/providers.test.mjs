@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createOllamaProvider } from "../../packages/core/providers/ollamaProvider.mjs";
 import { providerFromEnv } from "../../packages/core/providers/index.mjs";
 import { assertProvider } from "../../packages/core/providers/modelProvider.mjs";
+import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 
 function ndjsonResponse(lines, { delayMs = 0 } = {}) {
   const encoder = new TextEncoder();
@@ -138,5 +139,28 @@ describe("ollama provider", () => {
       fetchImpl: async () => new Response("model not found", { status: 404 }),
     });
     await expect(p.embed(["a"])).rejects.toThrow(/404/);
+  });
+});
+
+describe("fake provider", () => {
+  it("embeds unit vectors of embedDim and defaults to 4", async () => {
+    expect(await createFakeProvider({ tokens: [] }).embed(["a"])).toEqual([[0, 0, 0, 1]]);
+    const p = createFakeProvider({ tokens: [], embedDim: 1024 });
+    const [vector] = await p.embed(["a"]);
+    expect(p.embedDim).toBe(1024);
+    expect(vector).toHaveLength(1024);
+    expect(vector.at(-1)).toBe(1);
+    expect(vector.slice(0, -1).every((x) => x === 0)).toBe(true);
+  });
+
+  it("uses embedFor and extractJson when given", async () => {
+    const p = createFakeProvider({
+      tokens: [],
+      embedFor: (text) => [text.length],
+      extractJson: ({ prompt }) => ({ echo: prompt }),
+    });
+    expect(await p.embed(["ab", "abc"])).toEqual([[2], [3]]);
+    expect(await p.extractJson({ prompt: "x" })).toEqual({ echo: "x" });
+    expect(await createFakeProvider({ tokens: [] }).extractJson({ prompt: "x" })).toEqual({});
   });
 });

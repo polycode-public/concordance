@@ -3,25 +3,19 @@
 //
 // The laptop server: static UI over HTTP, /health, and the chat WebSocket at /ws.
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
-import { markUnsupported } from "../core/checks/citations.mjs";
+import { runQuery as defaultRunQuery } from "../core/query.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATIC = path.resolve(here, "..", "ui");
+const DEFAULT_CORPORA = path.resolve(here, "..", "..", "corpora");
 
-export const PROMPT_VERSION = "answer-closed-world-v1";
-
-export const SYSTEM_PROMPT = [
-  "You answer questions about a corpus of witness statements.",
-  "Answer only from the evidence blocks you are given.",
-  "If the evidence blocks do not cover the question, say 'the corpus does not say'.",
-  "Never use prior knowledge about the real event.",
-  "Write [En] after every sentence that relies on evidence, where n is the number of the evidence block.",
-].join(" ");
+export const NO_DATABASE = "the database is not configured";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -32,8 +26,6 @@ const MIME = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
 };
-
-const WARNING_RATIO = 0.3;
 
 /**
  * Probes a URL with a short timeout. Never throws.
@@ -61,14 +53,47 @@ async function probeDb(db, timeoutMs = 500) {
   }
 }
 
+const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** True when a value can name one path segment: no separators, no "..". */
+export const isSafeSegment = (value) =>
+  typeof value === "string" &&
+  value.length <= 128 &&
+  SAFE_SEGMENT.test(value) &&
+  !value.includes("..");
+
 /**
- * Formats evidence blocks for the prompt as [E1] ... [En].
- * @param {{ header?: string, text: string }[]} blocks
+ * Finds the original PDF for a document. Resolves to null when the document or
+ * its file does not exist.
+ * @param {{ query: Function }} db
+ * @param {string} corporaDir
+ * @param {string} documentId
  */
-export function evidencePrompt(blocks) {
-  if (!blocks.length) return "Evidence blocks: none.";
-  return blocks.map((b, i) => `[E${i + 1}] ${b.header ?? ""}\n${b.text}`).join("\n\n");
+export async function findOriginal(db, corporaDir, documentId) {
+  const { rows } = await db.query("SELECT corpus, title FROM documents WHERE id = $1", [
+    documentId,
+  ]);
+  if (!rows.length) return null;
+  const { corpus, title } = rows[0];
+  if (!isSafeSegment(corpus)) throw new Error(`document ${documentId} has an unsafe corpus name`);
+  const file = path.join(corporaDir, corpus, "raw", `${documentId}.pdf`);
+  try {
+    const info = await stat(file);
+    if (!info.isFile()) return null;
+    return { file, size: info.size, title: title ?? documentId };
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
 }
+
+const blockFrame = (b) => ({
+  evidence: b.evidence,
+  documentId: b.documentId,
+  locator: b.locator,
+  header: b.header,
+  text: b.text,
+});
 
 /**
  * @param {object} options
@@ -78,6 +103,8 @@ export function evidencePrompt(blocks) {
  * @param {string} [options.staticDir]
  * @param {{ query: Function } | null} [options.db]
  * @param {string | null} [options.ollamaUrl]
+ * @param {string} [options.corporaDir]
+ * @param {typeof defaultRunQuery} [options.runQuery]
  */
 export async function createServer({
   provider,
@@ -86,6 +113,8 @@ export async function createServer({
   staticDir = DEFAULT_STATIC,
   db = null,
   ollamaUrl = null,
+  corporaDir = DEFAULT_CORPORA,
+  runQuery = defaultRunQuery,
 }) {
   const root = path.resolve(staticDir);
 
@@ -111,6 +140,10 @@ export async function createServer({
         res.end(body);
         return;
       }
+      if (pathname.startsWith("/doc/")) {
+        await serveOriginal(req, res, decodeURIComponent(pathname.slice("/doc/".length)));
+        return;
+      }
       const rel =
         pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
       const file = path.resolve(root, rel);
@@ -127,10 +160,39 @@ export async function createServer({
       res.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
       res.end(req.method === "HEAD" ? undefined : data);
     } catch (err) {
-      if (err.code === "ENOENT" || err.code === "EISDIR") res.writeHead(404).end();
+      if (err instanceof URIError) res.writeHead(400).end();
+      else if (err.code === "ENOENT" || err.code === "EISDIR") res.writeHead(404).end();
       else if (!res.headersSent) res.writeHead(500).end();
     }
   });
+
+  async function serveOriginal(req, res, documentId) {
+    if (!isSafeSegment(documentId)) {
+      res.writeHead(400).end();
+      return;
+    }
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    const original = await findOriginal(db, path.resolve(corporaDir), documentId);
+    if (!original) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "application/pdf",
+      "content-length": original.size,
+      "cache-control": "no-cache",
+    });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    createReadStream(original.file)
+      .on("error", () => res.destroy())
+      .pipe(res);
+  }
 
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (req, socket, head) => {
@@ -170,7 +232,7 @@ export async function createServer({
         return;
       }
       if (frame.type === "open") {
-        send(serverFrame.error("open is not built yet"));
+        openDocument(frame);
         return;
       }
       const previous = threads.get(frame.thread);
@@ -183,42 +245,59 @@ export async function createServer({
       threads.clear();
     });
 
+    async function openDocument({ docId, locator }) {
+      try {
+        if (!isSafeSegment(docId)) throw new Error(`unsafe document id ${JSON.stringify(docId)}`);
+        if (!db) throw new Error(NO_DATABASE);
+        const original = await findOriginal(db, path.resolve(corporaDir), docId);
+        if (!original) throw new Error(`no original PDF for ${docId}`);
+        const page = Number.isInteger(locator?.page) && locator.page > 0 ? locator.page : 1;
+        send(
+          serverFrame.opened(docId, {
+            url: `/doc/${encodeURIComponent(docId)}`,
+            title: original.title,
+            page,
+            locator,
+          }),
+        );
+      } catch (err) {
+        send(serverFrame.error(err.message));
+      }
+    }
+
     async function runTurn({ thread, turnId, text }) {
+      if (!db) {
+        send(serverFrame.error(NO_DATABASE, thread, turnId));
+        return;
+      }
       const controller = new AbortController();
       const { signal } = controller;
       threads.set(thread, { turnId, controller });
       const live = () => !signal.aborted;
       try {
-        send(serverFrame.status(thread, turnId, "rewriting"));
-        send(serverFrame.status(thread, turnId, "retrieving"));
-        const blocks = [];
-        send(serverFrame.evidence(thread, turnId, blocks));
-        send(serverFrame.status(thread, turnId, "answering"));
-        const result = await provider.chat({
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: `${evidencePrompt(blocks)}\n\nQuestion: ${text}` },
-          ],
+        const result = await runQuery({
+          question: text,
+          provider,
+          db,
           signal,
-          temperature: 0,
-          promptVersion: PROMPT_VERSION,
+          onStage: (stage) => {
+            if (live()) send(serverFrame.status(thread, turnId, stage));
+          },
+          onEvidence: (blocks) => {
+            if (live()) send(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));
+          },
           onToken: (piece) => {
             if (live()) send(serverFrame.token(thread, turnId, piece));
           },
         });
         signal.throwIfAborted();
-        send(serverFrame.status(thread, turnId, "checking"));
-        const marked = markUnsupported(result.text);
         send(
-          serverFrame.done(thread, turnId, {
-            sentences: marked.total,
-            supported: marked.supported,
-            flaggedRatio: marked.flaggedRatio,
-            warning: marked.flaggedRatio > WARNING_RATIO,
-            marks: marked.sentences.map((s) => ({ text: s.text, supported: s.supported })),
-            model: result.model,
-            promptVersion: result.promptVersion,
-          }),
+          serverFrame.done(
+            thread,
+            turnId,
+            { ...result.checks, abstained: result.abstained },
+            result.citations,
+          ),
         );
       } catch (err) {
         if (signal.aborted) send(serverFrame.cancelled(thread, turnId));

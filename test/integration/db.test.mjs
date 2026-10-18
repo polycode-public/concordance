@@ -96,4 +96,64 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
     );
     expect(hit.rows).toEqual([{ text: "The stairwell was full of smoke." }]);
   });
+
+  it("has the vector extension at a 0.x version", async () => {
+    const res = await client.query("SELECT extversion FROM pg_extension WHERE extname = 'vector'");
+    console.log(`pgvector ${res.rows[0].extversion}`);
+    expect(res.rows[0].extversion).toMatch(/^0\.\d+/);
+  });
+
+  const unit = (i) => `[${Array.from({ length: 1024 }, (_, k) => (k === i ? 1 : 0)).join(",")}]`;
+
+  it("stores halfvec embeddings at all four chunk levels and ranks by cosine distance", async () => {
+    await client.query(
+      `INSERT INTO documents (id, corpus, source_url, fetched_at, sha256, licence, format, pipeline_version)
+       VALUES ('VEC1', 'grenfell', 'https://example.test/v.pdf', now(), repeat('b', 64), 'OGL-3.0', 'pdf', 'v0')`,
+    );
+    const levels = ["document", "section", "passage", "sentence"];
+    for (const [i, level] of levels.entries()) {
+      await client.query(
+        `INSERT INTO chunks (document_id, level, ordinal, text, embedding, embedding_model, embedding_dim, pipeline_version)
+         VALUES ('VEC1', $1, $2, $3, $4::halfvec, 'bge-m3', 1024, 'v0')`,
+        [level, i, `level ${level}`, unit(i)],
+      );
+    }
+    const stored = await client.query(
+      "SELECT level FROM chunks WHERE document_id = 'VEC1' AND embedding IS NOT NULL ORDER BY ordinal",
+    );
+    expect(stored.rows.map((r) => r.level)).toEqual(levels);
+
+    const top = await client.query(
+      "SELECT text FROM chunks WHERE document_id = 'VEC1' ORDER BY embedding <=> $1::halfvec LIMIT 3",
+      [unit(2)],
+    );
+    expect(top.rows).toHaveLength(3);
+    expect(top.rows[0].text).toBe("level passage");
+  });
+
+  it("resolves prev_id and next_id through a join", async () => {
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await client.query(
+        `INSERT INTO chunks (document_id, level, ordinal, text, pipeline_version)
+         VALUES ('VEC1', 'passage', $1, $2, 'v0') RETURNING id`,
+        [10 + i, `neighbour ${i}`],
+      );
+      ids.push(r.rows[0].id);
+    }
+    await client.query("UPDATE chunks SET next_id = $2 WHERE id = $1", [ids[0], ids[1]]);
+    await client.query("UPDATE chunks SET prev_id = $1, next_id = $3 WHERE id = $2", [
+      ids[0],
+      ids[1],
+      ids[2],
+    ]);
+    await client.query("UPDATE chunks SET prev_id = $1 WHERE id = $2", [ids[1], ids[2]]);
+    const res = await client.query(
+      `SELECT p.text AS prev, c.text AS cur, n.text AS next
+       FROM chunks c JOIN chunks p ON p.id = c.prev_id JOIN chunks n ON n.id = c.next_id
+       WHERE c.id = $1`,
+      [ids[1]],
+    );
+    expect(res.rows).toEqual([{ prev: "neighbour 0", cur: "neighbour 1", next: "neighbour 2" }]);
+  });
 });

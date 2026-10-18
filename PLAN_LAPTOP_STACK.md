@@ -8,18 +8,18 @@ measurements the first rows fill in. The AWS form of each line is `PLAN_AWS_SAND
 
 ## Components
 
-| Component | Laptop form                                                                                | Where                                        |
-| --------- | ------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| Store     | Postgres 16 + pgvector 0.8 in Docker (`pgvector/pgvector:pg16`), port 5432                 | `docker-compose.yml`, `db/migrations/`       |
-| Models    | Ollama at `http://localhost:11434` (`/api/embed`, `/api/chat` streaming, JSON mode)        | `packages/core/providers/ollamaProvider.mjs` |
-| Reranker  | `bge-reranker-v2-m3` through Ollama when it serves it; a Node cross-encoder call otherwise | Phase 2                                      |
-| NLI       | DeBERTa-v3 MNLI on CPU (about 100 pairs/s); the chat model gives the reason line           | Phase 4                                      |
-| PDF text  | `pdftotext -layout` (poppler, installed)                                                   | `packages/core/ingest/pdfText.mjs`           |
-| OCR       | Tesseract 5 (not installed; not needed for Grenfell's born-digital PDFs)                   | behind the provider interface                |
-| ASR       | whisper.cpp `large-v3-turbo` (not installed), `ffmpeg` (not installed)                     | Phase 5; `brew install whisper-cpp ffmpeg`   |
-| Server    | Node 24, `node:http` + `ws`, port 8787                                                     | `packages/local/server.mjs`                  |
-| Page      | raw ESM, served by the local server                                                        | `packages/ui/`                               |
-| Evals     | `node evals/run.mjs --provider=laptop`                                                     | `evals/`                                     |
+| Component | Laptop form                                                                                                                                                                                                          | Where                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Store     | Postgres 16 + pgvector 0.8.7 in Docker (`pgvector/pgvector:pg16`), port 5432                                                                                                                                         | `docker-compose.yml`, `db/migrations/`       |
+| Models    | Ollama at `http://localhost:11434` (`/api/embed`, `/api/chat` streaming, JSON mode)                                                                                                                                  | `packages/core/providers/ollamaProvider.mjs` |
+| Reranker  | `bge-reranker-v2-m3` through Ollama when it serves it; a Node cross-encoder call otherwise. Ollama does not serve it (`ollama pull` fails), so the choice stays open and retrieval uses RRF until Phase 2 picks one. | Phase 2                                      |
+| NLI       | DeBERTa-v3 MNLI on CPU (about 100 pairs/s); the chat model gives the reason line                                                                                                                                     | Phase 4                                      |
+| PDF text  | `pdftotext -layout` (poppler, installed)                                                                                                                                                                             | `packages/core/ingest/pdfText.mjs`           |
+| OCR       | Tesseract 5 (not installed; not needed for Grenfell's born-digital PDFs)                                                                                                                                             | behind the provider interface                |
+| ASR       | whisper.cpp `large-v3-turbo` (not installed), `ffmpeg` (not installed)                                                                                                                                               | Phase 5; `brew install whisper-cpp ffmpeg`   |
+| Server    | Node 24, `node:http` + `ws`, port 8787                                                                                                                                                                               | `packages/local/server.mjs`                  |
+| Page      | raw ESM, served by the local server                                                                                                                                                                                  | `packages/ui/`                               |
+| Evals     | `node evals/run.mjs --provider=laptop`                                                                                                                                                                               | `evals/`                                     |
 
 ## Environment
 
@@ -43,9 +43,11 @@ schedule is set from them. A 2,000-page slice is the dev corpus until the demo m
 
 ### Measurements (F2 fills these in; one row per machine)
 
-| Machine         | Embed (chunks/min, bge-m3) | Chat first token (s) | Chat tokens/s | Extraction (pages/h) | Date |
-| --------------- | -------------------------- | -------------------- | ------------- | -------------------- | ---- |
-| Intel i9, 64 GB |                            |                      |               |                      |      |
+| Machine         | Embed (chunks/min, bge-m3) | Chat first token (s) | Chat tokens/s | Extraction (pages/h) | Date       |
+| --------------- | -------------------------- | -------------------- | ------------- | -------------------- | ---------- |
+| Intel i9, 64 GB | 23                         | 60.3                 | 0.7           | not measured         | 2026-10-18 |
+
+The Intel row was measured at a load average above 40 while other sessions ran on the machine, so it is a ceiling on latency, not a floor; the idle measurement replaces it.
 
 ## Postgres
 

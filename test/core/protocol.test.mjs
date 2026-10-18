@@ -20,6 +20,7 @@ describe("protocol constants", () => {
       "done",
       "cancelled",
       "error",
+      "opened",
     ]);
     expect(STAGES).toEqual(["rewriting", "retrieving", "answering", "checking"]);
   });

@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { createServer, SYSTEM_PROMPT } from "../../packages/local/server.mjs";
+import { createServer } from "../../packages/local/server.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
+import { PROMPT_VERSION, SYSTEM_PROMPT, answerMessages } from "../../packages/core/prompt.mjs";
+import { checkAnswer } from "../../packages/core/query.mjs";
 
 const TOKENS = ["The stairs were dark ", "[E1]. ", "Nobody ", "came."];
 
@@ -40,6 +45,61 @@ function connect(port) {
     ws.on("error", reject);
   });
 }
+
+const BLOCKS = [
+  {
+    evidence: 1,
+    chunkId: "7",
+    chunkIds: ["6", "7", "8"],
+    level: "passage",
+    documentId: "IWS1",
+    locator: { page: 3, paragraph: 11 },
+    header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
+    text: "The stairs were dark.",
+  },
+];
+
+/** A runQuery that skips retrieval and answers over fixed blocks. */
+function stubQuery(blocks = BLOCKS) {
+  return async ({ question, provider, signal, onStage, onEvidence, onToken }) => {
+    onStage("rewriting");
+    onStage("retrieving");
+    onEvidence(blocks);
+    onStage("answering");
+    const result = await provider.chat({
+      messages: answerMessages(question, blocks),
+      signal,
+      temperature: 0,
+      promptVersion: PROMPT_VERSION,
+      onToken,
+    });
+    onStage("checking");
+    const { citations, checks } = checkAnswer(result.text, blocks);
+    return {
+      answer: result.text,
+      abstained: false,
+      citations,
+      checks: { ...checks, model: result.model, promptVersion: PROMPT_VERSION },
+    };
+  };
+}
+
+/** A db whose documents table holds the given rows by id. */
+const fakeDb = (documents = {}) => ({
+  query: async (text, params) => {
+    if (/FROM documents/.test(text)) {
+      const doc = documents[params[0]];
+      return { rows: doc ? [doc] : [] };
+    }
+    return { rows: [] };
+  },
+});
+
+const turnServer = (provider, options = {}) =>
+  createServer({ provider, db: fakeDb(), runQuery: stubQuery(), ...options });
+
+const indexOfFrame = (frames, typeOrStage) =>
+  frames.findIndex((f) => f.type === typeOrStage || f.stage === typeOrStage);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -80,7 +140,7 @@ describe("local server", () => {
 
   it("streams a turn through the stages and reports citation checks", async () => {
     const provider = createFakeProvider({ tokens: TOKENS, delayMs: 5 });
-    app = await createServer({ provider });
+    app = await turnServer(provider);
     const client = await connect(app.port);
     client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Were the stairs dark?" });
     const done = await client.until((f) => f.type === "done");
@@ -89,7 +149,18 @@ describe("local server", () => {
     const stages = client.frames.filter((f) => f.type === "status").map((f) => f.stage);
     expect(stages).toEqual(["rewriting", "retrieving", "answering", "checking"]);
     const evidence = client.frames.find((f) => f.type === "evidence");
-    expect(evidence.blocks).toEqual([]);
+    expect(evidence.blocks).toEqual([
+      {
+        evidence: 1,
+        documentId: "IWS1",
+        locator: { page: 3, paragraph: 11 },
+        header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
+        text: "The stairs were dark.",
+      },
+    ]);
+    expect(indexOfFrame(client.frames, "evidence")).toBeLessThan(
+      indexOfFrame(client.frames, "answering"),
+    );
     const tokens = client.frames.filter((f) => f.type === "token").map((f) => f.text);
     expect(tokens).toEqual(TOKENS);
     const order = client.frames.map((f) => f.type);
@@ -102,12 +173,28 @@ describe("local server", () => {
       flaggedRatio: 0.5,
       warning: true,
     });
+    expect(done.citations).toEqual([
+      { evidence: 1, locator: { document: "IWS1", page: 3, paragraph: 11 } },
+    ]);
     expect(provider.calls[0].messages[0]).toEqual({ role: "system", content: SYSTEM_PROMPT });
+    expect(provider.calls[0].messages[1].content).toContain(
+      "[E1] [Grenfell Inquiry | Witness IWS1 | p.3 para 11]\nThe stairs were dark.",
+    );
     expect(SYSTEM_PROMPT).toContain("the corpus does not say");
   });
 
+  it("answers a turn with an error frame when no database is configured", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: TOKENS }) });
+    const client = await connect(app.port);
+    client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Question?" });
+    const error = await client.until((f) => f.type === "error");
+    client.ws.close();
+    expect(error).toMatchObject({ thread: "t1", turnId: "u1" });
+    expect(error.message).toMatch(/database is not configured/);
+  });
+
   it("stops the token stream when the client cancels mid-stream", async () => {
-    app = await createServer({ provider: createFakeProvider({ tokens: TOKENS, delayMs: 60 }) });
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 60 }));
     const client = await connect(app.port);
     client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Question?" });
     await client.until((f) => f.type === "token");
@@ -123,7 +210,7 @@ describe("local server", () => {
   });
 
   it("cancels the in-flight turn when a new turn arrives on the same thread", async () => {
-    app = await createServer({ provider: createFakeProvider({ tokens: TOKENS, delayMs: 30 }) });
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 30 }));
     const client = await connect(app.port);
     client.send({ type: "turn", thread: "t1", turnId: "u1", text: "First?" });
     await client.until((f) => f.type === "token" && f.turnId === "u1");
@@ -136,7 +223,7 @@ describe("local server", () => {
   });
 
   it("runs turns on different threads independently", async () => {
-    app = await createServer({ provider: createFakeProvider({ tokens: TOKENS, delayMs: 5 }) });
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 5 }));
     const client = await connect(app.port);
     client.send({ type: "turn", thread: "a", turnId: "1", text: "A?" });
     client.send({ type: "turn", thread: "b", turnId: "2", text: "B?" });
@@ -153,5 +240,70 @@ describe("local server", () => {
     const error = await client.until((f) => f.type === "error");
     client.ws.close();
     expect(error.message).toMatch(/JSON/);
+  });
+
+  describe("originals", () => {
+    let corpora;
+    const PDF = Buffer.from("%PDF-1.4\n%fake\n");
+    const docs = {
+      IWS1: { corpus: "grenfell", title: "Statement of IWS1" },
+      IWS2: { corpus: "grenfell", title: null },
+    };
+    afterEach(async () => {
+      if (corpora) await rm(corpora, { recursive: true, force: true });
+      corpora = undefined;
+    });
+    const withCorpora = async () => {
+      corpora = await mkdtemp(path.join(tmpdir(), "concordance-corpora-"));
+      await mkdir(path.join(corpora, "grenfell", "raw"), { recursive: true });
+      await writeFile(path.join(corpora, "grenfell", "raw", "IWS1.pdf"), PDF);
+      return createServer({
+        provider: createFakeProvider({ tokens: [] }),
+        db: fakeDb(docs),
+        corporaDir: corpora,
+      });
+    };
+
+    it("streams the original PDF of a document", async () => {
+      app = await withCorpora();
+      const res = await fetch(`http://127.0.0.1:${app.port}/doc/IWS1`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/pdf");
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(PDF);
+    });
+
+    it("answers 404 for an unknown document or a missing file, 400 for a path", async () => {
+      app = await withCorpora();
+      const base = `http://127.0.0.1:${app.port}/doc`;
+      expect((await fetch(`${base}/NOPE`)).status).toBe(404);
+      expect((await fetch(`${base}/IWS2`)).status).toBe(404);
+      expect((await fetch(`${base}/..%2Fgrenfell%2Fraw%2FIWS1`)).status).toBe(400);
+      expect((await fetch(`${base}/a%5Cb`)).status).toBe(400);
+      expect((await fetch(`${base}/%E0%A4%A`)).status).toBe(400);
+    });
+
+    it("answers 503 for a document when no database is configured", async () => {
+      app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+      expect((await fetch(`http://127.0.0.1:${app.port}/doc/IWS1`)).status).toBe(503);
+    });
+
+    it("answers an open frame with the URL and page of the original", async () => {
+      app = await withCorpora();
+      const client = await connect(app.port);
+      client.send({ type: "open", docId: "IWS1", locator: { page: 3, paragraph: 11 } });
+      const opened = await client.until((f) => f.type === "opened");
+      client.send({ type: "open", docId: "IWS2", locator: null });
+      const error = await client.until((f) => f.type === "error");
+      client.ws.close();
+      expect(opened).toEqual({
+        type: "opened",
+        docId: "IWS1",
+        url: "/doc/IWS1",
+        title: "Statement of IWS1",
+        page: 3,
+        locator: { page: 3, paragraph: 11 },
+      });
+      expect(error.message).toMatch(/no original PDF for IWS2/);
+    });
   });
 });
