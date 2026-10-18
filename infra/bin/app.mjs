@@ -12,6 +12,7 @@
 import { App, Tags } from "aws-cdk-lib";
 import { DataStack } from "../lib/dataStack.mjs";
 import { GuardrailsStack } from "../lib/guardrailsStack.mjs";
+import { StoreStack } from "../lib/storeStack.mjs";
 
 export const WORKLOAD_REGION = "eu-west-2";
 export const PROJECT = "concordance";
@@ -27,6 +28,11 @@ const stackName = (name) => `${PROJECT}-${envName}-${name}`;
 new DataStack(app, stackName("data"), {
   env,
   description: `${PROJECT} ${envName}: the private bucket for off-site copies of corpus files`,
+});
+
+new StoreStack(app, stackName("store"), {
+  env,
+  description: `${PROJECT} ${envName}: the Aurora Serverless v2 Postgres store behind the RDS Data API`,
 });
 
 new GuardrailsStack(app, stackName("guardrails"), {
