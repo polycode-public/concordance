@@ -37,7 +37,7 @@ repository has immutable subject claims on.
 | Page       | CloudFront and S3; Cognito for one demo user; presigned URLs for documents and media                                                                          | C3  | static files from the local server |
 | Ingest     | Step Functions Standard map over the manifest, one Lambda per document, concurrency 4, the budget read before each batch                                      | C4  | in-process ingest loop             |
 | Originals  | the originals bucket, object versioning, SHA-256 in metadata                                                                                                  | F3  | `corpora/*/raw` on disk            |
-| PDF text   | decided in C4: `pdfjs-dist` in Node, a poppler layer, or Textract                                                                                             | C4  | `pdftotext`                        |
+| PDF text   | `pdfjs-dist` in Node (`pdfToPagesFromBuffer`) in the ingest Lambda bundle; a poppler layer and Textract ($1.50 per 1,000 pages) cost more                     | C4  | `pdftotext`                        |
 | Media, OCR | Transcribe and Textract behind the same text-tool seam, switched off for Grenfell's born-digital PDFs                                                         | F12 | whisper.cpp, Tesseract             |
 
 ### The store: the cheapest-option table

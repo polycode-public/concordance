@@ -14,6 +14,7 @@ import { DataStack } from "../lib/dataStack.mjs";
 import { GuardrailsStack } from "../lib/guardrailsStack.mjs";
 import { StoreStack } from "../lib/storeStack.mjs";
 import { AppStack } from "../lib/appStack.mjs";
+import { IngestStack } from "../lib/ingestStack.mjs";
 
 export const WORKLOAD_REGION = "eu-west-2";
 export const PROJECT = "concordance";
@@ -43,6 +44,16 @@ new AppStack(app, stackName("app"), {
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
   description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
+});
+
+new IngestStack(app, stackName("ingest"), {
+  env,
+  corpusBucket: dataStack.bucket,
+  dbResourceArn: storeStack.cluster.clusterArn,
+  dbSecretArn: storeStack.secret.secretArn,
+  dbName: "concordance",
+  budgetName: `${PROJECT}-${envName}-monthly`,
+  description: `${PROJECT} ${envName}: the ingest state machine over a corpus manifest, one Lambda per document`,
 });
 
 new GuardrailsStack(app, stackName("guardrails"), {

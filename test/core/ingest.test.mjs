@@ -5,11 +5,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { toDataApiParameter, toNamedParameters } from "../../packages/core/db.mjs";
 import { sha256File } from "../../packages/core/ingest/hash.mjs";
 import { splitPages } from "../../packages/core/ingest/pdfText.mjs";
 import {
   batches,
   documentMeta,
+  ingestDocument,
+  LEVEL_BATCH_BYTES,
+  levelBatches,
   parseArgs,
   parseManifest,
   parseSources,
@@ -17,6 +21,7 @@ import {
   readSources,
   toHalfvecLiteral,
 } from "../../packages/core/ingest/run.mjs";
+import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 
 describe("splitPages", () => {
   it("splits on form feeds and drops the empty page after the last one", () => {
@@ -135,6 +140,20 @@ describe("toHalfvecLiteral", () => {
     expect(toHalfvecLiteral([0, 0.5, -1], 3)).toBe("[0,0.5,-1]");
   });
 
+  it("writes five significant digits a value, within fp16 tolerance of the input", () => {
+    const vector = Array.from({ length: 1024 }, (_, i) => Math.sin(i + 0.123456789) / 7);
+    vector[0] = 1.23456789e-5;
+    vector[1] = -9.87654321e-8;
+    const literal = toHalfvecLiteral(vector, 1024);
+    expect(literal.length).toBeLessThan(10 * 1024);
+    const values = literal.slice(1, -1).split(",").map(Number.parseFloat);
+    expect(values).toHaveLength(1024);
+    values.forEach((value, i) => {
+      expect(Math.abs(value - vector[i])).toBeLessThanOrEqual(Math.abs(vector[i]) * 1e-4);
+    });
+    expect(literal).toMatch(/^\[0\.000012346,-9\.8765e-8,/);
+  });
+
   it("throws on a wrong length or a non-finite value", () => {
     expect(() => toHalfvecLiteral([0, 1], 3)).toThrow("embedding has length 2; expected 3");
     expect(() => toHalfvecLiteral([0, NaN, 1], 3)).toThrow(/finite/);
@@ -172,5 +191,143 @@ describe("parseArgs", () => {
     expect(parseArgs(["--corpus=grenfell"])).toEqual({ corpus: "grenfell" });
     expect(() => parseArgs([])).toThrow(/--corpus is required/);
     expect(() => parseArgs(["--x"])).toThrow(/unknown argument/);
+  });
+});
+
+/** A database that records every statement and answers the ingest's queries. */
+function recordingDb() {
+  const statements = [];
+  let nextId = 1;
+  const query = async (text, params = []) => {
+    statements.push({ text, params });
+    if (/INSERT INTO chunks/.test(text)) {
+      return { rows: params[5].map((ordinal) => ({ id: String(nextId++), ordinal })) };
+    }
+    return { rows: [] };
+  };
+  return {
+    statements,
+    query,
+    pool: { connect: async () => ({ query, release: () => {} }) },
+  };
+}
+
+const dataApiRequestBytes = ({ text, params }) =>
+  Buffer.byteLength(
+    JSON.stringify({
+      resourceArn: "arn:aws:rds:eu-west-2:111111111111:cluster:concordance",
+      secretArn: "arn:aws:secretsmanager:eu-west-2:111111111111:secret:concordance-AbCdEf",
+      database: "concordance",
+      sql: toNamedParameters(text),
+      parameters: params.map((value, i) => toDataApiParameter(`p${i + 1}`, value)),
+      includeResultMetadata: true,
+      formatRecordsAs: "JSON",
+      transactionId: "x".repeat(200),
+    }),
+  );
+
+describe("ingestDocument statements", () => {
+  const paragraphs = 30;
+  const pages = [
+    {
+      page: 1,
+      text: Array.from(
+        { length: paragraphs },
+        (_, i) => `${i + 1}. I saw smoke on floor ${i + 1} at 01:${String(i).padStart(2, "0")}.`,
+      ).join("\n"),
+    },
+  ];
+  const meta = {
+    evidenceId: "IWS1",
+    corpus: "grenfell",
+    sourceUrl: "https://example.test/IWS1.pdf",
+    fetchedAt: "2026-10-18T12:00:00Z",
+    sha256: "c".repeat(64),
+    licence: "OGL-3.0",
+    witnessId: "IWS1",
+    role: null,
+    statementDate: "2019-08-06",
+  };
+  const run = async () => {
+    const db = recordingDb();
+    const provider = createFakeProvider({
+      tokens: [],
+      embedDim: 1024,
+      embedFor: () => Array.from({ length: 1024 }, (_, i) => -0.0123456789 * (i % 7)),
+      extractJson: ({ schema }) =>
+        schema.required[0] === "context" ? { context: "Context." } : { abstract: "Abstract." },
+    });
+    const result = await ingestDocument({ pages, meta, provider, db, log: () => {} });
+    return { db, result };
+  };
+
+  it("inserts each level in batches that fit a Data API request", async () => {
+    const { db, result } = await run();
+    expect(result.counts).toMatchObject({ section: paragraphs, sentence: paragraphs });
+    const inserts = db.statements.filter((s) => /INSERT INTO chunks/.test(s.text));
+    expect(inserts.length).toBeGreaterThan(4);
+    for (const statement of inserts) {
+      expect(dataApiRequestBytes(statement)).toBeLessThan(64 * 1024);
+    }
+    const ordinals = (level) =>
+      inserts.filter((s) => s.params[1] === level).flatMap((s) => s.params[5]);
+    expect(ordinals("section")).toEqual(Array.from({ length: paragraphs }, (_, i) => i));
+    expect(ordinals("sentence")).toEqual(Array.from({ length: paragraphs }, (_, i) => i));
+  });
+
+  it("links every passage and sentence to the id returned for its section", async () => {
+    const { db } = await run();
+    const inserts = db.statements.filter((s) => /INSERT INTO chunks/.test(s.text));
+    let id = 1;
+    const sectionIds = new Map();
+    for (const s of inserts) {
+      for (const ordinal of s.params[5]) {
+        if (s.params[1] === "section") sectionIds.set(ordinal, String(id));
+        id++;
+      }
+    }
+    const sentenceParents = inserts
+      .filter((s) => s.params[1] === "sentence")
+      .flatMap((s) => s.params[10]);
+    expect(sentenceParents).toEqual(
+      Array.from({ length: paragraphs }, (_, i) => sectionIds.get(i)),
+    );
+  });
+
+  it("casts the timestamp and date parameters of the documents row", async () => {
+    const { db } = await run();
+    const insert = db.statements.find((s) => /INSERT INTO documents/.test(s.text));
+    expect(insert.text).toMatch(/\$4::timestamptz/);
+    expect(insert.text).toMatch(/\$9::date/);
+    expect(insert.text).toMatch(/\$10::date/);
+    expect(insert.params[3]).toBe(meta.fetchedAt);
+    expect(insert.params[8]).toBe("2019-08-06");
+  });
+});
+
+describe("levelBatches", () => {
+  const row = (ordinal, textBytes) => ({
+    ordinal,
+    text: "x".repeat(textBytes),
+    header: null,
+    context: null,
+    locator: { page: 1, paragraph: null },
+    embedding: "[0]",
+  });
+
+  it("keeps order and starts a batch when the next row would pass the limit", () => {
+    const rows = [row(0, 400), row(1, 400), row(2, 400)];
+    const out = levelBatches(rows, 1200);
+    expect(out.map((b) => b.map((r) => r.ordinal))).toEqual([[0, 1], [2]]);
+  });
+
+  it("puts a row larger than the limit in a batch of its own", () => {
+    const out = levelBatches([row(0, 10), row(1, 5000), row(2, 10)], 1000);
+    expect(out.map((b) => b.map((r) => r.ordinal))).toEqual([[0], [1], [2]]);
+  });
+
+  it("returns one batch for small rows under the default limit", () => {
+    expect(levelBatches([row(0, 10), row(1, 10)])).toHaveLength(1);
+    expect(LEVEL_BATCH_BYTES).toBe(60 * 1024);
   });
 });
