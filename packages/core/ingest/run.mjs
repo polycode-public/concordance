@@ -36,6 +36,7 @@ export const CONTEXT_PROMPT_VERSION = "context-v1";
 export const ABSTRACT_PROMPT_VERSION = "abstract-v1";
 export const EMBED_BATCH_SIZE = 32;
 export const ABSTRACT_INPUT_CHARS = 12000;
+export const LEVEL_BATCH_BYTES = 60 * 1024;
 export const LEVELS = Object.freeze(["document", "section", "passage", "sentence"]);
 
 const INGEST_TOOL = "concordance-ingest";
@@ -74,8 +75,8 @@ export function sha256Text(text) {
 }
 
 /**
- * Formats a vector as a pgvector halfvec literal. Throws on a wrong length or a value that
- * is not a finite number.
+ * Formats a vector as a pgvector halfvec literal with five significant digits a value. Throws
+ * on a wrong length or a value that is not a finite number.
  * @param {number[]} vector
  * @param {number} dim
  */
@@ -88,7 +89,9 @@ export function toHalfvecLiteral(vector, dim) {
       throw new Error(`embedding holds a value that is not a finite number: ${value}`);
     }
   }
-  return `[${vector.join(",")}]`;
+  // halfvec stores fp16 (about 3.3 significant digits), so five digits keep every stored value
+  // and cut the literal, and the Data API request that carries it, to about 40 per cent.
+  return `[${vector.map((value) => String(Number(value.toPrecision(5)))).join(",")}]`;
 }
 
 /**
@@ -101,6 +104,61 @@ export function batches(items, size) {
   if (!Number.isInteger(size) || size < 1) throw new RangeError("batch size must be >= 1");
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * The bytes a value adds to a Data API request as one element of a Postgres array literal
+ * inside the request JSON.
+ * @param {string | null | undefined} value
+ */
+function arrayElementBytes(value) {
+  if (value == null) return 5;
+  return Buffer.byteLength(JSON.stringify(`"${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`)) + 1;
+}
+
+/**
+ * The serialised bytes of one chunk row in an INSERT_LEVEL statement: its text, header,
+ * context line, locator and halfvec literal as array elements, and room for its ordinal and
+ * parent id.
+ * @param {{ text: string, header?: string | null, context?: string | null, locator: object,
+ *   embedding: string }} row
+ */
+export function levelRowBytes(row) {
+  return (
+    arrayElementBytes(row.text) +
+    arrayElementBytes(row.header) +
+    arrayElementBytes(row.context) +
+    arrayElementBytes(JSON.stringify(row.locator)) +
+    arrayElementBytes(row.embedding) +
+    32
+  );
+}
+
+/**
+ * Splits one level's rows into INSERT_LEVEL batches whose serialised rows stay within
+ * maxBytes, because the RDS Data API refuses a request over 64 KB. A row larger than
+ * maxBytes goes in a batch of its own. Order is kept.
+ * @template {Parameters<typeof levelRowBytes>[0]} T
+ * @param {T[]} rows
+ * @param {number} [maxBytes]
+ * @returns {T[][]}
+ */
+export function levelBatches(rows, maxBytes = LEVEL_BATCH_BYTES) {
+  const out = [];
+  let current = [];
+  let size = 0;
+  for (const row of rows) {
+    const bytes = levelRowBytes(row);
+    if (current.length && size + bytes > maxBytes) {
+      out.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(row);
+    size += bytes;
+  }
+  if (current.length) out.push(current);
   return out;
 }
 
@@ -457,7 +515,8 @@ export async function ingestDocument({
       `INSERT INTO documents (id, corpus, source_url, fetched_at, sha256, licence, format,
                               witness_id, role, statement_date, event_date, page_count,
                               locator_scheme, abstract, pipeline_version)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pdf', $7, $8, $9, $10, $11, $12, $13, $14)`,
+       VALUES ($1, $2, $3, $4::timestamptz, $5, $6, 'pdf', $7, $8, $9::date, $10::date, $11,
+               $12, $13, $14)`,
       [
         id,
         meta.corpus,
@@ -484,22 +543,24 @@ export async function ingestDocument({
           : level === "section"
             ? idsByLevel.document
             : idsByLevel.section;
-      const levelRows = rows[level];
-      const { rows: inserted } = await client.query(INSERT_LEVEL, [
-        id,
-        level,
-        provider.embedModel,
-        provider.embedDim,
-        pipelineVersion,
-        levelRows.map((r) => r.ordinal),
-        levelRows.map((r) => r.text),
-        levelRows.map((r) => r.header),
-        levelRows.map((r) => r.context),
-        levelRows.map((r) => JSON.stringify(r.locator)),
-        levelRows.map((r) => (parents ? parents.get(r.parent) : null)),
-        levelRows.map((r) => r.embedding),
-      ]);
-      idsByLevel[level] = new Map(inserted.map((r) => [r.ordinal, r.id]));
+      idsByLevel[level] = new Map();
+      for (const levelRows of levelBatches(rows[level])) {
+        const { rows: inserted } = await client.query(INSERT_LEVEL, [
+          id,
+          level,
+          provider.embedModel,
+          provider.embedDim,
+          pipelineVersion,
+          levelRows.map((r) => r.ordinal),
+          levelRows.map((r) => r.text),
+          levelRows.map((r) => r.header),
+          levelRows.map((r) => r.context),
+          levelRows.map((r) => JSON.stringify(r.locator)),
+          levelRows.map((r) => (parents ? parents.get(r.parent) : null)),
+          levelRows.map((r) => r.embedding),
+        ]);
+        for (const r of inserted) idsByLevel[level].set(r.ordinal, r.id);
+      }
     }
     await client.query(LINK_NEIGHBOURS, [id]);
 
