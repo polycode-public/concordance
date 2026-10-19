@@ -2,6 +2,7 @@
 // Copyright 2026 Polycode Limited
 import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
+import { mountExport } from "./export.js";
 import { showSpend } from "./spend.js";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
@@ -38,10 +39,14 @@ let opening = null;
  *   note: HTMLElement }} Turn
  */
 
+/** @type {{ ready: (sessionId: string, thread: string) => void, reset: () => void } | null} */
+let exporter = null;
+let replaying = false;
+
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -116,6 +121,7 @@ function onFrame(frame) {
       renderChecked(turn, frame.checks);
       finishStages(turn, frame.checks.timings);
       recordCitations(turn, frame.citations ?? []);
+      if (!replaying && frame.sessionId) exporter?.ready(frame.sessionId, thread);
       finish(turn, "");
       break;
     case "cancelled":
@@ -370,11 +376,13 @@ function startNew() {
   evidenceEmpty.hidden = false;
   evidenceEl.replaceChildren();
   cancelButton.disabled = true;
+  exporter?.reset();
 }
 
 /** Shows stored turns through onFrame, as they rendered live; a new question starts a new thread. */
-function replay(turns) {
+function replay(turns, sessionId) {
   startNew();
+  replaying = true;
   replayTurns(turns, {
     begin: (stored) => {
       current = startTurn(stored.userText, stored.turnId);
@@ -386,6 +394,8 @@ function replay(turns) {
       cancelButton.disabled = true;
     },
   });
+  replaying = false;
+  if (turns.length) exporter?.ready(sessionId, turns[0].thread);
 }
 
 form.addEventListener("submit", (event) => {
@@ -465,12 +475,37 @@ try {
   config = await loadConfig();
   nameCorpus(config.corpus);
   await connect();
-  mountConversations(config, {
-    token: () => (config.auth ? currentToken() : null),
-    replay,
-    startNew,
-  });
-  await showSpend(config, config.auth ? currentToken() : null);
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;
+}
+
+if (config) {
+  const token = () => (config.auth ? currentToken() : null);
+  try {
+    mountConversations(config, { token, replay, startNew });
+  } catch (err) {
+    console.error(err);
+    const opener = $("conversations-open");
+    opener.hidden = false;
+    opener.disabled = true;
+    opener.textContent = "Conversations unavailable";
+    opener.title = err.message;
+  }
+  try {
+    exporter = mountExport(config, { token });
+  } catch (err) {
+    console.error(err);
+    const status = $("export-status");
+    status.dataset.level = "error";
+    status.textContent = `Export is unavailable (${err.message}).`;
+  }
+  try {
+    await showSpend(config, token());
+  } catch (err) {
+    console.error(err);
+    const strip = $("spend");
+    strip.dataset.level = "red";
+    strip.textContent = `The spend strip is unavailable (${err.message}).`;
+    strip.hidden = false;
+  }
 }

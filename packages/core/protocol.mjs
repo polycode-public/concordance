@@ -80,12 +80,13 @@ export const serverFrame = {
   },
   token: (thread, turnId, text) => ({ type: "token", thread, turnId, text }),
   evidence: (thread, turnId, blocks) => ({ type: "evidence", thread, turnId, blocks }),
-  done: (thread, turnId, checks, citations = []) => ({
+  done: (thread, turnId, checks, citations = [], sessionId = null) => ({
     type: "done",
     thread,
     turnId,
     checks,
     citations,
+    sessionId,
   }),
   cancelled: (thread, turnId) => ({ type: "cancelled", thread, turnId }),
   error: (message, thread, turnId) => ({ type: "error", thread, turnId, message }),

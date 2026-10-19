@@ -115,6 +115,7 @@ export function createHandler({
           turnId,
           { ...result.checks, abstained: result.abstained },
           result.citations,
+          sessionIdFor(connectionId),
         ),
       );
       finished = result;

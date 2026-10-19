@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations, and
+// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations, /export, and
 // the chat WebSocket at /ws.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { createReadStream } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { InvalidThread, NothingToExport, exportConversation, isNoteKey } from "../core/export.mjs";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
 import {
@@ -125,6 +126,7 @@ const blockFrame = (b) => ({
  * @param {string | null} [options.ollamaUrl]
  * @param {string} [options.corporaDir]
  * @param {typeof defaultRunQuery} [options.runQuery]
+ * @param {() => Date} [options.now]
  */
 export async function createServer({
   provider,
@@ -135,12 +137,17 @@ export async function createServer({
   ollamaUrl = null,
   corporaDir = DEFAULT_CORPORA,
   runQuery = defaultRunQuery,
+  now = () => new Date(),
 }) {
   const root = path.resolve(staticDir);
 
   const server = http.createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url, "http://localhost");
+      if (req.method === "POST" && pathname === "/export") {
+        await serveExport(req, res);
+        return;
+      }
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405, { allow: "GET, HEAD" }).end();
         return;
@@ -168,6 +175,7 @@ export async function createServer({
           corpus: DEFAULT_CORPUS,
           spendUrl: "/spend",
           conversationsUrl: "/conversations",
+          exportUrl: "/export",
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
@@ -181,6 +189,10 @@ export async function createServer({
       }
       if (pathname === "/conversations" || pathname.startsWith("/conversations/")) {
         await serveConversations(req, res, pathname, new URL(req.url, "http://localhost"));
+        return;
+      }
+      if (pathname.startsWith("/notes/")) {
+        await serveNote(req, res, decodeURIComponent(pathname.slice(1)));
         return;
       }
       if (pathname.startsWith("/doc/")) {
@@ -234,6 +246,76 @@ export async function createServer({
       return;
     }
     json(200, conversation);
+  }
+
+  const notePath = (key) => path.join(path.resolve(corporaDir), DEFAULT_CORPUS.id, key);
+
+  async function serveExport(req, res) {
+    const json = (status, body) => {
+      res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
+      res.end(JSON.stringify(body));
+    };
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 4096) {
+        json(413, { message: "The request body is too large." });
+        return;
+      }
+      chunks.push(chunk);
+    }
+    let body;
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      json(400, { message: "The request body is not JSON." });
+      return;
+    }
+    if (!isUuid(body?.sessionId) || typeof body?.thread !== "string") {
+      json(400, { message: "The request needs a sessionId (UUID) and a thread." });
+      return;
+    }
+    try {
+      const result = await exportConversation({
+        db,
+        which: { sessionId: body.sessionId, userId: LAPTOP_USER, thread: body.thread },
+        corpus: DEFAULT_CORPUS,
+        now: now(),
+        write: async (key, markdown) => {
+          const file = notePath(key);
+          await mkdir(path.dirname(file), { recursive: true });
+          await writeFile(file, markdown, { flag: "wx" });
+          return { key, bytes: Buffer.byteLength(markdown), url: `/${key}` };
+        },
+      });
+      json(200, result);
+    } catch (err) {
+      if (err instanceof NothingToExport) json(404, { message: err.message });
+      else if (err instanceof InvalidThread) json(400, { message: err.message });
+      else if (err.code === "EEXIST") json(409, { message: "That document already exists." });
+      else {
+        console.error("export: the write failed", err);
+        json(500, { message: `The document could not be written: ${err.message}` });
+      }
+    }
+  }
+
+  async function serveNote(req, res, key) {
+    if (!isNoteKey(key)) {
+      res.writeHead(400).end();
+      return;
+    }
+    const data = await readFile(notePath(key));
+    res.writeHead(200, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(req.method === "HEAD" ? undefined : data);
   }
 
   async function serveOriginal(req, res, documentId) {
@@ -393,6 +475,7 @@ export async function createServer({
             turnId,
             { ...result.checks, abstained: result.abstained },
             result.citations,
+            sessionId,
           ),
         );
         finished = result;
