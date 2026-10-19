@@ -11,6 +11,8 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## In flight
 
+**COOL-DOWN is on since 2026-10-19T15:42:04Z.** No new board rows except a degradation. Agents commit and stop. One branch is driven green at a time. Lifted only by the operator in their own words.
+
 ## Machine-only
 
 ## Machine-ask
