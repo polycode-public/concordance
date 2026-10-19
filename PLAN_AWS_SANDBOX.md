@@ -9,13 +9,17 @@ costs nothing at idle. Account facts: `AWS_ACCOUNT.md`.
 
 ## Deployed
 
-| Stack                            | Region    | Contents                                                                          |
-| -------------------------------- | --------- | --------------------------------------------------------------------------------- |
-| `concordance-sandbox-data`       | eu-west-2 | one private, versioned S3 bucket for the originals (`raw/ text/ chunks/ media/`)  |
-| `concordance-sandbox-guardrails` | eu-west-2 | AWS Budgets, $25 a month on the `project=concordance` tag, alerts at 80% and 100% |
+| Stack                            | Region    | Contents                                                                                                                                                  |
+| -------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `concordance-sandbox-data`       | eu-west-2 | one private, versioned S3 bucket for the originals (`raw/ text/ chunks/ media/`)                                                                          |
+| `concordance-sandbox-store`      | eu-west-2 | Aurora Serverless v2 Postgres 16 with pgvector, 0 to 2 ACU, the RDS Data API, and the migrate function the deploy triggers (`infra/lib/storeStack.mjs`)   |
+| `concordance-sandbox-app`        | eu-west-2 | the WebSocket API (the turn) and the HTTP API (the document route), Cognito with one demo user, CloudFront and the site bucket (`infra/lib/appStack.mjs`) |
+| `concordance-sandbox-ingest`     | eu-west-2 | the Step Functions state machine over the manifest and its three functions (`infra/lib/ingestStack.mjs`)                                                  |
+| `concordance-sandbox-guardrails` | eu-west-2 | AWS Budgets, $25 a month on the `project=concordance` tag, alerts at 80% and 100%                                                                         |
 
 Deploy path: `deploy.yml` on a push to `main` that touches code, assuming
-`CONCORDANCE_DEPLOY_ROLE_ARN` by OIDC, then `cdk deploy --all`. Infrastructure changes travel as
+`CONCORDANCE_DEPLOY_ROLE_ARN` by OIDC, then `cdk deploy --all` and the smoke step against the
+CloudFront page. Infrastructure changes travel as
 CDK code in a pull request; no AWS write happens outside that path without the operator's yes.
 
 ### Provisioned (2026-10-18)
