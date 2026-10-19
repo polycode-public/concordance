@@ -184,7 +184,9 @@ sentence in the stored report carries a resolved citation or the abstention phra
 
 ### Phase L: the laptop port check (L1)
 
-The laptop form is proven, never built ahead of its AWS form. When the operator names a machine:
+The laptop form is proven, never built ahead of its AWS form. The path there runs through the
+image and the Fargate and EC2 rigs of `PLAN_LAPTOP_STACK.md` (P1 to P3). When the operator names a
+machine:
 Postgres in Docker, Ollama, the same migrations and the same core modules, `npm run eval --
 --provider=laptop` within the gold set's tolerance of the Bedrock scores. A gap is a prompt or a
 model-size finding, recorded in `PLAN_LAPTOP_STACK.md`.

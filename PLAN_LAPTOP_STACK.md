@@ -9,6 +9,62 @@ exercised when the port is checked (`PLAN_CONCORDANCE.md`, Phase L: `npm run eva
 --provider=laptop` within the gold set's tolerance of the Bedrock scores). The components, models,
 ports and measurements below are the facts that check needs.
 
+## Operator assertions (verbatim, binding)
+
+- "To inform the eventual swap to running on a single machine with locl models, would it be
+  feasible to build the current solution as a Docker images and use that same image for Lambdas
+  running code on the image which crafts and http call to hit a local express, and then we can try
+  variations such as: serverless re-using the image, Fargate ingesting from s3 and running a local
+  db, EC2 mounting a volume (the last being a near drop in for a docker compose mounting a local
+  directory (of evidence) as a volume and exposing a local http server to the host." (2026-10-19,
+  evening)
+- "We'll also transition from lambda+bedrock to a local model on fargate and ec2 tollerating a
+  longer start time to pull in the parameters as we move lambda->fargate->ec2." (2026-10-19,
+  evening)
+
+## The path from Lambda to the laptop
+
+One image carries the single-machine form: the entrypoint is `packages/local/server.mjs`, the
+corpus directory and the database are volumes, and `MODEL_PROVIDER`, `DATABASE_URL` and
+`OLLAMA_URL` select the forms. Each step below moves one thing: first the packaging, then the
+model, then the hardware. A longer start, while the model parameters are pulled into the rig, is
+accepted from P2 on. Every rig is a destroyable stack that is created for a run and removed after
+it, with the evidence synced from the originals bucket, so nothing costs money at idle.
+
+| Step | Compute                                              | Models                                                                                                   | Store                                   | Evidence                                  | Start                                            | Proves                                                                                         |
+| ---- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| P0   | Lambda zip bundles (today, `PLAN_AWS_SANDBOX.md`)    | Bedrock                                                                                                  | Aurora Serverless v2 over the Data API  | the originals bucket                      | cold start under a second                        | the AWS form; the build                                                                        |
+| P1   | the image on this machine with compose               | Ollama on the host                                                                                       | Postgres with pgvector in a container   | a local directory mounted as a volume     | seconds                                          | the image boots the whole form from one `docker compose up`                                    |
+| P2   | Fargate, one task: the server and a Postgres sidecar | Ollama in the task on CPU, the parameters pulled at start; Bedrock as the fallback form for a quick demo | the sidecar on ephemeral or EFS storage | synced from the originals bucket at start | minutes: the image, then the model parameters    | the image runs off the laptop with a local model, however slowly                               |
+| P3   | EC2 with a GPU (g5 or g6), compose from user data    | Ollama on the GPU                                                                                        | the Postgres container on an EBS volume | the bucket synced into the volume         | minutes: the instance, the image, the parameters | the near drop-in for compose: a volume of evidence and a local HTTP server exposed to the host |
+| L1   | the demo laptop                                      | Ollama with Metal                                                                                        | the Postgres container                  | the directory                             | seconds                                          | `npm run eval -- --provider=laptop` within tolerance (Phase L)                                 |
+
+Facts that bound the steps:
+
+- Lambda runs no local model: no GPU, 10 GB of memory, and a multi-gigabyte image on every cold
+  start. The image is not used for Lambda; P0 keeps its zip bundles.
+- Fargate has no GPU. P2's local model runs at CPU speed: this machine's measurements below (6
+  tokens a second, 146 chunks a minute) are the expectation, and the parameters (4.7 GB for
+  `qwen2.5:7b-instruct` Q4, 1.2 GB for `bge-m3`) are pulled at every start unless they sit on
+  EFS.
+- The GPU appears at P3. A g5.xlarge (one A10G, 24 GB) serves a 14B Q4 model at demo speed.
+- The protocol does not change: the local server speaks the same frames as the AWS handlers
+  (`packages/core/protocol.mjs`), so the page is the same file in every step.
+
+Tasks, each its own board row when pulled:
+
+- **P1. The image and compose.** A `Dockerfile` for the server (Node 24, the page assets staged),
+  `docker-compose.yml` extended with the server and Ollama beside Postgres, the corpus directory
+  as a volume. Exit: `docker compose up` answers a question from the page on this machine with
+  `MODEL_PROVIDER=laptop`. [ready, after D2 and U8 so the image carries a working page]
+- **P2. The Fargate rig.** A destroyable stack: one task with the server, a Postgres sidecar and
+  Ollama, the evidence synced from the originals bucket at start, an HTTP endpoint for the page.
+  Exit: the eval runs in the task with `--provider=laptop` and the wall time and start time are
+  recorded below. [blocked, P1]
+- **P3. The EC2 GPU rig.** A destroyable stack: a g5 instance, the EBS volume with the evidence,
+  compose from user data. Exit: the same eval within tolerance of the Bedrock scores, first token
+  and tokens a second recorded below. [blocked, P2]
+
 ## Components
 
 | Component | Laptop form                                                                                                                                                                                                          | Where                                               |
