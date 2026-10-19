@@ -64,6 +64,9 @@ Tasks, each its own board row when pulled:
 - **P3. The EC2 GPU rig.** A destroyable stack: a g5 instance, the EBS volume with the evidence,
   compose from user data. Exit: the same eval within tolerance of the Bedrock scores, first token
   and tokens a second recorded below. [blocked, P2]
+- **L1. The laptop port check.** Pulled off the board on the operator's word (2026-10-19); it
+  returns when P3 is done and a machine is named. `npm run eval -- --provider=laptop` within the
+  gold set's tolerance of the Bedrock scores (Phase L). [blocked, P3 and the operator's word]
 
 ## Components
 
