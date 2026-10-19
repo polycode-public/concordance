@@ -5,6 +5,7 @@ import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
 import { showSpend } from "./spend.js";
 import { chipInline, renderMarkdown } from "./markdown.mjs";
+import { suggestionsFor } from "./suggestions.mjs";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -13,6 +14,7 @@ const connectionEl = $("connection");
 const form = $("ask");
 const question = $("question");
 const cancelButton = $("cancel");
+const suggestionsEl = $("suggestions");
 const documentsEl = $("documents");
 const documentsCount = $("documents-count");
 const documentsEmpty = $("documents-empty");
@@ -188,6 +190,7 @@ function el(tag, className, text) {
 
 /** @returns {Turn} */
 function startTurn(text, id = crypto.randomUUID()) {
+  suggestionsEl.hidden = true;
   const article = el("article", "turn");
   const q = el("div", "question");
   q.append(el("span", "label small", "You asked"), el("p", null, text));
@@ -394,8 +397,26 @@ function finish(turn, message) {
   cancelButton.disabled = true;
 }
 
+/** Fills the pills for a corpus; they show until the first turn of a thread. */
+function mountSuggestions(corpusId) {
+  const pills = suggestionsFor(corpusId).map(({ text }) => {
+    const button = el("button", "pill", text);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      question.value = text;
+      form.requestSubmit();
+    });
+    const item = el("li");
+    item.append(button);
+    return item;
+  });
+  suggestionsEl.replaceChildren(...pills);
+  suggestionsEl.hidden = pills.length === 0;
+}
+
 /** Empties the page for another conversation on a new thread. */
 function startNew() {
+  suggestionsEl.hidden = suggestionsEl.children.length === 0;
   if (current) cancel();
   current = null;
   newest = null;
@@ -505,6 +526,7 @@ if (new URLSearchParams(location.search).has("present")) {
 try {
   config = await loadConfig();
   nameCorpus(config.corpus);
+  mountSuggestions(config.corpus.id);
   await connect();
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;

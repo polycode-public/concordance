@@ -646,6 +646,35 @@ button.icon {
   border-top: var(--rule-width) solid var(--rule);
 }
 
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--unit);
+  margin: 0 0 var(--unit);
+  padding: 0;
+  list-style: none;
+}
+
+.suggestions[hidden] {
+  display: none;
+}
+
+button.pill {
+  min-height: var(--target);
+  padding: calc(var(--unit) / 2) calc(var(--unit) * 2);
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule);
+  border-radius: 999px;
+  font-size: var(--size-small);
+  line-height: var(--line-small);
+  text-align: left;
+}
+
+button.pill:hover {
+  background: var(--paper-deep);
+}
+
 .ask form {
   display: flex;
   gap: var(--unit);

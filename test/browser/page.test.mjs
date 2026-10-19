@@ -298,6 +298,20 @@ describe.skipIf(!enabled)(
       await shot("laptop-done");
     });
 
+    it("shows four suggestion pills that submit their text and hide after the first turn", async () => {
+      await open({ width: 1280, height: 800 });
+      expect(await evaluate(`document.querySelectorAll("#suggestions button.pill").length`)).toBe(
+        4,
+      );
+      expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(false);
+      await evaluate(`document.querySelector("#suggestions button.pill").click(); true`);
+      await until(`document.querySelector(".score")?.textContent.length > 0`);
+      expect(await evaluate(`document.querySelector(".turn .question p").textContent`)).toBe(
+        "What did residents on floor 16 see when they first noticed the fire?",
+      );
+      expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(true);
+    });
+
     it("renders bold text and a bullet list in the answer, with chips inside the list", async () => {
       await open({ width: 1280, height: 800 });
       await ask();
