@@ -102,3 +102,18 @@ jobs:
             echo "- wsUrl: \`$(echo "$config" | jq -r .wsUrl)\`"
             echo "- userPoolId: \`$(echo "$config" | jq -r .auth.userPoolId)\`"
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove the deployed page
+        env:
+          CONCORDANCE_DEPLOYED_TESTS: "1"
+          DEMO_USER: demo
+          DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SITE_URL=$(aws cloudformation describe-stacks --stack-name concordance-sandbox-app \
+            --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" --output text)
+          export SITE_URL="${SITE_URL%/}"
+          npx playwright test test/e2e

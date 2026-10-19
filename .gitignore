@@ -19,3 +19,4 @@ corpora/*/notes/
 models/
 test/browser/.shots/
 .page-assets/
+test-results/
