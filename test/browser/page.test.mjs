@@ -312,6 +312,28 @@ describe.skipIf(!enabled)(
       expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(true);
     });
 
+    it("folds each evidence block, toggles it from the keyboard and opens the block a chip names", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      const state = () =>
+        evaluate(
+          `[...document.querySelectorAll("#evidence details")].map((d) => d.open).join(",")`,
+        );
+      expect(await state()).toBe("false,false,false");
+      expect(
+        await evaluate(`document.querySelector("#evidence summary .first-line").textContent`),
+      ).toContain("thick black smoke");
+      await evaluate(`document.querySelector("#evidence summary").focus(); true`);
+      await press(" ");
+      await until(`document.querySelector("#evidence details").open`);
+      expect(await state()).toBe("true,false,false");
+      await press(" ");
+      await until(`!document.querySelector("#evidence details").open`);
+      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await until(`document.querySelector("#evidence details").open`);
+      expect(await state()).toBe("true,false,false");
+    });
+
     it("renders bold text and a bullet list in the answer, with chips inside the list", async () => {
       await open({ width: 1280, height: 800 });
       await ask();

@@ -542,6 +542,33 @@ body[data-viewer="open"] .desk {
   display: flex;
   align-items: baseline;
   gap: var(--unit);
+  cursor: pointer;
+}
+
+.block .heading::before {
+  content: "\25B8";
+  color: var(--ink-soft);
+}
+
+.block details[open] .heading::before {
+  content: "\25BE";
+}
+
+.block .first-line {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block details[open] .first-line {
+  display: none;
+}
+
+.block details[open] .heading {
+  margin-bottom: var(--unit);
 }
 
 .block .heading .cite {

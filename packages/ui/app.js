@@ -32,11 +32,13 @@ let current = null;
 /** @type {Turn | null} The last turn started; the keys act on its chips. */
 let newest = null;
 let opening = null;
+/** @type {Turn | null} The turn whose blocks the evidence panel shows. */
+let evidenceTurn = null;
 
 /**
  * @typedef {{ evidence: number, documentId: string, locator: { page?: number, paragraph?: number },
  *   header?: string | null, text?: string }} Block
- * @typedef {{ id: string, blocks: Map<number, Block>, streamed: string, startedAt: number | null,
+ * @typedef {{ id: string, blocks: Map<number, Block>, streamed: string, unfolded: Set<number>, startedAt: number | null,
  *   article: HTMLElement, stages: HTMLElement, answer: HTMLElement, score: HTMLElement,
  *   note: HTMLElement }} Turn
  */
@@ -161,15 +163,26 @@ function referenceName(block) {
   return `Evidence ${block.evidence}: ${parts.join(", ")}`;
 }
 
-function chip(block) {
+function chip(block, turn) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "cite";
   button.textContent = String(block.evidence);
   button.title = reference(block);
   button.setAttribute("aria-label", referenceName(block));
-  button.addEventListener("click", () => open(block.documentId, block.locator));
+  button.addEventListener("click", () => {
+    openBlock(turn, block.evidence);
+    open(block.documentId, block.locator);
+  });
   return button;
+}
+
+/** Unfolds a block of the evidence panel; the panel shows one turn at a time. */
+function openBlock(turn, evidence) {
+  if (!turn || turn !== evidenceTurn) return;
+  turn.unfolded.add(evidence);
+  const details = evidenceEl.querySelector(`details[data-evidence="${evidence}"]`);
+  if (details) details.open = true;
 }
 
 function open(documentId, locator) {
@@ -213,6 +226,7 @@ function startTurn(text, id = crypto.randomUUID()) {
     id,
     blocks: new Map(),
     streamed: "",
+    unfolded: new Set(),
     startedAt: null,
     article,
     stages,
@@ -248,6 +262,7 @@ function finishStages(turn, timings) {
 }
 
 function renderEvidence(turn, cited) {
+  evidenceTurn = turn;
   const blocks = [...turn.blocks.values()];
   evidenceCount.textContent = blocks.length ? ` ${blocks.length}` : "";
   evidenceEmpty.hidden = blocks.length > 0;
@@ -255,13 +270,25 @@ function renderEvidence(turn, cited) {
     ...blocks.map((block) => {
       const item = el("li", "block");
       item.dataset.cited = cited.size === 0 || cited.has(block.evidence) ? "yes" : "no";
-      const heading = el("div", "heading");
+      const details = el("details");
+      details.dataset.evidence = String(block.evidence);
+      details.open = turn.unfolded.has(block.evidence);
+      details.addEventListener("toggle", () => {
+        if (details.open) turn.unfolded.add(block.evidence);
+        else turn.unfolded.delete(block.evidence);
+      });
+      const summary = el("summary", "heading");
       const ref = el("button", "reference quiet small", reference(block));
       ref.type = "button";
-      ref.addEventListener("click", () => open(block.documentId, block.locator));
-      heading.append(chip(block), ref);
-      item.append(heading);
-      if (block.text) item.append(el("blockquote", "quote", block.text));
+      ref.addEventListener("click", () => {
+        openBlock(turn, block.evidence);
+        open(block.documentId, block.locator);
+      });
+      summary.append(chip(block, turn), ref);
+      if (block.text) summary.append(el("span", "first-line small", block.text.split("\n")[0]));
+      details.append(summary);
+      if (block.text) details.append(el("blockquote", "quote", block.text));
+      item.append(details);
       return item;
     }),
   );
@@ -270,7 +297,7 @@ function renderEvidence(turn, cited) {
 function chipOrDropped(turn, n) {
   const block = turn.blocks.get(n);
   return block
-    ? chip(block)
+    ? chip(block, turn)
     : Object.assign(document.createElement("span"), {
         className: "dropped-tag",
         title: "no such evidence block",
@@ -424,6 +451,7 @@ function startNew() {
   turnsEl.replaceChildren();
   documents.clear();
   renderDocuments();
+  evidenceTurn = null;
   evidenceCount.textContent = "";
   evidenceEmpty.hidden = false;
   evidenceEl.replaceChildren();
