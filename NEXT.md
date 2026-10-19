@@ -13,6 +13,8 @@ The board runs in five sections, in this order. The section is the classificatio
 
 **COOL-DOWN is on since 2026-10-19T15:42:04Z.** No new board rows except a degradation. Agents commit and stop. One branch is driven green at a time. Lifted only by the operator in their own words.
 
+- [ ] **D1. Deployed turns fail on a jsonb locator read as a string (degradation).** Every turn that found evidence ended with `chunk N has no locator object`: the Data API request asked for `formatRecordsAs: JSON`, which returns no `columnMetadata`, so `toRows` in `packages/core/db.mjs` left jsonb columns as strings (the Conversations and Export views read `frames` through the same path). The stored locators are correct. Fix on branch `claude/db-data-api-records` (worktree `.claude/worktrees/data-api-records`, PR #15, commit `73405a9`): the decoder reads `records` with `columnMetadata`, jsonb parsed, int8 as strings, arrays as arrays. `check:all` exit 0 locally. Remainder: PR #15's `test.yml` run green, then the operator's merge first, before any other branch; then a turn on the deployed page returns an answer with citations. **Size** 2 files. **Model** Sonnet.
+
 ## Machine-only
 
 ## Machine-ask
