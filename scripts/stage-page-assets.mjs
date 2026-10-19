@@ -19,6 +19,7 @@ export const STAGE_DIR = path.join(ROOT, ".page-assets");
 
 const packageDir = (name) => path.dirname(require.resolve(`${name}/package.json`));
 const pdfBuild = path.join(packageDir("pdfjs-dist"), "build");
+const pdfWasm = path.join(packageDir("pdfjs-dist"), "wasm");
 const sansFiles = path.join(packageDir("@fontsource/source-sans-3"), "files");
 const serifFiles = path.join(packageDir("@fontsource/source-serif-4"), "files");
 
@@ -26,6 +27,10 @@ const serifFiles = path.join(packageDir("@fontsource/source-serif-4"), "files");
 export const PAGE_ASSETS = {
   "vendor/pdf.min.mjs": path.join(pdfBuild, "pdf.min.mjs"),
   "vendor/pdf.worker.min.mjs": path.join(pdfBuild, "pdf.worker.min.mjs"),
+  // The Grenfell scans are JPEG 2000 and JBIG2 images; pdf.js decodes those in WebAssembly
+  // fetched from `wasmUrl`, and a page whose decoder is missing renders white.
+  "vendor/wasm/openjpeg.wasm": path.join(pdfWasm, "openjpeg.wasm"),
+  "vendor/wasm/jbig2.wasm": path.join(pdfWasm, "jbig2.wasm"),
   "fonts/source-sans-3-latin-400-normal.woff2": path.join(
     sansFiles,
     "source-sans-3-latin-400-normal.woff2",
