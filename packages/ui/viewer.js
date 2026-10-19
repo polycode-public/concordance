@@ -102,7 +102,11 @@ export async function openPdf({ url, page, title }) {
   try {
     if (current.url !== url) {
       await current.doc?.destroy();
-      current = { url, doc: await lib.getDocument({ url }).promise, page: 1 };
+      current = {
+        url,
+        doc: await lib.getDocument({ url, wasmUrl: "/vendor/wasm/" }).promise,
+        page: 1,
+      };
     }
     canvas.hidden = false;
     await renderPage(page);
