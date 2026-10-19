@@ -10,6 +10,9 @@ import { PROMPT_VERSION } from "./prompt.mjs";
 /** The user id of every laptop session; the laptop has no sign-in. */
 export const LAPTOP_USER = "laptop";
 
+/** The turns one read returns; a Data API response is at most 1 MB and a turn about 40 KB. */
+export const TURN_PAGE = 10;
+
 /** The most conversations the list returns. */
 export const MAX_CONVERSATIONS = 100;
 
@@ -126,14 +129,22 @@ export async function conversationTurns(db, { sessionId, userId, thread = null }
     userId,
   ]);
   if (!owner.rows.length) return null;
-  const { rows } = await db.query(
-    `SELECT thread, turn_id, user_text, prompt_version, model_id, frames,
-            to_char(created_at AT TIME ZONE 'UTC', ${ISO}) AS created_at
-       FROM session_turns
-      WHERE session_id = $1::uuid AND ($2::text IS NULL OR thread = $2::text)
-      ORDER BY created_at, id`,
-    [sessionId, thread],
-  );
+  const rows = [];
+  let after = "0";
+  for (;;) {
+    const page = await db.query(
+      `SELECT id, thread, turn_id, user_text, prompt_version, model_id, frames,
+              to_char(created_at AT TIME ZONE 'UTC', ${ISO}) AS created_at
+         FROM session_turns
+        WHERE session_id = $1::uuid AND ($2::text IS NULL OR thread = $2::text) AND id > $3::bigint
+        ORDER BY id
+        LIMIT ${TURN_PAGE}`,
+      [sessionId, thread, after],
+    );
+    rows.push(...page.rows);
+    if (page.rows.length < TURN_PAGE) break;
+    after = String(page.rows.at(-1).id);
+  }
   return {
     sessionId,
     turns: rows.map((r) => ({
