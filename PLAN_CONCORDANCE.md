@@ -64,21 +64,24 @@ the court can run (`PLAN_LAPTOP_STACK.md`). Three seams carry the port: models t
 
 ## Decisions (2026-10-18)
 
-| Decision        | Choice                                                                                                                                         | Alternative considered                                                                  |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Name            | `concordance`: an index of every word in a corpus, and agreement between witnesses                                                             | witness-loom, attestor                                                                  |
-| Language        | Plain JS ES modules everywhere, including CDK (`infra/*.mjs`) in the-mechanical-code-talker's structure                                        | CDK in TypeScript (tmct's own language); CDK in Java/Maven (the polycode house default) |
-| Package layout  | One root `package.json`; `packages/core`, `packages/aws`, `packages/local`, `packages/ui` are plain directories                                | npm workspaces                                                                          |
-| Vector store    | Postgres 16, pgvector 0.8, `halfvec(1024)` with HNSW cosine; `tsvector` for lexical                                                            | LanceDB; OpenSearch; S3 Vectors with DynamoDB (loses SQL over assertions)               |
-| Store on AWS    | Aurora Serverless v2, 0 ACU minimum, the RDS Data API; Lambda outside the VPC (`PLAN_AWS_SANDBOX.md`)                                          | RDS instance (costs at idle); Lambda in the VPC with NAT                                |
-| Compute on AWS  | Lambda Node 24 arm64 zip bundles, API Gateway WebSocket and HTTP API, Step Functions, CloudFront and S3, Cognito for one user                  | containers on ECS or App Runner                                                         |
-| Models on AWS   | Bedrock: Titan Text Embeddings v2 (1024-dim), the `eu.` Haiku 4.5 profile for extraction and checks, the `eu.` Sonnet 4.5 profile for the turn | Cohere Embed v3 (marketplace subscription)                                              |
-| Provider seam   | `bedrock` built first (C1); `laptop` (Ollama, from Phase 0) is the port check                                                                  | laptop first                                                                            |
-| Laptop models   | `bge-m3` (1024-dim), `qwen2.5:7b-instruct` on this 64 GB Intel i9; sized to a demo laptop if one is named                                      | `nomic-embed-text` (English only)                                                       |
-| Acceptance test | `npm run eval -- --provider=<p>`; gold rows from the inquiry report's own findings with locators                                               |                                                                                         |
-| Licence         | AGPL-3.0-only (the polycode-public house convention)                                                                                           | MIT                                                                                     |
-| Visibility      | Private until the operator decides (H1): a secrets pass over history and a read of the spec doc first                                          | Public from the first push                                                              |
-| Delivery        | The factory from submit.diyaccounting.co.uk (`/iterate`, `/do-next`, `/board`, `/watch`, `/auto-merge`)                                        |                                                                                         |
+| Decision                      | Choice                                                                                                                                                                       | Alternative considered                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Name                          | `concordance`: an index of every word in a corpus, and agreement between witnesses                                                                                           | witness-loom, attestor                                                                  |
+| Language                      | Plain JS ES modules everywhere, including CDK (`infra/*.mjs`) in the-mechanical-code-talker's structure                                                                      | CDK in TypeScript (tmct's own language); CDK in Java/Maven (the polycode house default) |
+| Package layout                | One root `package.json`; `packages/core`, `packages/aws`, `packages/local`, `packages/ui` are plain directories                                                              | npm workspaces                                                                          |
+| Vector store                  | Postgres 16, pgvector 0.8, `halfvec(1024)` with HNSW cosine; `tsvector` for lexical                                                                                          | LanceDB; OpenSearch; S3 Vectors with DynamoDB (loses SQL over assertions)               |
+| Store on AWS                  | Aurora Serverless v2, 0 ACU minimum, the RDS Data API; Lambda outside the VPC (`PLAN_AWS_SANDBOX.md`)                                                                        | RDS instance (costs at idle); Lambda in the VPC with NAT                                |
+| Compute on AWS                | Lambda Node 24 arm64 zip bundles, API Gateway WebSocket and HTTP API, Step Functions, CloudFront and S3, Cognito for one user                                                | containers on ECS or App Runner                                                         |
+| Models on AWS                 | Bedrock: Titan Text Embeddings v2 (1024-dim), the `eu.` Haiku 4.5 profile for extraction and checks, the `eu.` Sonnet 4.5 profile for the turn                               | Cohere Embed v3 (marketplace subscription)                                              |
+| Provider seam                 | `bedrock` built first (C1); `laptop` (Ollama, from Phase 0) is the port check                                                                                                | laptop first                                                                            |
+| Laptop models                 | `bge-m3` (1024-dim), `qwen2.5:7b-instruct` on this 64 GB Intel i9; sized to a demo laptop if one is named                                                                    | `nomic-embed-text` (English only)                                                       |
+| Acceptance test               | `npm run eval -- --provider=<p>`; gold rows from the inquiry report's own findings with locators                                                                             |                                                                                         |
+| Licence                       | AGPL-3.0-only (the polycode-public house convention)                                                                                                                         | MIT                                                                                     |
+| Chat Ledger code (2026-10-19) | Copied from `chat-with-diya-gl` without a licence clause: the operator is its sole author and it has not been shared; it enters under AGPL-3.0-only like any other file here | Port the patterns only; a provenance clause on each copied file                         |
+| SPARQL and voice (2026-10-19) | SPARQL served live from a Lambda (Oxigraph WebAssembly over the RDF-star export) and voice input through Amazon Transcribe streaming (whisper.cpp on the laptop port)        | Export only; no voice                                                                   |
+| Visibility (2026-10-19)       | Public after a secrets pass over history, now (H1 on the board)                                                                                                              | Private through the demo                                                                |
+| Sandbox account (2026-10-19)  | Stay in polycode-sandbox and raise its monthly cap (O3 on the board)                                                                                                         | An account of its own in the Workloads OU                                               |
+| Delivery                      | The factory from submit.diyaccounting.co.uk (`/iterate`, `/do-next`, `/board`, `/watch`, `/auto-merge`)                                                                      |                                                                                         |
 
 ## Phases
 
@@ -126,12 +129,13 @@ precision on the gold set drops below the committed floor.
 Assertion extraction with a JSON schema that forbids values absent from the text, the entity and
 event registers, alignment by claim similarity and entity overlap, NLI labelling, grouping, the
 contradiction matrix, self-consistency ordered by statement date, accepted facts with promotion and
-session hypotheses, the timeline view, RDF-star export. Exit: the known Grenfell timing disputes
+session hypotheses, the timeline view, RDF-star export and live SPARQL from a Lambda. Exit: the known Grenfell timing disputes
 appear in the matrix without hand-tuning.
 
 ### Phase 6: conversation layer and media (F12)
 
-Threads and forks with their own filters and session facts, interruption mid-stream, Transcribe
+Threads and forks with their own filters and session facts, interruption mid-stream, voice input
+through Transcribe streaming, Transcribe
 transcripts with word timestamps as derived objects, the media player with transcript sync and
 seek, the image viewer with boxes, export of the transcript with its bibliography. Exit: the
 10-step demo script runs end to end on the deployed page.
@@ -193,16 +197,13 @@ model-size finding, recorded in `PLAN_LAPTOP_STACK.md`.
 
 ## Scope held back (decisions, with the phase that revisits them)
 
-Voice, video face blurring, multilingual embeddings, entity resolution across corpora, SPARQL
-served live, the second corpus (Bloody Sunday, then the Afghanistan inquiry for cipher mode): the
+Video face blurring, multilingual embeddings, entity resolution across corpora, the second corpus (Bloody Sunday, then the Afghanistan inquiry for cipher mode): the
 roadmap slide, revisited after Phase 7.
 
 ## Open questions
 
 | Key | Question                                                                                                                                                                                                            | Decides                                      |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| H1  | Repository visibility: private, or public after a secrets pass                                                                                                                                                      | when the repo flips to public                |
-| H3  | SPARQL live or export only; voice in the demo or not                                                                                                                                                                | Phase 5 export, Phase 6 scope                |
 | O1  | A fine-grained token for the agent workflows                                                                                                                                                                        | when the agent workflows leave dispatch-only |
 | O2  | How the Grenfell PDF bytes arrive: the catalogue index comes from the Discovery API (series GTI 2); the files by browser from the record pages, or by fetcher if a record's download URL is stable and unchallenged | the Phase 2 import                           |
 
