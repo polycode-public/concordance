@@ -37,7 +37,7 @@ const turnsLabel = (n) => (n === 1 ? "1 turn" : `${n} turns`);
 /**
  * Wires the drawer to the header button.
  * @param {{ conversationsUrl?: string }} config
- * @param {{ token: () => string | null, replay: (turns: StoredTurn[]) => void,
+ * @param {{ token: () => string | null, replay: (turns: StoredTurn[], sessionId: string) => void,
  *   startNew: () => void }} page
  */
 export function mountConversations(config, { token, replay, startNew }) {
@@ -74,7 +74,7 @@ export function mountConversations(config, { token, replay, startNew }) {
     try {
       const url = `${base}/${encodeURIComponent(sessionId)}?thread=${encodeURIComponent(thread)}`;
       const { turns } = await get(url);
-      replay(turns);
+      replay(turns, sessionId);
       close();
     } catch (err) {
       fail(err);

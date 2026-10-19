@@ -10,6 +10,7 @@ import {
   recordTurn,
   sessionIdFor,
   storedFrames,
+  TURN_PAGE,
 } from "../../packages/core/sessions.mjs";
 
 const SESSION = "6f1c2b9e-3a4d-4e5f-8a6b-7c8d9e0f1a2b";
@@ -163,9 +164,34 @@ describe("the session log", () => {
         },
       ],
     });
-    expect(db.calls.at(-1).params).toEqual([SESSION, "t"]);
+    expect(db.calls.at(-1).params).toEqual([SESSION, "t", "0"]);
     await expect(conversationTurns(db, { sessionId: "x", userId: "sub-1" })).rejects.toThrow(
       /UUID/,
     );
+  });
+
+  it("reads a long thread in pages of TURN_PAGE turns in row order", async () => {
+    const total = TURN_PAGE * 2 + 3;
+    const all = Array.from({ length: total }, (_, i) => ({
+      id: String(100 + i * 2),
+      thread: "t",
+      turn_id: `u${i}`,
+      user_text: `Q${i}`,
+      prompt_version: "p9",
+      model_id: "m1",
+      frames: [],
+      created_at: "2026-10-19T09:30:00.000Z",
+    }));
+    const db = recordingDb((text, params) => {
+      if (/FROM sessions/.test(text)) return { rows: [{}] };
+      const after = Number(params[2]);
+      return { rows: all.filter((r) => Number(r.id) > after).slice(0, TURN_PAGE) };
+    });
+    const { turns } = await conversationTurns(db, { sessionId: SESSION, userId: "u", thread: "t" });
+    expect(turns.map((t) => t.turnId)).toEqual(all.map((r) => r.turn_id));
+    const reads = db.calls.filter((c) => /FROM session_turns/.test(c.text));
+    expect(reads).toHaveLength(3);
+    expect(reads.map((c) => c.params[2])).toEqual(["0", "118", "138"]);
+    expect(reads[0].text).toMatch(/ORDER BY id\s+LIMIT 10/);
   });
 });

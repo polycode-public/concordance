@@ -150,6 +150,16 @@ a {
   color: var(--red-ink);
 }
 
+/* The export control and its status */
+
+.export-status:empty {
+  display: none;
+}
+
+.export-status[data-level="error"] {
+  color: var(--red-ink);
+}
+
 /* The conversations drawer */
 
 .drawer {

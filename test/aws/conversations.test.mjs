@@ -99,7 +99,7 @@ describe("conversations handler", () => {
         },
       ],
     });
-    expect(db.calls.at(-1).params).toEqual([SESSION, "t1"]);
+    expect(db.calls.at(-1).params).toEqual([SESSION, "t1", "0"]);
   });
 
   it("answers 404 for another user's session, 400 for a bad id, 401 with no user", async () => {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -141,6 +141,7 @@ describe("local server", () => {
       corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
       spendUrl: "/spend",
       conversationsUrl: "/conversations",
+      exportUrl: "/export",
     });
   });
 
@@ -479,6 +480,56 @@ describe("local server", () => {
 
       expect((await fetch(`${base}/not-a-uuid`)).status).toBe(400);
       expect((await fetch(`${base}/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+    });
+
+    it("writes the thread as Markdown under the corpus notes, refuses an overwrite and serves it", async () => {
+      const corpora = await mkdtemp(path.join(tmpdir(), "concordance-notes-"));
+      try {
+        const db = storeDb();
+        app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }), {
+          db,
+          corporaDir: corpora,
+          now: () => new Date("2026-10-19T10:00:00.000Z"),
+        });
+        const client = await connect(app.port);
+        client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Were the stairs dark?" });
+        const done = await client.until((f) => f.type === "done");
+        await waitFor(() => db.turns.length === 1);
+        client.ws.close();
+        const sessionId = db.sessions[0].id;
+        expect(done.sessionId).toBe(sessionId);
+        const post = (body) =>
+          fetch(`http://127.0.0.1:${app.port}/export`, {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
+
+        const res = await post({ sessionId, thread: "t1" });
+        expect(res.status).toBe(200);
+        const { key, bytes, url } = await res.json();
+        expect(key).toMatch(new RegExp(`^notes/${sessionId}/t1-2026-10-19t10-00-00\\.000z\\.md$`));
+        expect(url).toBe(`/${key}`);
+        const file = path.join(corpora, "grenfell", key);
+        const text = await readFile(file, "utf8");
+        expect(Buffer.byteLength(text)).toBe(bytes);
+        expect(text).toContain("You asked:");
+        expect(text).toContain("> Were the stairs dark?");
+        expect(text).toContain("[^1-E1]: IWS1, page 3, paragraph 11");
+
+        const served = await fetch(`http://127.0.0.1:${app.port}${url}`);
+        expect(served.status).toBe(200);
+        expect(await served.text()).toBe(text);
+        expect((await fetch(`http://127.0.0.1:${app.port}/notes/..%2Fx`)).status).toBe(400);
+
+        expect((await post({ sessionId, thread: "nothread" })).status).toBe(404);
+        expect((await post({ sessionId: "nope", thread: "t1" })).status).toBe(400);
+        expect((await post({ sessionId, thread: "T 1" })).status).toBe(400);
+        await writeFile(file, "kept");
+        expect((await post({ sessionId, thread: "t1" })).status).toBe(409);
+        expect(await readFile(file, "utf8")).toBe("kept");
+      } finally {
+        await rm(corpora, { recursive: true, force: true });
+      }
     });
 
     it("answers 503 for the conversations when no database is configured", async () => {

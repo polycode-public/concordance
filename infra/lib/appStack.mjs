@@ -3,7 +3,7 @@
 
 // The serving layer: the chat WebSocket on API Gateway with a Lambda per route, the turn
 // function it invokes asynchronously, the cancel table, GET /doc/{id}, GET /spend and the
-// conversation routes on an HTTP API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
+// conversation routes and POST /export on an HTTP API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
 // is destroyable and nothing costs money at idle.
 
 import path from "node:path";
@@ -137,6 +137,16 @@ export class AppStack extends Stack {
     const conversationsFn = fn("conversations", {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
+    const exportFn = fn("export", {
+      environment: {
+        DB_RESOURCE_ARN: dbResourceArn,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_NAME: dbName,
+        CORPUS_BUCKET: corpusBucket.bucketName,
+        CORPUS_ID: corpusId,
+        CORPUS_TITLE: corpusTitle,
+      },
+    });
     const spendFn = fn("spend", {
       environment: { BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
     });
@@ -174,7 +184,7 @@ export class AppStack extends Stack {
     });
 
     for (const f of [turnFn, wsRoutesFn]) webSocketApi.grantManageConnections(f);
-    for (const f of [turnFn, wsRoutesFn, conversationsFn]) {
+    for (const f of [turnFn, wsRoutesFn, conversationsFn, exportFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -207,6 +217,12 @@ export class AppStack extends Stack {
     turnFn.grantInvoke(wsRoutesFn);
     corpusBucket.grantRead(wsRoutesFn, "*/raw/*");
     corpusBucket.grantRead(docFn, "*/raw/*");
+    exportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:PutObject", "s3:GetObject"],
+        resources: [corpusBucket.arnForObjects("notes/*")],
+      }),
+    );
 
     const siteBucket = new s3.Bucket(this, "SiteBucket", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -229,8 +245,8 @@ export class AppStack extends Stack {
     const httpApi = new apigwv2.HttpApi(this, "DocApi", {
       corsPreflight: {
         allowOrigins: [`https://${distribution.distributionDomainName}`],
-        allowMethods: [apigwv2.CorsHttpMethod.GET],
-        allowHeaders: ["authorization"],
+        allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.POST],
+        allowHeaders: ["authorization", "content-type"],
         maxAge: Duration.hours(1),
       },
     });
@@ -247,6 +263,12 @@ export class AppStack extends Stack {
       path: "/spend",
       methods: [apigwv2.HttpMethod.GET],
       integration: new HttpLambdaIntegration("SpendIntegration", spendFn),
+      authorizer: userAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: "/export",
+      methods: [apigwv2.HttpMethod.POST],
+      integration: new HttpLambdaIntegration("ExportIntegration", exportFn),
       authorizer: userAuthorizer,
     });
     const conversationsIntegration = new HttpLambdaIntegration(
@@ -283,6 +305,7 @@ export class AppStack extends Stack {
           httpUrl: httpApi.apiEndpoint,
           spendUrl: `${httpApi.apiEndpoint}/spend`,
           conversationsUrl: `${httpApi.apiEndpoint}/conversations`,
+          exportUrl: `${httpApi.apiEndpoint}/export`,
           auth: {
             region: this.region,
             userPoolId: userPool.userPoolId,

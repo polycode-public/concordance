@@ -135,6 +135,53 @@ export function originalsBucket(env = process.env, expiresIn = 600) {
   };
 }
 
+/**
+ * The conversation documents in the corpus bucket: a write that never replaces a key, and a
+ * presigned GET. `parts` replaces the S3 client and the presigner, for tests.
+ */
+export function notesBucket(env = process.env, expiresIn = 600, parts = {}) {
+  const Bucket = requireEnv(env, "CORPUS_BUCKET");
+  const client = parts.client
+    ? async () => parts.client
+    : once(async () => new (await s3Sdk()).S3Client({}));
+  return {
+    async put(key, body) {
+      const sdk = await s3Sdk();
+      try {
+        await (
+          await client()
+        ).send(
+          new sdk.PutObjectCommand({
+            Bucket,
+            Key: key,
+            Body: body,
+            ContentType: "text/markdown; charset=utf-8",
+            IfNoneMatch: "*",
+          }),
+        );
+      } catch (err) {
+        if (err?.name === "PreconditionFailed" || err?.$metadata?.httpStatusCode === 412) {
+          throw new Error(`the document ${key} already exists`, { cause: err });
+        }
+        throw err;
+      }
+    },
+    async presign(key) {
+      const sdk = await s3Sdk();
+      const sign = parts.presign ?? (await presignerSdk()).getSignedUrl;
+      return sign(
+        await client(),
+        new sdk.GetObjectCommand({
+          Bucket,
+          Key: key,
+          ResponseContentType: "text/plain; charset=utf-8",
+        }),
+        { expiresIn },
+      );
+    },
+  };
+}
+
 /** Invokes the turn function asynchronously, so the WebSocket route returns at once. */
 export function turnInvoker(env = process.env) {
   const FunctionName = requireEnv(env, "TURN_FUNCTION_NAME");

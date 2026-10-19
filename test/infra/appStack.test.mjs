@@ -57,10 +57,16 @@ describe("AppStack", () => {
       "GET /conversations/{id}",
       "GET /doc/{id}",
       "GET /spend",
+      "POST /export",
     ]);
     expect(routes.find((r) => r.RouteKey === "$connect").AuthorizationType).toBe("CUSTOM");
     expect(routes.find((r) => r.RouteKey === "GET /doc/{id}").AuthorizationType).toBe("JWT");
-    for (const key of ["GET /spend", "GET /conversations", "GET /conversations/{id}"]) {
+    for (const key of [
+      "GET /spend",
+      "GET /conversations",
+      "GET /conversations/{id}",
+      "POST /export",
+    ]) {
       expect(routes.find((r) => r.RouteKey === key).AuthorizationType).toBe("JWT");
     }
     template.resourceCountIs("AWS::ApiGatewayV2::Authorizer", 2);
@@ -100,8 +106,8 @@ describe("AppStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Api", {
       ProtocolType: "HTTP",
       CorsConfiguration: {
-        AllowHeaders: ["authorization"],
-        AllowMethods: ["GET"],
+        AllowHeaders: ["authorization", "content-type"],
+        AllowMethods: ["GET", "POST"],
         AllowOrigins: [Match.anyValue()],
       },
     });
@@ -149,11 +155,11 @@ describe("AppStack", () => {
     ]);
   });
 
-  it("runs six arm64 Node 24 functions, the turn function for ten minutes", () => {
+  it("runs seven arm64 Node 24 functions, the turn function for ten minutes", () => {
     const fns = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .filter((p) => p.Runtime === "nodejs24.x" && p.Environment);
-    expect(fns).toHaveLength(6);
+    expect(fns).toHaveLength(7);
     for (const p of fns) expect(p.Architectures).toEqual(["arm64"]);
     const turn = fns.find((p) => p.Timeout === 600);
     expect(turn.MemorySize).toBe(1024);
@@ -218,6 +224,40 @@ describe("AppStack", () => {
     expect(markers[`<<marker:0xbaba:${listMarker}>>`]["Fn::Join"][1].at(-1)).toBe(
       '/conversations"',
     );
+    const exportMarker = /"exportUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
+    expect(markers[`<<marker:0xbaba:${exportMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/export"');
+  });
+
+  it("lets the export function write and read notes/ and nothing else in the bucket", () => {
+    const fn = Object.entries(template.findResources("AWS::Lambda::Function")).find(([id]) =>
+      id.startsWith("ExportFunction"),
+    )[1].Properties;
+    expect(fn.Environment.Variables).toMatchObject({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+      CORPUS_ID: "grenfell",
+      CORPUS_TITLE: "Grenfell Tower Inquiry",
+    });
+    const role = fn.Role["Fn::GetAtt"][0];
+    const statements = Object.values(template.findResources("AWS::IAM::Policy"))
+      .filter((r) => r.Properties.Roles.some((ref) => ref.Ref === role))
+      .flatMap((r) => r.Properties.PolicyDocument.Statement);
+    const s3Statements = statements.filter((s) =>
+      [s.Action].flat().some((a) => a.startsWith("s3:")),
+    );
+    expect(s3Statements).toHaveLength(1);
+    expect(s3Statements[0].Action).toEqual(["s3:PutObject", "s3:GetObject"]);
+    expect(JSON.stringify(s3Statements[0].Resource)).toMatch(/notes\/\*/);
+    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual([
+      "rds-data:BeginTransaction",
+      "rds-data:CommitTransaction",
+      "rds-data:ExecuteStatement",
+      "rds-data:RollbackTransaction",
+      "s3:GetObject",
+      "s3:PutObject",
+      "secretsmanager:GetSecretValue",
+    ]);
   });
 
   it("stages PDF.js and the faces beside the page", () => {
