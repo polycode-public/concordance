@@ -42,4 +42,64 @@ describe("splitNumberedParagraphs", () => {
       { paragraph: 1, page: 1, text: "First. 2.5 metres away 01:15 was the time" },
     ]);
   });
+
+  const sentence = (n) => `Sentence number ${n} says something about the stairwell. `;
+  const block = (chars) => {
+    let text = "";
+    for (let n = 0; text.length < chars; n++) text += sentence(n);
+    return text.trim();
+  };
+
+  it("keeps a numbered paragraph that spans two pages whole", () => {
+    const pages = [
+      { page: 1, text: `1. ${block(3000)}` },
+      { page: 2, text: block(3000) },
+      { page: 3, text: "2. Next." },
+    ];
+    const sections = splitNumberedParagraphs(pages);
+    expect(sections.map((s) => [s.paragraph, s.page])).toEqual([
+      [1, 1],
+      [2, 3],
+    ]);
+    expect(sections[0].text.length).toBeGreaterThan(6000);
+  });
+
+  it("gives unnumbered exhibit pages after a paragraph one section each", () => {
+    const pages = [
+      { page: 1, text: `1. ${block(500)}` },
+      { page: 2, text: block(3000) },
+      { page: 3, text: block(3000) },
+      { page: 4, text: block(3000) },
+      { page: 5, text: block(3000) },
+      { page: 6, text: block(3000) },
+    ];
+    const sections = splitNumberedParagraphs(pages);
+    expect(sections.map((s) => [s.paragraph, s.page])).toEqual([
+      [1, 1],
+      [null, 3],
+      [null, 4],
+      [null, 5],
+      [null, 6],
+    ]);
+  });
+
+  it("splits a long unnumbered page at blank lines into parts under 6000 characters", () => {
+    const text = Array.from({ length: 6 }, () => block(2500)).join("\n\n");
+    const sections = splitNumberedParagraphs([{ page: 7, text }]);
+    expect(sections).toHaveLength(3);
+    for (const s of sections) {
+      expect(s.paragraph).toBeNull();
+      expect(s.page).toBe(7);
+      expect(s.text.length).toBeLessThanOrEqual(6000);
+    }
+  });
+
+  it("splits a long unnumbered block without blank lines at a sentence end", () => {
+    const sections = splitNumberedParagraphs([{ page: 2, text: block(15000) }]);
+    expect(sections.length).toBeGreaterThanOrEqual(3);
+    for (const s of sections) {
+      expect(s.text.length).toBeLessThanOrEqual(6000);
+      expect(s.text.endsWith("stairwell.")).toBe(true);
+    }
+  });
 });

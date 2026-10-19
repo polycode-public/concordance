@@ -41,7 +41,7 @@ describe("IngestStack", () => {
     expect(definition.States.CheckBudget.Next).toBe("ListManifest");
     expect(definition.States.ListManifest.Next).toBe("IngestDocuments");
     const map = definition.States.IngestDocuments;
-    expect(map).toMatchObject({ Type: "Map", MaxConcurrency: 4, ItemsPath: "$.items" });
+    expect(map).toMatchObject({ Type: "Map", MaxConcurrency: 2, ItemsPath: "$.items" });
     expect(map.ItemSelector).toEqual({ "corpus.$": "$.corpus", "row.$": "$$.Map.Item.Value" });
     expect(map.ItemProcessor.StartAt).toBe("IngestDocument");
     expect(map.ItemProcessor.States.IngestDocument.Catch).toEqual([

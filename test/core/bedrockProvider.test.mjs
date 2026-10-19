@@ -172,4 +172,91 @@ describe("bedrock provider", () => {
     expect(assertProvider(p).name).toBe("bedrock");
     expect(providerFromEnv({ MODEL_PROVIDER: "bedrock" }).name).toBe("bedrock");
   });
+
+  it("refuses an input over 45,000 characters before any call", async () => {
+    const client = fakeClient({ InvokeModelCommand: titan(1024) });
+    const p = createBedrockProvider({}, { sdk, client });
+    await expect(p.embed(["ok", "x".repeat(46000)])).rejects.toThrow(/input 1 is 46000 characters/);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  function throttlingClient(failures, responders) {
+    const inner = fakeClient(responders);
+    let thrown = 0;
+    return {
+      calls: inner.calls,
+      async send(command, options) {
+        inner.calls.push({ name: command.constructor.name });
+        if (thrown < failures) {
+          thrown++;
+          throw Object.assign(new Error("Too many requests"), { name: "ThrottlingException" });
+        }
+        return responders[command.constructor.name](command, options);
+      },
+    };
+  }
+
+  it("retries throttling with jittered backoff and returns the vector", async () => {
+    const client = throttlingClient(2, { InvokeModelCommand: titan(1024) });
+    const waits = [];
+    const sleep = async (ms) => void waits.push(ms);
+    const p = createBedrockProvider({}, { sdk, client, sleep });
+    const [vector] = await p.embed(["abc"]);
+    expect(vector[0]).toBe(3);
+    expect(client.calls).toHaveLength(3);
+    expect(waits).toHaveLength(2);
+    expect(waits[0]).toBeLessThanOrEqual(1000);
+    expect(waits[1]).toBeLessThanOrEqual(2000);
+  });
+
+  it("rejects after six attempts and names the count", async () => {
+    const client = throttlingClient(99, { InvokeModelCommand: titan(1024) });
+    const p = createBedrockProvider({}, { sdk, client, sleep: async () => {} });
+    await expect(p.embed(["abc"])).rejects.toThrow(/6 attempts/);
+    expect(client.calls).toHaveLength(6);
+  });
+
+  it("retries an HTTP 429 and does not retry other errors", async () => {
+    let calls = 0;
+    const client = {
+      async send() {
+        calls++;
+        if (calls === 1)
+          throw Object.assign(new Error("slow"), { $metadata: { httpStatusCode: 429 } });
+        throw new Error("denied");
+      },
+    };
+    const p = createBedrockProvider({}, { sdk, client, sleep: async () => {} });
+    await expect(p.extractJson({ prompt: "x" })).rejects.toThrow("denied");
+    expect(calls).toBe(2);
+  });
+
+  it("retries chat before the stream starts and rethrows a throttle mid-stream", async () => {
+    const before = throttlingClient(1, {
+      ConverseStreamCommand: () => ({ stream: deltas(["Hi"]) }),
+    });
+    const p = createBedrockProvider({}, { sdk, client: before, sleep: async () => {} });
+    expect((await p.chat({ messages: [{ role: "user", content: "x" }] })).text).toBe("Hi");
+    expect(before.calls).toHaveLength(2);
+
+    async function* broken() {
+      yield { contentBlockDelta: { delta: { text: "a" } } };
+      throw Object.assign(new Error("mid"), { name: "ThrottlingException" });
+    }
+    const mid = fakeClient({ ConverseStreamCommand: () => ({ stream: broken() }) });
+    const q = createBedrockProvider({}, { sdk, client: mid, sleep: async () => {} });
+    await expect(q.chat({ messages: [{ role: "user", content: "x" }] })).rejects.toThrow("mid");
+    expect(mid.calls).toHaveLength(1);
+  });
+
+  it("stops waiting when the signal aborts between attempts", async () => {
+    const controller = new AbortController();
+    const client = throttlingClient(99, { ConverseCommand: converseReply("{}") });
+    const sleep = async () => controller.abort();
+    const p = createBedrockProvider({}, { sdk, client, sleep });
+    await expect(p.extractJson({ prompt: "x", signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(client.calls).toHaveLength(1);
+  });
 });

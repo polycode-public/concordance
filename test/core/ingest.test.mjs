@@ -178,6 +178,26 @@ describe("planChunks", () => {
     expect(sections.flatMap((s) => s.passages.map((p) => p.ordinal))).toEqual([0, 1, 2]);
   });
 
+  it("bounds every section of a statement with unnumbered exhibit pages", () => {
+    const filler = (n) =>
+      Array.from({ length: n }, (_, i) => `Exhibit line ${i} of the email.`).join(" ");
+    const pages = [
+      { page: 1, text: "1. I lived on floor 18.\n2. I woke at 01:00." },
+      { page: 2, text: filler(150) },
+      { page: 3, text: filler(500) },
+      { page: 4, text: filler(150) },
+    ];
+    const sections = planChunks(pages);
+    expect(sections.length).toBeGreaterThan(4);
+    for (const s of sections) expect(s.text.length).toBeLessThanOrEqual(6000);
+    expect(sections.map((s) => s.locator).slice(0, 4)).toEqual([
+      { page: 1, paragraph: 1 },
+      { page: 1, paragraph: 2 },
+      { page: 3, paragraph: null },
+      { page: 3, paragraph: null },
+    ]);
+  });
+
   it("throws when no numbered paragraph exists", () => {
     expect(() => planChunks([{ page: 1, text: "A letter with no numbers." }])).toThrow(
       /no numbered paragraph/,
