@@ -4,6 +4,7 @@ import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
 import { showSpend } from "./spend.js";
+import { TAG, tagNumbers } from "./tags.mjs";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -20,7 +21,6 @@ const evidenceCount = $("evidence-count");
 const evidenceEmpty = $("evidence-empty");
 
 const STAGES = ["rewriting", "retrieving", "answering", "checking"];
-const TAG = /\[E(\d+)\]/g;
 /** The conversation: a thread on this connection's session. */
 let thread = crypto.randomUUID();
 
@@ -265,16 +265,18 @@ function withChips(turn, text) {
   let last = 0;
   for (const match of text.matchAll(TAG)) {
     if (match.index > last) parts.push(text.slice(last, match.index));
-    const block = turn.blocks.get(Number(match[1]));
-    parts.push(
-      block
-        ? chip(block)
-        : Object.assign(document.createElement("span"), {
-            className: "dropped-tag",
-            title: "no such evidence block",
-            textContent: match[0],
-          }),
-    );
+    for (const n of tagNumbers(match)) {
+      const block = turn.blocks.get(n);
+      parts.push(
+        block
+          ? chip(block)
+          : Object.assign(document.createElement("span"), {
+              className: "dropped-tag",
+              title: "no such evidence block",
+              textContent: `[E${n}]`,
+            }),
+      );
+    }
     last = match.index + match[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));

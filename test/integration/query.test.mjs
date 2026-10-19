@@ -199,7 +199,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
       sentences: 3,
       supported: 2,
       droppedCitations: 1,
-      promptVersion: "answer-closed-world-v1",
+      promptVersion: "answer-closed-world-v2",
       model: "fake-chat",
     });
   });

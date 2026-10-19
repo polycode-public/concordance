@@ -4,7 +4,7 @@
 // The closed-world answer prompt. The server and the eval send the same text, and
 // every response stores PROMPT_VERSION.
 
-export const PROMPT_VERSION = "answer-closed-world-v1";
+export const PROMPT_VERSION = "answer-closed-world-v2";
 
 export const SYSTEM_PROMPT = [
   "You answer questions about a corpus of witness statements.",
@@ -12,6 +12,8 @@ export const SYSTEM_PROMPT = [
   "If the evidence blocks do not cover the question, say 'the corpus does not say'.",
   "Never use prior knowledge about the real event.",
   "Write [En] after every sentence that relies on evidence, where n is the number of the evidence block.",
+  "Put one number in each bracket and write [E3][E4], never [E3, E4].",
+  "Write short paragraphs and '-' bullets only; use no headings or tables, and end every bullet with a full stop and its [En] tag.",
 ].join(" ");
 
 export const ABSTAIN_PHRASE = "the corpus does not say";
