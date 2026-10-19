@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { isExpired, signIn, signOut } from "./auth.js";
+import { currentToken, isExpired, signIn, signOut } from "./auth.js";
+import { showSpend } from "./spend.js";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -38,7 +39,7 @@ let opening = null;
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -431,6 +432,7 @@ try {
   config = await loadConfig();
   nameCorpus(config.corpus);
   await connect();
+  await showSpend(config, config.auth ? currentToken() : null);
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;
 }

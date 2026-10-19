@@ -2,9 +2,9 @@
 // Copyright 2026 Polycode Limited
 
 // The serving layer: the chat WebSocket on API Gateway with a Lambda per route, the turn
-// function it invokes asynchronously, the cancel table, GET /doc/{id} on an HTTP API, one
-// Cognito user, and the page on CloudFront with a generated config.json. Every resource is
-// destroyable and nothing costs money at idle.
+// function it invokes asynchronously, the cancel table, GET /doc/{id} and GET /spend on an HTTP
+// API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
+// is destroyable and nothing costs money at idle.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,12 +46,12 @@ export class AppStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string, corpusId?: string, corpusTitle?: string,
-   *   corpusSubtitle?: string }} props
+   *   dbSecretArn: string, dbName: string, budgetName: string, corpusId?: string,
+   *   corpusTitle?: string, corpusSubtitle?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
-    const { corpusBucket, dbResourceArn, dbSecretArn, dbName } = props;
+    const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetName } = props;
     const {
       corpusId = "grenfell",
       corpusTitle = "Grenfell Tower Inquiry",
@@ -60,6 +60,7 @@ export class AppStack extends Stack {
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
+    if (!budgetName) throw new Error("AppStack needs the budgetName the spend route reads");
 
     const userPool = new cognito.UserPool(this, "Users", {
       selfSignUpEnabled: false,
@@ -133,6 +134,15 @@ export class AppStack extends Stack {
       environment: { ...dbEnv, TURN_FUNCTION_NAME: turnFn.functionName },
     });
     const docFn = fn("doc", { environment: { CORPUS_BUCKET: corpusBucket.bucketName } });
+    const spendFn = fn("spend", {
+      environment: { BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
+    });
+    spendFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["budgets:ViewBudget"],
+        resources: [`arn:aws:budgets::${this.account}:budget/${budgetName}`],
+      }),
+    );
 
     // A failed turn has already told the client; a retry would answer the question twice.
     new lambda.EventInvokeConfig(this, "TurnInvokeConfig", {
@@ -158,16 +168,6 @@ export class AppStack extends Stack {
       webSocketApi,
       stageName: STAGE_NAME,
       autoDeploy: true,
-    });
-
-    const httpApi = new apigwv2.HttpApi(this, "DocApi");
-    httpApi.addRoutes({
-      path: "/doc/{id}",
-      methods: [apigwv2.HttpMethod.GET],
-      integration: new HttpLambdaIntegration("DocIntegration", docFn),
-      authorizer: new HttpUserPoolAuthorizer("DocAuthorizer", userPool, {
-        userPoolClients: [client],
-      }),
     });
 
     for (const f of [turnFn, wsRoutesFn]) {
@@ -222,6 +222,31 @@ export class AppStack extends Stack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 
+    // The page fetches these routes with the id token from the distribution's origin.
+    const httpApi = new apigwv2.HttpApi(this, "DocApi", {
+      corsPreflight: {
+        allowOrigins: [`https://${distribution.distributionDomainName}`],
+        allowMethods: [apigwv2.CorsHttpMethod.GET],
+        allowHeaders: ["authorization"],
+        maxAge: Duration.hours(1),
+      },
+    });
+    const userAuthorizer = new HttpUserPoolAuthorizer("DocAuthorizer", userPool, {
+      userPoolClients: [client],
+    });
+    httpApi.addRoutes({
+      path: "/doc/{id}",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: new HttpLambdaIntegration("DocIntegration", docFn),
+      authorizer: userAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: "/spend",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: new HttpLambdaIntegration("SpendIntegration", spendFn),
+      authorizer: userAuthorizer,
+    });
+
     // The presigned GET is the access control, and a holder of the URL can fetch it outside a
     // browser anyway. A rule naming the distribution's domain would make the data stack
     // depend on this one, which already depends on it for the bucket.
@@ -241,6 +266,7 @@ export class AppStack extends Stack {
         s3deploy.Source.jsonData("config.json", {
           wsUrl: stage.url,
           httpUrl: httpApi.apiEndpoint,
+          spendUrl: `${httpApi.apiEndpoint}/spend`,
           auth: {
             region: this.region,
             userPoolId: userPool.userPoolId,

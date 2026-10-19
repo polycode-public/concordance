@@ -33,6 +33,7 @@ beforeAll(() => {
     dbResourceArn: CLUSTER,
     dbSecretArn: SECRET,
     dbName: "concordance",
+    budgetName: "concordance-sandbox-monthly",
   });
   template = Template.fromStack(stack);
   dataTemplate = Template.fromStack(data);
@@ -53,9 +54,12 @@ describe("AppStack", () => {
       "$default",
       "$disconnect",
       "GET /doc/{id}",
+      "GET /spend",
     ]);
     expect(routes.find((r) => r.RouteKey === "$connect").AuthorizationType).toBe("CUSTOM");
     expect(routes.find((r) => r.RouteKey === "GET /doc/{id}").AuthorizationType).toBe("JWT");
+    expect(routes.find((r) => r.RouteKey === "GET /spend").AuthorizationType).toBe("JWT");
+    template.resourceCountIs("AWS::ApiGatewayV2::Authorizer", 2);
     template.hasResourceProperties("AWS::ApiGatewayV2::Authorizer", {
       AuthorizerType: "REQUEST",
       IdentitySource: ["route.request.querystring.token"],
@@ -88,11 +92,42 @@ describe("AppStack", () => {
     template.hasResource("AWS::DynamoDB::Table", { DeletionPolicy: "Delete" });
   });
 
-  it("runs four arm64 Node 24 functions, the turn function for ten minutes", () => {
+  it("lets the page call the HTTP API with its token from the distribution's origin", () => {
+    template.hasResourceProperties("AWS::ApiGatewayV2::Api", {
+      ProtocolType: "HTTP",
+      CorsConfiguration: {
+        AllowHeaders: ["authorization"],
+        AllowMethods: ["GET"],
+        AllowOrigins: [Match.anyValue()],
+      },
+    });
+  });
+
+  it("reads the project budget for the spend route and nothing else", () => {
+    const spend = Object.values(template.findResources("AWS::Lambda::Function"))
+      .map((r) => r.Properties)
+      .find((p) => p.Environment?.Variables?.BUDGET_NAME);
+    expect(spend.Environment.Variables).toEqual({
+      BUDGET_ACCOUNT_ID: "111111111111",
+      BUDGET_NAME: "concordance-sandbox-monthly",
+    });
+    const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (r) => r.Properties.PolicyDocument.Statement,
+    );
+    expect(statements.filter((s) => String(s.Action).startsWith("budgets:"))).toEqual([
+      {
+        Action: "budgets:ViewBudget",
+        Effect: "Allow",
+        Resource: "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
+      },
+    ]);
+  });
+
+  it("runs five arm64 Node 24 functions, the turn function for ten minutes", () => {
     const fns = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .filter((p) => p.Runtime === "nodejs24.x" && p.Environment);
-    expect(fns).toHaveLength(4);
+    expect(fns).toHaveLength(5);
     for (const p of fns) expect(p.Architectures).toEqual(["arm64"]);
     const turn = fns.find((p) => p.Timeout === 600);
     expect(turn.MemorySize).toBe(1024);
@@ -149,6 +184,10 @@ describe("AppStack", () => {
     expect(configs[0]).toContain('"corpus":{"id":"grenfell"');
     expect(configs[0]).toContain('"title":"Grenfell Tower Inquiry"');
     expect(configs[0]).toContain('"subtitle":"witness statements"');
+    const marker = /"spendUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
+    const deployment = Object.values(template.findResources("Custom::CDKBucketDeployment"))[0];
+    const markers = deployment.Properties.SourceMarkers.find((m) => Object.keys(m).length);
+    expect(markers[`<<marker:0xbaba:${marker}>>`]["Fn::Join"][1].at(-1)).toBe('/spend"');
   });
 
   it("stages PDF.js and the faces beside the page", () => {
@@ -207,7 +246,23 @@ describe("AppStack", () => {
           dbResourceArn: CLUSTER,
           dbSecretArn: SECRET,
           dbName: "concordance",
+          budgetName: "concordance-sandbox-monthly",
         }),
     ).toThrow(/CORS/);
+  });
+
+  it("refuses a stack without the budget name", () => {
+    const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+    const data = new Stack(app, "Data2", { env });
+    expect(
+      () =>
+        new AppStack(app, "NoBudget", {
+          env,
+          corpusBucket: new s3.Bucket(data, "CorpusBucket"),
+          dbResourceArn: CLUSTER,
+          dbSecretArn: SECRET,
+          dbName: "concordance",
+        }),
+    ).toThrow(/budgetName/);
   });
 });

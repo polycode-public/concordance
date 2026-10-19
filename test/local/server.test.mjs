@@ -139,7 +139,16 @@ describe("local server", () => {
       httpUrl: "",
       auth: null,
       corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
+      spendUrl: "/spend",
     });
+  });
+
+  it("answers /spend with null, because the laptop has no budget", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    const res = await fetch(`http://127.0.0.1:${app.port}/spend`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/^application\/json/);
+    expect(await res.json()).toBeNull();
   });
 
   it("serves the UI with the correct content types", async () => {

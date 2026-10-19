@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The laptop server: static UI over HTTP, /health, /config.json, and the chat WebSocket at /ws.
+// The laptop server: static UI over HTTP, /health, /config.json, /spend, and the chat
+// WebSocket at /ws.
 import http from "node:http";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
@@ -156,9 +157,16 @@ export async function createServer({
           httpUrl: "",
           auth: null,
           corpus: DEFAULT_CORPUS,
+          spendUrl: "/spend",
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
+        return;
+      }
+      if (pathname === "/spend") {
+        // The laptop has no budget; null hides the spend strip.
+        res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
+        res.end(req.method === "HEAD" ? undefined : "null");
         return;
       }
       if (pathname.startsWith("/doc/")) {
