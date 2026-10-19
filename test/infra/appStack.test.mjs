@@ -267,6 +267,11 @@ describe("AppStack", () => {
     expect(readdirSync(path.join(root, "vendor")).sort()).toEqual([
       "pdf.min.mjs",
       "pdf.worker.min.mjs",
+      "wasm",
+    ]);
+    expect(readdirSync(path.join(root, "vendor", "wasm")).sort()).toEqual([
+      "jbig2.wasm",
+      "openjpeg.wasm",
     ]);
     expect(readdirSync(path.join(root, "fonts")).sort()).toEqual([
       "source-sans-3-latin-400-normal.woff2",
