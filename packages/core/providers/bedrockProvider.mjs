@@ -5,7 +5,23 @@
 // Converse for extraction. The SDK loads on the first model call so the laptop path and the
 // offline suite never import it.
 
-const EMBED_CONCURRENCY = 8;
+const EMBED_CONCURRENCY = 4;
+const MAX_EMBED_CHARS = 45000;
+const MAX_EMBED_TOKENS = 8000;
+const CHARS_PER_TOKEN = 4;
+const RETRY_ATTEMPTS = 6;
+const RETRY_BASE_MS = 1000;
+const RETRY_CAP_MS = 32000;
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isThrottle(error) {
+  return (
+    error?.name === "ThrottlingException" ||
+    error?.name === "TooManyRequestsException" ||
+    error?.$metadata?.httpStatusCode === 429
+  );
+}
 
 let sdkPromise;
 function loadSdk() {
@@ -18,9 +34,13 @@ function loadSdk() {
  * @param {object} [injected]
  * @param {object} [injected.sdk]     The module exports of @aws-sdk/client-bedrock-runtime.
  * @param {object} [injected.client]  A ready client with send(command, options).
+ * @param {(ms: number) => Promise<void>} [injected.sleep]  The wait between throttling retries.
  * @returns {import('./modelProvider.mjs').ModelProvider}
  */
-export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
+export function createBedrockProvider(
+  env = process.env,
+  { sdk, client, sleep = defaultSleep } = {},
+) {
   const region = env.AWS_REGION || "eu-west-2";
   const embedModel = env.BEDROCK_EMBED_MODEL || "amazon.titan-embed-text-v2:0";
   const embedDim = env.BEDROCK_EMBED_DIM ? Number(env.BEDROCK_EMBED_DIM) : 1024;
@@ -36,6 +56,25 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
     return ready;
   }
 
+  /** Runs call(); on throttling waits with full-jitter backoff and tries again. */
+  async function withRetry(call, signal) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await call();
+      } catch (error) {
+        if (!isThrottle(error)) throw error;
+        if (attempt >= RETRY_ATTEMPTS) {
+          throw new Error(`throttled after ${attempt} attempts: ${error.message}`, {
+            cause: error,
+          });
+        }
+        signal?.throwIfAborted();
+        await sleep(Math.random() * Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** (attempt - 1)));
+        signal?.throwIfAborted();
+      }
+    }
+  }
+
   async function embedOne(text, { mod, runtime }) {
     const command = new mod.InvokeModelCommand({
       modelId: embedModel,
@@ -43,7 +82,7 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
       accept: "application/json",
       body: JSON.stringify({ inputText: text, dimensions: embedDim, normalize: true }),
     });
-    const response = await runtime.send(command);
+    const response = await withRetry(() => runtime.send(command));
     const { embedding } = JSON.parse(new TextDecoder().decode(response.body));
     if (!Array.isArray(embedding) || embedding.length !== embedDim) {
       throw new Error(
@@ -60,6 +99,13 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
     extractModel,
 
     async embed(texts) {
+      texts.forEach((text, index) => {
+        if (text.length > MAX_EMBED_CHARS || text.length / CHARS_PER_TOKEN > MAX_EMBED_TOKENS) {
+          throw new Error(
+            `embed input ${index} is ${text.length} characters; the limit is ${MAX_EMBED_CHARS} characters or ${MAX_EMBED_TOKENS} tokens`,
+          );
+        }
+      });
       const connection = await connect();
       const vectors = new Array(texts.length);
       let next = 0;
@@ -87,7 +133,10 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
           .map((m) => ({ role: m.role, content: [{ text: m.content }] })),
         inferenceConfig: { temperature },
       });
-      const response = await runtime.send(command, { abortSignal: signal });
+      const response = await withRetry(
+        () => runtime.send(command, { abortSignal: signal }),
+        signal,
+      );
       let text = "";
       let usage = null;
       for await (const event of response.stream) {
@@ -117,7 +166,10 @@ export function createBedrockProvider(env = process.env, { sdk, client } = {}) {
         messages: [{ role: "user", content: [{ text: `${prompt}\n\n${instruction}` }] }],
         inferenceConfig: { temperature: 0 },
       });
-      const response = await runtime.send(command, { abortSignal: signal });
+      const response = await withRetry(
+        () => runtime.send(command, { abortSignal: signal }),
+        signal,
+      );
       const content = response.output?.message?.content?.[0]?.text ?? "";
       const json = content
         .trim()
