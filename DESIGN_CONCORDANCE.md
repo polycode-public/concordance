@@ -82,7 +82,9 @@ rule: a cell is a reference.
 
 Every colour, face, size, space and rule is a custom property in `packages/ui/tokens.css`. No
 other file under `packages/ui/` names a colour; `test/ui/tokens.test.mjs` enforces it, and checks
-that every colour token in `:root` is redefined for dark mode.
+that every colour token in `:root` is redefined for dark mode. Source Sans 3 and Source Serif 4 are
+self-hosted woff2 files (`@fontsource`, OFL) served from `/fonts/`, so the page makes no request
+outside its origin.
 
 ### Colour
 

@@ -60,6 +60,7 @@ export function createOllamaProvider({
       );
       let text = "";
       let model = chatModel;
+      let usage = null;
       for await (const message of readNdjson(res.body, signal)) {
         if (message.error) throw new Error(`ollama /api/chat: ${message.error}`);
         if (message.model) model = message.model;
@@ -68,9 +69,14 @@ export function createOllamaProvider({
           text += piece;
           onToken?.(piece);
         }
-        if (message.done) break;
+        if (message.done) {
+          if (Number.isFinite(message.prompt_eval_count) && Number.isFinite(message.eval_count)) {
+            usage = { inputTokens: message.prompt_eval_count, outputTokens: message.eval_count };
+          }
+          break;
+        }
       }
-      return { text, model, promptVersion };
+      return { text, model, promptVersion, usage };
     },
 
     async extractJson({ prompt, schema, signal }) {

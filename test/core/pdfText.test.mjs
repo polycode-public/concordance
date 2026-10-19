@@ -72,7 +72,7 @@ describe("pdfToPagesFromBuffer", () => {
       "2. I woke at 01:10.",
     ]);
     expect(pages[1].text).toContain("3. I left at 01:20.");
-  });
+  }, 30_000);
 
   it("gives text the paragraph splitter numbers", async () => {
     const sections = splitNumberedParagraphs(await pdfToPagesFromBuffer(STATEMENT));

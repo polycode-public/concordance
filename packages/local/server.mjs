@@ -10,10 +10,17 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
+import { PAGE_ASSETS } from "../../scripts/stage-page-assets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATIC = path.resolve(here, "..", "ui");
 const DEFAULT_CORPORA = path.resolve(here, "..", "..", "corpora");
+
+export const DEFAULT_CORPUS = {
+  id: "grenfell",
+  title: "Grenfell Tower Inquiry",
+  subtitle: "witness statements",
+};
 
 export const NO_DATABASE = "the database is not configured";
 
@@ -25,6 +32,9 @@ const MIME = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".png": "image/png",
+  ".map": "application/json; charset=utf-8",
 };
 
 /**
@@ -145,6 +155,7 @@ export async function createServer({
           wsUrl: `ws://${req.headers.host}/ws`,
           httpUrl: "",
           auth: null,
+          corpus: DEFAULT_CORPUS,
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
@@ -156,8 +167,8 @@ export async function createServer({
       }
       const rel =
         pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
-      const file = path.resolve(root, rel);
-      if (file !== root && !file.startsWith(root + path.sep)) {
+      const file = PAGE_ASSETS[rel] ?? path.resolve(root, rel);
+      if (!PAGE_ASSETS[rel] && file !== root && !file.startsWith(root + path.sep)) {
         res.writeHead(403).end();
         return;
       }

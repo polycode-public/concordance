@@ -72,12 +72,13 @@ wait legible; the page shows the stage.
 
 ## Test tiers
 
-| Tier    | Runs                                    | Needs              | Switch                       |
-| ------- | --------------------------------------- | ------------------ | ---------------------------- |
-| offline | `npm test`                              | nothing            | always                       |
-| db      | schema, inserts, cosine and tsv queries | Docker Postgres    | `CONCORDANCE_DB_TESTS=1`     |
-| ollama  | embed dim, streamed chat, cancel        | Ollama with models | `CONCORDANCE_OLLAMA_TESTS=1` |
-| eval    | the gold set                            | both               | `npm run eval`               |
+| Tier    | Runs                                                | Needs              | Switch                        |
+| ------- | --------------------------------------------------- | ------------------ | ----------------------------- |
+| offline | `npm test`                                          | nothing            | always                        |
+| db      | schema, inserts, cosine and tsv queries             | Docker Postgres    | `CONCORDANCE_DB_TESTS=1`      |
+| ollama  | embed dim, streamed chat, cancel                    | Ollama with models | `CONCORDANCE_OLLAMA_TESTS=1`  |
+| browser | the page in headless Chrome: layout, keys, contrast | Chrome or Chromium | `CONCORDANCE_BROWSER_TESTS=1` |
+| eval    | the gold set                                        | both               | `npm run eval`                |
 
 ## Install list
 

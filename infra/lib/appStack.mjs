@@ -28,6 +28,7 @@ import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import { stagePageAssets } from "../../scripts/stage-page-assets.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AWS_DIR = path.join(ROOT, "packages", "aws");
@@ -45,11 +46,17 @@ export class AppStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string }} props
+   *   dbSecretArn: string, dbName: string, corpusId?: string, corpusTitle?: string,
+   *   corpusSubtitle?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
     const { corpusBucket, dbResourceArn, dbSecretArn, dbName } = props;
+    const {
+      corpusId = "grenfell",
+      corpusTitle = "Grenfell Tower Inquiry",
+      corpusSubtitle = "witness statements",
+    } = props;
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
@@ -230,6 +237,7 @@ export class AppStack extends Stack {
       destinationBucket: siteBucket,
       sources: [
         s3deploy.Source.asset(UI_DIR),
+        s3deploy.Source.asset(stagePageAssets()),
         s3deploy.Source.jsonData("config.json", {
           wsUrl: stage.url,
           httpUrl: httpApi.apiEndpoint,
@@ -238,6 +246,7 @@ export class AppStack extends Stack {
             userPoolId: userPool.userPoolId,
             clientId: client.userPoolClientId,
           },
+          corpus: { id: corpusId, title: corpusTitle, subtitle: corpusSubtitle },
         }),
       ],
       distribution,

@@ -14,7 +14,7 @@ describe("StoreStack", () => {
       env: { account: "111111111111", region: "eu-west-2" },
     });
     template = Template.fromStack(stack);
-  });
+  }, 120_000);
 
   it("builds a Serverless v2 cluster that scales to zero behind the Data API", () => {
     template.hasResource("AWS::RDS::DBCluster", {

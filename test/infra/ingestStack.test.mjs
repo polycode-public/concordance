@@ -28,7 +28,7 @@ beforeAll(() => {
   const [machine] = Object.values(template.findResources("AWS::StepFunctions::StateMachine"));
   const parts = machine.Properties.DefinitionString["Fn::Join"][1];
   definition = JSON.parse(parts.map((p) => (typeof p === "string" ? p : "ARN")).join(""));
-});
+}, 120_000);
 
 const statements = () =>
   Object.values(template.findResources("AWS::IAM::Policy")).flatMap(

@@ -5,7 +5,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Concordance: Grenfell Tower Inquiry witness statements</title>
+    <title>Concordance</title>
+    <link
+      rel="preload"
+      href="/fonts/source-sans-3-latin-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/source-serif-4-latin-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/styles.css" />
     <script type="module" src="/app.js"></script>
@@ -13,12 +27,12 @@
   <body>
     <header class="bar">
       <h1>Concordance</h1>
-      <p class="inquiry">Grenfell Tower Inquiry: witness statements</p>
+      <p class="inquiry" id="corpus-name"></p>
       <p id="connection" class="small soft" role="status">connecting</p>
     </header>
     <form id="signin" class="signin" hidden>
       <h2>Sign in to Concordance</h2>
-      <p class="soft">Grenfell Tower Inquiry: witness statements</p>
+      <p class="soft" id="signin-corpus"></p>
       <label for="signin-user">User name</label>
       <input id="signin-user" name="username" autocomplete="username" required />
       <label for="signin-password">Password</label>

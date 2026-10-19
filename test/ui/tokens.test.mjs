@@ -69,7 +69,30 @@ describe("the page's tokens", () => {
     expect(html.indexOf('href="/tokens.css"')).toBeLessThan(html.indexOf('href="/styles.css"'));
   });
 
-  it("names the inquiry in the header", () => {
-    expect(read("index.html")).toMatch(/<header[\s\S]*Grenfell Tower Inquiry[\s\S]*<\/header>/);
+  it("makes no request outside its own origin except to Cognito", () => {
+    const offenders = files
+      .filter((name) => /\.(css|js)$/.test(name))
+      .flatMap((name) => [...read(name).matchAll(/https:\/\/[^\s"'`)]+/g)].map((m) => [name, m[0]]))
+      .filter(([name, url]) => !(name === "auth.js" && url.startsWith("https://cognito-idp.")));
+    expect(offenders).toEqual([]);
+  });
+
+  it("declares the three faces it preloads and serves", () => {
+    const css = read(TOKENS);
+    for (const file of [
+      "source-sans-3-latin-400-normal",
+      "source-sans-3-latin-600-normal",
+      "source-serif-4-latin-400-normal",
+    ]) {
+      expect(css).toContain(`/fonts/${file}.woff2`);
+    }
+    expect(css.match(/font-display: swap/g)).toHaveLength(3);
+    expect(read("index.html").match(/rel="preload"/g)).toHaveLength(2);
+  });
+
+  it("writes the corpus title and subtitle from config.json into the header", () => {
+    expect(read("index.html")).toMatch(/<header[\s\S]*id="corpus-name"[\s\S]*<\/header>/);
+    expect(read("app.js")).toMatch(/\$\("corpus-name"\)\.textContent = name/);
+    expect(read("app.js")).toContain("nameCorpus(config.corpus)");
   });
 });

@@ -78,3 +78,27 @@ jobs:
                 --output text | awk -F'\t' '{ printf "| `%s` | %s | %s |\n", $1, $2, $3 }'
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke the deployed site
+        run: |
+          set -euo pipefail
+          SITE_URL=$(aws cloudformation describe-stacks --stack-name concordance-sandbox-app \
+            --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" --output text)
+          SITE_URL="${SITE_URL%/}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE_URL/")
+          if [ "$code" != "200" ]; then
+            echo "::error::GET $SITE_URL/ returned $code, expected 200"
+            exit 1
+          fi
+          config=$(curl -sS --fail "$SITE_URL/config.json")
+          echo "$config" | jq -e '.wsUrl | startswith("wss://")' >/dev/null \
+            || { echo "::error::config.json wsUrl does not start with wss://"; exit 1; }
+          echo "$config" | jq -e '.auth.userPoolId | length > 0' >/dev/null \
+            || { echo "::error::config.json auth.userPoolId is empty"; exit 1; }
+          {
+            echo "## concordance smoke"
+            echo
+            echo "- Page: \`$SITE_URL/\` returned $code"
+            echo "- wsUrl: \`$(echo "$config" | jq -r .wsUrl)\`"
+            echo "- userPoolId: \`$(echo "$config" | jq -r .auth.userPoolId)\`"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

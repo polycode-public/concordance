@@ -4,7 +4,15 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
-  { ignores: ["node_modules/**", "cdk.out/**", ".claude/worktrees/**", "corpora/*/raw/**"] },
+  {
+    ignores: [
+      "node_modules/**",
+      "cdk.out/**",
+      ".page-assets/**",
+      ".claude/worktrees/**",
+      "corpora/*/raw/**",
+    ],
+  },
   js.configs.recommended,
   {
     files: ["**/*.{js,mjs}"],

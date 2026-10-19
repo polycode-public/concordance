@@ -79,7 +79,13 @@ function stubQuery(blocks = BLOCKS) {
       answer: result.text,
       abstained: false,
       citations,
-      checks: { ...checks, model: result.model, promptVersion: PROMPT_VERSION },
+      checks: {
+        ...checks,
+        model: result.model,
+        promptVersion: PROMPT_VERSION,
+        usage: result.usage,
+        timings: { rewriting: 0, retrieving: 1, answering: 2, checking: 0 },
+      },
     };
   };
 }
@@ -132,6 +138,7 @@ describe("local server", () => {
       wsUrl: `ws://127.0.0.1:${app.port}/ws`,
       httpUrl: "",
       auth: null,
+      corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
     });
   });
 
@@ -147,6 +154,19 @@ describe("local server", () => {
     expect((await fetch(`${base}/styles.css`)).headers.get("content-type")).toMatch(/^text\/css/);
     expect((await fetch(`${base}/missing.js`)).status).toBe(404);
     expect((await fetch(`${base}/..%2fserver.mjs`)).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("serves PDF.js and the faces from the site", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    const base = `http://127.0.0.1:${app.port}`;
+    const lib = await fetch(`${base}/vendor/pdf.min.mjs`);
+    expect(lib.status).toBe(200);
+    expect(lib.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect((await fetch(`${base}/vendor/pdf.worker.min.mjs`)).status).toBe(200);
+    const face = await fetch(`${base}/fonts/source-sans-3-latin-400-normal.woff2`);
+    expect(face.status).toBe(200);
+    expect(face.headers.get("content-type")).toBe("font/woff2");
+    expect((await fetch(`${base}/fonts/missing.woff2`)).status).toBe(404);
   });
 
   it("streams a turn through the stages and reports citation checks", async () => {
@@ -178,6 +198,13 @@ describe("local server", () => {
     expect(order.indexOf("evidence")).toBeLessThan(order.indexOf("token"));
     expect(order.lastIndexOf("token")).toBeLessThan(order.indexOf("done"));
     expect(done).toMatchObject({ thread: "t1", turnId: "u1" });
+    expect(done.checks.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(Object.keys(done.checks.timings)).toEqual([
+      "rewriting",
+      "retrieving",
+      "answering",
+      "checking",
+    ]);
     expect(done.checks).toMatchObject({
       sentences: 2,
       supported: 1,

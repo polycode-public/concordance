@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The PDF viewer panel. PDF.js loads from cdnjs on first use; when the CDN is
-// unreachable the panel says so, and the link to the original stays either way.
-
-const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299";
+// The PDF viewer panel. PDF.js loads from the site's own /vendor/ on first use; when it
+// does not load the panel says so, and the link to the original stays either way.
 
 const $ = (id) => document.getElementById(id);
 const panel = $("viewer");
@@ -22,8 +20,8 @@ let renderTask = null;
 
 async function loadPdfjs() {
   if (pdfjs) return pdfjs;
-  const lib = await import(`${PDFJS}/pdf.min.mjs`);
-  lib.GlobalWorkerOptions.workerSrc = `${PDFJS}/pdf.worker.min.mjs`;
+  const lib = await import("/vendor/pdf.min.mjs");
+  lib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
   pdfjs = lib;
   return lib;
 }
@@ -98,7 +96,7 @@ export async function openPdf({ url, page, title }) {
     lib = await loadPdfjs();
   } catch {
     canvas.hidden = true;
-    message("The PDF viewer could not load from cdnjs. Open the original instead.");
+    message("The PDF viewer could not load. Open the original instead.");
     return;
   }
   try {

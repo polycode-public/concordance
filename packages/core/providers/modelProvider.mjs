@@ -16,6 +16,8 @@
  * @property {string} text           The full answer text.
  * @property {string} model          The model id that produced it.
  * @property {string} promptVersion  The prompt version the caller passed, or 'unversioned'.
+ * @property {{ inputTokens: number, outputTokens: number } | null} usage
+ *   Token counts the model reported, or null when it reported none.
  */
 
 /**

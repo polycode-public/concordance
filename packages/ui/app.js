@@ -47,6 +47,13 @@ async function loadConfig() {
   return res.json();
 }
 
+function nameCorpus({ title, subtitle }) {
+  const name = `${title}: ${subtitle}`;
+  $("corpus-name").textContent = name;
+  $("signin-corpus").textContent = name;
+  document.title = `Concordance: ${title} ${subtitle}`;
+}
+
 async function connect() {
   let url = config.wsUrl;
   let token = null;
@@ -104,7 +111,7 @@ function onFrame(frame) {
       break;
     case "done":
       renderChecked(turn, frame.checks);
-      finishStages(turn);
+      finishStages(turn, frame.checks.timings);
       recordCitations(turn, frame.citations ?? []);
       finish(turn, "");
       break;
@@ -208,11 +215,15 @@ function renderStages(turn, stage) {
   });
 }
 
-function finishStages(turn) {
-  for (const li of turn.stages.children) {
+function finishStages(turn, timings) {
+  STAGES.forEach((stage, i) => {
+    const li = turn.stages.children[i];
     li.dataset.state = "done";
     li.removeAttribute("aria-current");
-  }
+    if (Number.isFinite(timings?.[stage])) {
+      li.append(" ", el("span", "stage-ms", `${(timings[stage] / 1000).toFixed(1)} s`));
+    }
+  });
   if (turn.startedAt !== null) {
     const seconds = ((performance.now() - turn.startedAt) / 1000).toFixed(1);
     turn.stages.append(el("li", "elapsed", `${seconds} s`));
@@ -263,25 +274,34 @@ function withChips(turn, text) {
 
 function renderChecked(turn, checks) {
   turn.answer.classList.remove("plain");
-  turn.answer.replaceChildren(
-    ...checks.marks.map((mark) => {
-      const span = document.createElement("span");
-      span.className = mark.supported ? "supported" : "unsupported";
-      span.title = mark.supported ? "cites evidence" : "unsupported";
-      span.append(...withChips(turn, mark.text), " ");
-      return span;
-    }),
-  );
+  if (checks.marks.length > 0)
+    turn.answer.replaceChildren(
+      ...checks.marks.map((mark) => {
+        const span = document.createElement("span");
+        span.className = mark.supported ? "supported" : "unsupported";
+        span.title = mark.supported ? "cites evidence" : "unsupported";
+        span.append(...withChips(turn, mark.text), " ");
+        return span;
+      }),
+    );
   turn.score.classList.toggle("warning", Boolean(checks.warning) && !checks.abstained);
   turn.score.classList.toggle("abstained", Boolean(checks.abstained));
   if (checks.abstained) {
     turn.score.textContent = "No claim made";
-    return;
+  } else {
+    turn.score.textContent = `${checks.supported} of ${checks.sentences} sentences supported`;
+    if (checks.droppedCitations > 0) {
+      const n = checks.droppedCitations;
+      turn.score.append(el("span", "dropped", `${n} citation${n === 1 ? "" : "s"} dropped`));
+    }
   }
-  turn.score.textContent = `${checks.supported} of ${checks.sentences} sentences supported`;
-  if (checks.droppedCitations > 0) {
-    const n = checks.droppedCitations;
-    turn.score.append(el("span", "dropped", `${n} citation${n === 1 ? "" : "s"} dropped`));
+  if (checks.usage) {
+    const { inputTokens, outputTokens } = checks.usage;
+    const fmt = (n) => n.toLocaleString("en-GB");
+    turn.score.append(
+      " ",
+      el("span", "usage", `in ${fmt(inputTokens)} · out ${fmt(outputTokens)} tokens`),
+    );
   }
 }
 
@@ -409,6 +429,7 @@ if (new URLSearchParams(location.search).has("present")) {
 
 try {
   config = await loadConfig();
+  nameCorpus(config.corpus);
   await connect();
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;

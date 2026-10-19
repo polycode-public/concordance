@@ -80,12 +80,22 @@ export const isAbstention = (answer, blocks) =>
  * @returns {Promise<{ answer: string, abstained: boolean,
  *   citations: { evidence: number, locator: { document: string, page: unknown, paragraph: unknown } }[],
  *   checks: { sentences: number, supported: number, flaggedRatio: number, warning: boolean,
- *     droppedCitations: number, marks: object[], model: string | null, promptVersion: string },
+ *     droppedCitations: number, marks: object[], model: string | null, promptVersion: string,
+ *     usage: { inputTokens: number, outputTokens: number } | null,
+ *     timings: { rewriting: number, retrieving: number, answering: number, checking: number } },
  *   evidenceBlocks: object[], retrievedIds: string[] }>}
  */
 export async function runQuery({ question, provider, db, signal, onToken, onStage, onEvidence }) {
   if (!db) throw new Error("runQuery needs a database");
+  const timings = {};
+  let stageStart = performance.now();
+  const endStage = (name) => {
+    const now = performance.now();
+    timings[name] = now - stageStart;
+    stageStart = now;
+  };
   onStage?.("rewriting");
+  endStage("rewriting");
   onStage?.("retrieving");
   const { fused } = await retrieve({ question, provider, db, signal });
   const hitIds = fused.slice(0, MAX_HITS).map((f) => f.id);
@@ -96,10 +106,12 @@ export async function runQuery({ question, provider, db, signal, onToken, onStag
   signal?.throwIfAborted();
   const evidenceBlocks = buildEvidence(hitIds, rows);
   onEvidence?.(evidenceBlocks);
+  endStage("retrieving");
 
   onStage?.("answering");
   let answer;
   let model = null;
+  let usage = null;
   if (evidenceBlocks.length === 0) {
     answer = NO_EVIDENCE_ANSWER;
     onToken?.(answer);
@@ -113,16 +125,33 @@ export async function runQuery({ question, provider, db, signal, onToken, onStag
     });
     answer = result.text;
     model = result.model;
+    usage = result.usage ?? null;
   }
   signal?.throwIfAborted();
+  endStage("answering");
 
   onStage?.("checking");
-  const { citations, checks } = checkAnswer(answer, evidenceBlocks);
+  const abstained = isAbstention(answer, evidenceBlocks);
+  const scored = checkAnswer(answer, evidenceBlocks);
+  const citations = abstained ? [] : scored.citations;
+  const checks = abstained
+    ? {
+        ...scored.checks,
+        abstained: true,
+        sentences: 0,
+        supported: 0,
+        flaggedRatio: 0,
+        warning: false,
+        droppedCitations: 0,
+        marks: [],
+      }
+    : scored.checks;
+  endStage("checking");
   return {
     answer,
-    abstained: isAbstention(answer, evidenceBlocks),
+    abstained,
     citations,
-    checks: { ...checks, model, promptVersion: PROMPT_VERSION },
+    checks: { ...checks, model, promptVersion: PROMPT_VERSION, usage, timings },
     evidenceBlocks,
     retrievedIds: fused.map((f) => f.id),
   };
