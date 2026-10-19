@@ -114,24 +114,48 @@ export function toDataApiParameter(name, value) {
 }
 
 /**
- * Maps a Data API result to the `pg` result shape: int8 columns as strings and jsonb
- * columns parsed, as `pg` returns them.
+ * One Data API field as `pg` returns the column: int8 as a string, jsonb parsed, an array as
+ * an array, NULL as null. An unknown field shape throws, so a new column type is noticed.
+ * @param {object} field
+ * @param {string} typeName the column's `typeName` from the result metadata
+ */
+export function fromDataApiField(field, typeName) {
+  if (field.isNull) return null;
+  if ("stringValue" in field) {
+    return JSON_TYPES.has(typeName) ? JSON.parse(field.stringValue) : field.stringValue;
+  }
+  if ("longValue" in field) {
+    return INT8_TYPES.has(typeName) ? String(field.longValue) : field.longValue;
+  }
+  if ("doubleValue" in field) return field.doubleValue;
+  if ("booleanValue" in field) return field.booleanValue;
+  if ("arrayValue" in field) {
+    const a = field.arrayValue;
+    if (a.longValues) return typeName === "_int8" ? a.longValues.map(String) : a.longValues;
+    if (a.stringValues) return a.stringValues;
+    if (a.doubleValues) return a.doubleValues;
+    if (a.booleanValues) return a.booleanValues;
+    if (a.arrayValues)
+      return a.arrayValues.map((inner) => fromDataApiField({ arrayValue: inner }, typeName));
+    return [];
+  }
+  throw new Error(`unsupported Data API field ${JSON.stringify(field)} for type ${typeName}`);
+}
+
+/**
+ * Maps a Data API result to the `pg` result shape. The result carries `records` with
+ * `columnMetadata`; `formatRecordsAs: "JSON"` is never requested, because that form omits the
+ * metadata and leaves jsonb columns as strings.
  */
 export function toRows(result) {
-  if (result.formattedRecords === undefined) return [];
-  const rows = JSON.parse(result.formattedRecords);
-  const metadata = result.columnMetadata ?? [];
-  const json = metadata.filter((c) => JSON_TYPES.has(c.typeName)).map((c) => c.name);
-  const int8 = metadata.filter((c) => INT8_TYPES.has(c.typeName)).map((c) => c.name);
-  for (const row of rows) {
-    for (const column of json) {
-      if (typeof row[column] === "string") row[column] = JSON.parse(row[column]);
-    }
-    for (const column of int8) {
-      if (typeof row[column] === "number") row[column] = String(row[column]);
-    }
-  }
-  return rows;
+  if (result.records === undefined) return [];
+  const metadata = result.columnMetadata;
+  if (!metadata) throw new Error("the Data API result has records but no columnMetadata");
+  return result.records.map((record) =>
+    Object.fromEntries(
+      record.map((field, i) => [metadata[i].name, fromDataApiField(field, metadata[i].typeName)]),
+    ),
+  );
 }
 
 const TRANSACTION_CONTROL = /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK)\s*;?\s*$/i;
@@ -206,14 +230,13 @@ export function createDataApiDb({
         sql: toNamedParameters(text),
         parameters: params.map((value, i) => toDataApiParameter(`p${i + 1}`, value)),
         includeResultMetadata: true,
-        formatRecordsAs: "JSON",
         ...(transactionId ? { transactionId } : {}),
       };
       const result = await send((lib) => new lib.ExecuteStatementCommand(input));
       const rows = toRows(result);
       return {
         rows,
-        rowCount: result.formattedRecords ? rows.length : result.numberOfRecordsUpdated,
+        rowCount: result.records ? rows.length : result.numberOfRecordsUpdated,
       };
     };
   };

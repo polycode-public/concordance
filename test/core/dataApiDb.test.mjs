@@ -103,23 +103,68 @@ describe("createDataApiDb", () => {
         { name: "p6", value: { stringValue: "{1,2}" } },
       ],
       includeResultMetadata: true,
-      formatRecordsAs: "JSON",
     });
   });
 
-  it("maps formattedRecords to rows with jsonb parsed and int8 as strings", async () => {
+  it("maps records to rows with jsonb parsed, int8 as strings and arrays as arrays", async () => {
     const client = fakeClient(() => ({
-      formattedRecords: JSON.stringify([{ id: 41, n: 2, locator: '{"page":3}', text: "x" }]),
+      records: [
+        [
+          { longValue: 41 },
+          { longValue: 2 },
+          { stringValue: '{"page":3}' },
+          { stringValue: "x" },
+          { isNull: true },
+          { booleanValue: true },
+          { doubleValue: 0.5 },
+          { arrayValue: { longValues: [1, 2] } },
+          { arrayValue: { stringValues: ["a", "b"] } },
+          { stringValue: "2026-10-18 23:13:53" },
+        ],
+      ],
       columnMetadata: [
-        { name: "id", typeName: "int8" },
+        { name: "id", typeName: "bigserial" },
         { name: "n", typeName: "int4" },
         { name: "locator", typeName: "jsonb" },
         { name: "text", typeName: "text" },
+        { name: "parent_id", typeName: "int8" },
+        { name: "flag", typeName: "bool" },
+        { name: "score", typeName: "float4" },
+        { name: "ids", typeName: "_int8" },
+        { name: "names", typeName: "_text" },
+        { name: "fetched_at", typeName: "timestamptz" },
       ],
     }));
     const { rows, rowCount } = await open(client).query("SELECT 1");
-    expect(rows).toEqual([{ id: "41", n: 2, locator: { page: 3 }, text: "x" }]);
+    expect(rows).toEqual([
+      {
+        id: "41",
+        n: 2,
+        locator: { page: 3 },
+        text: "x",
+        parent_id: null,
+        flag: true,
+        score: 0.5,
+        ids: ["1", "2"],
+        names: ["a", "b"],
+        fetched_at: "2026-10-18 23:13:53",
+      },
+    ]);
     expect(rowCount).toBe(1);
+  });
+
+  it("throws on records without column metadata and on an unknown field shape", async () => {
+    await expect(
+      open(fakeClient(() => ({ records: [[{ longValue: 1 }]] }))).query("SELECT 1"),
+    ).rejects.toThrow(/columnMetadata/);
+    await expect(
+      open(
+        fakeClient(() => ({
+          records: [[{ blobValue: "AA==" }]],
+          columnMetadata: [{ name: "b", typeName: "bytea" }],
+        })),
+      ).query("SELECT 1"),
+    ).rejects.toThrow(/unsupported Data API field/);
   });
 
   it("returns no rows for a statement without records", async () => {
