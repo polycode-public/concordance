@@ -75,7 +75,8 @@ export function createHandler({
     if (frame.type === "turn") {
       const ttl = Math.floor(now() / 1000) + TTL_SECONDS;
       await cancels.start(cancelKey(connectionId, frame.thread), frame.turnId, ttl);
-      await invokeTurn({ frame, connectionId, domainName, stage });
+      const userId = event.requestContext.authorizer?.principalId;
+      await invokeTurn({ frame, connectionId, domainName, stage, userId });
     } else if (frame.type === "cancel") {
       const flagged = await cancels.cancel(cancelKey(connectionId, frame.thread), frame.turnId);
       if (!flagged) await send(serverFrame.cancelled(frame.thread, frame.turnId));

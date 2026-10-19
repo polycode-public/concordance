@@ -18,6 +18,20 @@ describe("splitStatements", () => {
     for (const s of statements) expect(s.endsWith(";")).toBe(false);
   });
 
+  it("splits 0002_session_frames.sql into its statements and names the view", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0002_session_frames.sql"), "utf8");
+    const statements = splitStatements(sql);
+    expect(statements).toHaveLength(3);
+    expect(statements[0]).toMatch(
+      /ALTER TABLE session_turns ADD COLUMN frames jsonb NOT NULL DEFAULT '\[\]'::jsonb$/,
+    );
+    expect(statements[1]).toMatch(/ALTER COLUMN model_id DROP NOT NULL$/);
+    expect(statements[2]).toMatch(/^(--[^\n]*\n)*CREATE VIEW conversations AS/);
+    for (const column of ["AS session_id", "t.thread", "AS first_question", "AS last_turn_at"])
+      expect(statements[2]).toContain(column);
+    expect(statements[2]).toContain("AS turn_count");
+  });
+
   it("does not split on a ; inside a string literal or an identifier", () => {
     expect(splitStatements(`SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"; SELECT 2`)).toEqual([
       `SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"`,

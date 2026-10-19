@@ -43,6 +43,7 @@ new AppStack(app, stackName("app"), {
   dbResourceArn: storeStack.cluster.clusterArn,
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
+  budgetName: `${PROJECT}-${envName}-monthly`,
   description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
 });
 

@@ -29,7 +29,27 @@
       <h1>Concordance</h1>
       <p class="inquiry" id="corpus-name"></p>
       <p id="connection" class="small soft" role="status">connecting</p>
+      <button
+        type="button"
+        id="conversations-open"
+        class="quiet small"
+        aria-controls="conversations"
+        aria-expanded="false"
+        hidden
+      >
+        Conversations
+      </button>
+      <p id="spend" class="spend small" role="status" hidden></p>
     </header>
+    <aside id="conversations" class="drawer" hidden aria-labelledby="conversations-title">
+      <div class="drawer-bar">
+        <h2 id="conversations-title">Conversations</h2>
+        <button type="button" id="conversations-close" class="quiet">Close</button>
+      </div>
+      <button type="button" id="conversations-new">New conversation</button>
+      <p id="conversations-message" class="message small" role="status"></p>
+      <ol id="conversations-list"></ol>
+    </aside>
     <form id="signin" class="signin" hidden>
       <h2>Sign in to Concordance</h2>
       <p class="soft" id="signin-corpus"></p>

@@ -139,7 +139,17 @@ describe("local server", () => {
       httpUrl: "",
       auth: null,
       corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
+      spendUrl: "/spend",
+      conversationsUrl: "/conversations",
     });
+  });
+
+  it("answers /spend with null, because the laptop has no budget", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    const res = await fetch(`http://127.0.0.1:${app.port}/spend`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/^application\/json/);
+    expect(await res.json()).toBeNull();
   });
 
   it("serves the UI with the correct content types", async () => {
@@ -278,6 +288,205 @@ describe("local server", () => {
     const error = await client.until((f) => f.type === "error");
     client.ws.close();
     expect(error.message).toMatch(/JSON/);
+  });
+
+  describe("the session log and the conversations", () => {
+    /** A db that keeps the sessions and session_turns rows the server writes. */
+    function storeDb() {
+      const sessions = [];
+      const turns = [];
+      return {
+        sessions,
+        turns,
+        query: async (text, params) => {
+          if (/^INSERT INTO sessions/.test(text)) {
+            sessions.push({ id: params[0], user_id: params[1] });
+            return { rows: [] };
+          }
+          if (/^INSERT INTO session_turns/.test(text)) {
+            const [session_id, thread, turn_id, user_text, prompt_version, model_id] = params;
+            turns.push({
+              session_id,
+              thread,
+              turn_id,
+              user_text,
+              prompt_version,
+              model_id,
+              raw_output: params[6],
+              checks: JSON.parse(params[7]),
+              frames: JSON.parse(params[8]),
+              created_at: "2026-10-19T09:30:00.000Z",
+            });
+            return { rows: [] };
+          }
+          if (/FROM conversations/.test(text)) {
+            return {
+              rows: sessions
+                .filter((s) => s.user_id === params[0])
+                .flatMap((s) => {
+                  const own = turns.filter((t) => t.session_id === s.id);
+                  return own.length
+                    ? [
+                        {
+                          session_id: s.id,
+                          thread: own[0].thread,
+                          first_question: own[0].user_text,
+                          turn_count: own.length,
+                          last_turn_at: own.at(-1).created_at,
+                        },
+                      ]
+                    : [];
+                }),
+            };
+          }
+          if (/FROM sessions WHERE/.test(text)) {
+            return { rows: sessions.filter((s) => s.id === params[0] && s.user_id === params[1]) };
+          }
+          if (/FROM session_turns/.test(text)) {
+            return {
+              rows: turns.filter(
+                (t) => t.session_id === params[0] && (params[1] === null || t.thread === params[1]),
+              ),
+            };
+          }
+          return { rows: [] };
+        },
+      };
+    }
+
+    const waitFor = async (check) => {
+      for (let i = 0; i < 100 && !check(); i++) await sleep(10);
+      expect(check()).toBe(true);
+    };
+
+    it("writes a sessions row on connect and a session_turns row with the turn's frames", async () => {
+      const db = storeDb();
+      app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }), { db });
+      const client = await connect(app.port);
+      client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Were the stairs dark?" });
+      await client.until((f) => f.type === "done");
+      await waitFor(() => db.turns.length === 1);
+      client.ws.close();
+
+      expect(db.sessions).toHaveLength(1);
+      expect(db.sessions[0].user_id).toBe("laptop");
+      expect(db.sessions[0].id).toMatch(/^[0-9a-f-]{36}$/);
+      const [turn] = db.turns;
+      expect(turn).toMatchObject({
+        session_id: db.sessions[0].id,
+        thread: "t1",
+        turn_id: "u1",
+        user_text: "Were the stairs dark?",
+        prompt_version: PROMPT_VERSION,
+        model_id: "fake-chat",
+        raw_output: TOKENS.join(""),
+      });
+      expect(turn.checks).toMatchObject({ sentences: 2, supported: 1, abstained: false });
+      expect(turn.frames.map((f) => f.type)).toEqual([
+        "status",
+        "status",
+        "evidence",
+        "status",
+        "token",
+        "status",
+        "done",
+      ]);
+      expect(turn.frames.find((f) => f.type === "token").text).toBe(TOKENS.join(""));
+      expect(turn.frames.at(-1)).toEqual(client.frames.find((f) => f.type === "done"));
+    });
+
+    it("writes a cancelled turn without a model result", async () => {
+      const db = storeDb();
+      app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 60 }), { db });
+      const client = await connect(app.port);
+      client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Question?" });
+      await client.until((f) => f.type === "token");
+      client.send({ type: "cancel", thread: "t1", turnId: "u1" });
+      await client.until((f) => f.type === "cancelled");
+      await waitFor(() => db.turns.length === 1);
+      client.ws.close();
+      expect(db.turns[0]).toMatchObject({ model_id: null, raw_output: null, checks: {} });
+      expect(db.turns[0].frames.at(-1)).toEqual({
+        type: "cancelled",
+        thread: "t1",
+        turnId: "u1",
+      });
+    });
+
+    it("keeps the turn when the session log cannot be written", async () => {
+      const errors = [];
+      const log = console.error;
+      console.error = (...args) => errors.push(args);
+      try {
+        const db = fakeDb();
+        const query = db.query;
+        db.query = async (text, params) => {
+          if (/^INSERT INTO session/.test(text)) throw new Error("disk full");
+          return query(text, params);
+        };
+        app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }), { db });
+        const client = await connect(app.port);
+        client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Dark?" });
+        await client.until((f) => f.type === "done");
+        await waitFor(() => errors.length === 2);
+        client.ws.close();
+      } finally {
+        console.error = log;
+      }
+      expect(errors.map((e) => e[0])).toEqual([
+        expect.stringMatching(/^session log: session .* was not written$/),
+        expect.stringMatching(/^session log: turn u1 of session .* was not written$/),
+      ]);
+      expect(errors[0][1].message).toBe("disk full");
+    });
+
+    it("lists the conversations and answers one session's turns with their frames", async () => {
+      const db = storeDb();
+      app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }), { db });
+      const client = await connect(app.port);
+      client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Were the stairs dark?" });
+      await client.until((f) => f.type === "done");
+      await waitFor(() => db.turns.length === 1);
+      client.ws.close();
+      const base = `http://127.0.0.1:${app.port}/conversations`;
+
+      const list = await fetch(base);
+      expect(list.headers.get("content-type")).toMatch(/^application\/json/);
+      const sessionId = db.sessions[0].id;
+      expect(await list.json()).toEqual({
+        conversations: [
+          {
+            sessionId,
+            thread: "t1",
+            firstQuestion: "Were the stairs dark?",
+            lastTurnAt: "2026-10-19T09:30:00.000Z",
+            turnCount: 1,
+          },
+        ],
+      });
+
+      const one = await (await fetch(`${base}/${sessionId}?thread=t1`)).json();
+      expect(one.sessionId).toBe(sessionId);
+      expect(one.turns).toHaveLength(1);
+      expect(one.turns[0]).toMatchObject({
+        thread: "t1",
+        turnId: "u1",
+        userText: "Were the stairs dark?",
+        promptVersion: PROMPT_VERSION,
+        modelId: "fake-chat",
+      });
+      expect(one.turns[0].frames).toEqual(db.turns[0].frames);
+
+      expect((await fetch(`${base}/not-a-uuid`)).status).toBe(400);
+      expect((await fetch(`${base}/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+    });
+
+    it("answers 503 for the conversations when no database is configured", async () => {
+      app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+      const base = `http://127.0.0.1:${app.port}/conversations`;
+      expect((await fetch(base)).status).toBe(503);
+      expect((await fetch(`${base}/00000000-0000-4000-8000-000000000000`)).status).toBe(503);
+    });
   });
 
   describe("originals", () => {

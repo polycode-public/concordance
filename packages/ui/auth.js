@@ -43,6 +43,9 @@ function store(token) {
   }
 }
 
+/** The stored id token while it is valid, else null. */
+export const currentToken = () => stored();
+
 /** Forgets the token, so the next signIn shows the form. */
 export function signOut() {
   memory = null;

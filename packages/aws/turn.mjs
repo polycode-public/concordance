@@ -4,10 +4,12 @@
 // The turn function: runs one chat turn, invoked asynchronously by the WebSocket route, and
 // posts the same frames in the same order as the laptop server. Nothing can abort a running
 // Lambda from outside, so it polls the cancel table and aborts itself when the thread's item
-// names another turn or is flagged.
+// names another turn or is flagged. At the end it writes the turn, with every frame it posted,
+// to the session log.
 
 import { serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
+import { recordSession, recordTurn, sessionIdFor } from "../core/sessions.mjs";
 import { cancelKey } from "./clients.mjs";
 
 const blockFrame = (b) => ({
@@ -37,7 +39,7 @@ export function createHandler({
   runQuery = defaultRunQuery,
   pollMs = 500,
 }) {
-  return async function handler({ frame, connectionId, domainName, stage }) {
+  return async function handler({ frame, connectionId, domainName, stage, userId }) {
     const { thread, turnId, text } = frame;
     const target = { connectionId, domainName, stage };
     const pk = cancelKey(connectionId, thread);
@@ -52,8 +54,10 @@ export function createHandler({
       controller.abort();
     };
 
+    const frames = [];
     let queue = Promise.resolve();
     const send = (out) => {
+      frames.push(out);
       queue = queue.then(async () => {
         if (gone) return;
         try {
@@ -83,6 +87,7 @@ export function createHandler({
     };
 
     let db;
+    let finished = null;
     try {
       db = await openDb();
       const provider = await providerFor();
@@ -112,17 +117,34 @@ export function createHandler({
           result.citations,
         ),
       );
+      finished = result;
     } catch (err) {
       if (failure) send(serverFrame.error(failure.message, thread, turnId));
       else if (signal.aborted) send(serverFrame.cancelled(thread, turnId));
       else send(serverFrame.error(err.message, thread, turnId));
     } finally {
       await queue;
+      if (db) await logTurn(db, { connectionId, userId, thread, turnId, text, finished, frames });
       await cancels.finish(pk, turnId);
       await db?.close?.();
     }
     if (failure) throw failure;
   };
+}
+
+/**
+ * Writes the sessions row of the connection, once, and the turn's row. The session log is a
+ * queue beside the chat: a failed write is logged with its cause and never fails the turn,
+ * whose frames have already been posted.
+ */
+async function logTurn(db, { connectionId, userId, thread, turnId, text, finished, frames }) {
+  const sessionId = sessionIdFor(connectionId);
+  try {
+    await recordSession(db, { id: sessionId, userId });
+    await recordTurn(db, { sessionId, thread, turnId, userText: text, result: finished, frames });
+  } catch (err) {
+    console.error(`session log: turn ${turnId} of session ${sessionId} was not written`, err);
+  }
 }
 
 let realHandler;

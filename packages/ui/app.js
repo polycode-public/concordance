@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { isExpired, signIn, signOut } from "./auth.js";
+import { currentToken, isExpired, signIn, signOut } from "./auth.js";
+import { mountConversations, replayTurns } from "./conversations.js";
+import { showSpend } from "./spend.js";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -18,7 +20,8 @@ const evidenceEmpty = $("evidence-empty");
 
 const STAGES = ["rewriting", "retrieving", "answering", "checking"];
 const TAG = /\[E(\d+)\]/g;
-const thread = "main";
+/** The conversation: a thread on this connection's session. */
+let thread = crypto.randomUUID();
 
 let ws;
 /** @type {Turn | null} The turn whose frames are still arriving. */
@@ -38,7 +41,7 @@ let opening = null;
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -173,7 +176,7 @@ function el(tag, className, text) {
 }
 
 /** @returns {Turn} */
-function startTurn(text) {
+function startTurn(text, id = crypto.randomUUID()) {
   const article = el("article", "turn");
   const q = el("div", "question");
   q.append(el("span", "label small", "You asked"), el("p", null, text));
@@ -193,7 +196,7 @@ function startTurn(text) {
   turnsEl.append(article);
   article.scrollIntoView({ block: "start" });
   return {
-    id: crypto.randomUUID(),
+    id,
     blocks: new Map(),
     streamed: "",
     startedAt: null,
@@ -354,6 +357,37 @@ function finish(turn, message) {
   cancelButton.disabled = true;
 }
 
+/** Empties the page for another conversation on a new thread. */
+function startNew() {
+  if (current) cancel();
+  current = null;
+  newest = null;
+  thread = crypto.randomUUID();
+  turnsEl.replaceChildren();
+  documents.clear();
+  renderDocuments();
+  evidenceCount.textContent = "";
+  evidenceEmpty.hidden = false;
+  evidenceEl.replaceChildren();
+  cancelButton.disabled = true;
+}
+
+/** Shows stored turns through onFrame, as they rendered live; a new question starts a new thread. */
+function replay(turns) {
+  startNew();
+  replayTurns(turns, {
+    begin: (stored) => {
+      current = startTurn(stored.userText, stored.turnId);
+      newest = current;
+    },
+    onFrame,
+    end: () => {
+      current = null;
+      cancelButton.disabled = true;
+    },
+  });
+}
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = question.value.trim();
@@ -431,6 +465,12 @@ try {
   config = await loadConfig();
   nameCorpus(config.corpus);
   await connect();
+  mountConversations(config, {
+    token: () => (config.auth ? currentToken() : null),
+    replay,
+    startNew,
+  });
+  await showSpend(config, config.auth ? currentToken() : null);
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;
 }

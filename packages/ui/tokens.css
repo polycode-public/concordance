@@ -44,6 +44,8 @@
   --highlight-deep: #e9cf3a;
   --focus: #0b5bd3;
   --button-ink: #fbfbf9;
+  --spend-fill: #4a4f57;
+  --spend-empty: #cfd0cb;
   --scrim: color-mix(in srgb, var(--ink) 60%, transparent);
 
   /* Faces */
@@ -89,6 +91,8 @@
     --highlight-deep: #75651a;
     --focus: #7fb0ff;
     --button-ink: #17191c;
+    --spend-fill: #b5b9c0;
+    --spend-empty: #3a3e45;
   }
 }
 
