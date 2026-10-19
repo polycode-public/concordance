@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockProvider } from "../../packages/core/providers/bedrockProvider.mjs";
 import { providerFromEnv } from "../../packages/core/providers/index.mjs";
 import { assertProvider } from "../../packages/core/providers/modelProvider.mjs";
@@ -209,11 +209,73 @@ describe("bedrock provider", () => {
     expect(waits[1]).toBeLessThanOrEqual(2000);
   });
 
-  it("rejects after six attempts and names the count", async () => {
+  it("rejects after eight attempts and names the count", async () => {
     const client = throttlingClient(99, { InvokeModelCommand: titan(1024) });
-    const p = createBedrockProvider({}, { sdk, client, sleep: async () => {} });
-    await expect(p.embed(["abc"])).rejects.toThrow(/6 attempts/);
-    expect(client.calls).toHaveLength(6);
+    const waits = [];
+    const sleep = async (ms) => void waits.push(ms);
+    const p = createBedrockProvider({}, { sdk, client, sleep });
+    await expect(p.embed(["abc"])).rejects.toThrow(/8 attempts/);
+    expect(client.calls).toHaveLength(8);
+    expect(waits).toHaveLength(7);
+    waits.forEach((ms, i) => expect(ms).toBeLessThanOrEqual(Math.min(60000, 1000 * 2 ** i)));
+    expect(waits[6]).toBeGreaterThan(0);
+  });
+
+  function clockedClient(responders) {
+    vi.useFakeTimers();
+    const state = { stamps: [] };
+    const client = {
+      async send(command) {
+        state.stamps.push(Date.now());
+        return responders[command.constructor.name](command);
+      },
+    };
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    return { state, client, sleep, now: () => Date.now() };
+  }
+  afterEach(() => vi.useRealTimers());
+
+  it("spaces concurrent extraction calls at least 1.5 seconds apart", async () => {
+    const { state, client, sleep, now } = clockedClient({ ConverseCommand: converseReply("{}") });
+    const p = createBedrockProvider({}, { sdk, client, sleep, now });
+    const all = Promise.all(Array.from({ length: 10 }, () => p.extractJson({ prompt: "x" })));
+    await vi.advanceTimersByTimeAsync(60000);
+    await all;
+    expect(state.stamps).toHaveLength(10);
+    state.stamps
+      .slice(1)
+      .forEach((t, i) => expect(t - state.stamps[i]).toBeGreaterThanOrEqual(1500));
+    const perMinute = state.stamps.filter((t) => t < 60000).length;
+    expect(perMinute).toBeLessThanOrEqual(40);
+    expect(state.stamps.at(-1) - state.stamps[0]).toBe(9 * 1500);
+  });
+
+  it("paces the retry of a throttled extraction call too", async () => {
+    const { state, sleep, now } = clockedClient({});
+    let thrown = 0;
+    const client = {
+      async send() {
+        state.stamps.push(Date.now());
+        if (thrown++ < 2)
+          throw Object.assign(new Error("Too many requests"), { name: "ThrottlingException" });
+        return converseReply("{}")();
+      },
+    };
+    const p = createBedrockProvider({}, { sdk, client, sleep, now });
+    const done = p.extractJson({ prompt: "x" });
+    await vi.advanceTimersByTimeAsync(120000);
+    await done;
+    expect(state.stamps).toHaveLength(3);
+    state.stamps
+      .slice(1)
+      .forEach((t, i) => expect(t - state.stamps[i]).toBeGreaterThanOrEqual(1500));
+  });
+
+  it("does not pace embeds", async () => {
+    const { state, client, sleep, now } = clockedClient({ InvokeModelCommand: titan(1024) });
+    const p = createBedrockProvider({}, { sdk, client, sleep, now });
+    await p.embed(["a", "b", "c", "d", "e", "f"]);
+    expect(new Set(state.stamps).size).toBe(1);
   });
 
   it("retries an HTTP 429 and does not retry other errors", async () => {
