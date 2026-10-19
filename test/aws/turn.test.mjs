@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHandler } from "../../packages/aws/turn.mjs";
+import { sessionIdFor } from "../../packages/core/sessions.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { PROMPT_VERSION, answerMessages } from "../../packages/core/prompt.mjs";
 import { checkAnswer } from "../../packages/core/query.mjs";
@@ -55,7 +56,14 @@ async function stubQuery({ question, provider, db, signal, onStage, onEvidence, 
 function fakeDb() {
   const db = {
     closed: false,
-    query: async () => ({ rows: BLOCKS }),
+    writes: [],
+    query: async (text, params) => {
+      if (/^INSERT/.test(text)) {
+        db.writes.push({ text, params });
+        return { rows: [] };
+      }
+      return { rows: BLOCKS };
+    },
     close: async () => {
       db.closed = true;
     },
@@ -110,6 +118,7 @@ const EVENT = {
   connectionId: "c1",
   domainName: "abc.execute-api.eu-west-2.amazonaws.com",
   stage: "prod",
+  userId: "sub-1",
 };
 
 describe("turn function", () => {
@@ -165,6 +174,53 @@ describe("turn function", () => {
     });
     expect(db.closed).toBe(true);
     expect(cancels.finished).toEqual([["c1#t1", "u1"]]);
+  });
+
+  it("writes the session and the turn with every frame it posted at done", async () => {
+    const { handler, db, frames } = setup();
+    await handler(EVENT);
+    const sessionId = sessionIdFor("c1");
+    expect(db.writes).toHaveLength(2);
+    expect(db.writes[0].text).toMatch(/^INSERT INTO sessions/);
+    expect(db.writes[0].params).toEqual([sessionId, "sub-1"]);
+    expect(db.writes[1].text).toMatch(/^INSERT INTO session_turns/);
+    const [session, thread, turnId, userText, promptVersion, modelId, rawOutput, checks, stored] =
+      db.writes[1].params;
+    expect([session, thread, turnId, userText, promptVersion, modelId, rawOutput]).toEqual([
+      sessionId,
+      "t1",
+      "u1",
+      "Were the stairs dark?",
+      PROMPT_VERSION,
+      "fake-chat",
+      TOKENS.join(""),
+    ]);
+    expect(JSON.parse(checks)).toMatchObject({ sentences: 2, supported: 1, abstained: false });
+    const storedFrames = JSON.parse(stored);
+    expect(storedFrames.at(-1)).toEqual(frames.at(-1));
+    expect(storedFrames.filter((f) => f.type === "token")).toEqual([
+      { type: "token", thread: "t1", turnId: "u1", text: TOKENS.join("") },
+    ]);
+    expect(storedFrames).toHaveLength(frames.length - TOKENS.length + 1);
+  });
+
+  it("finishes the turn and logs the cause when the session log write fails", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { handler, db, frames, cancels } = setup();
+    const query = db.query;
+    db.query = async (text, params) => {
+      if (/^INSERT/.test(text)) throw new Error("the cluster is resuming");
+      return query(text, params);
+    };
+    await handler(EVENT);
+    expect(frames.at(-1).type).toBe("done");
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringMatching(/^session log: turn u1 of session .* was not written$/),
+      expect.objectContaining({ message: "the cluster is resuming" }),
+    );
+    expect(cancels.finished).toEqual([["c1#t1", "u1"]]);
+    expect(db.closed).toBe(true);
+    errors.mockRestore();
   });
 
   it("stops mid-stream and posts cancelled when the thread's item is flagged", async () => {

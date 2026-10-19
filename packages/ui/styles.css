@@ -150,6 +150,79 @@ a {
   color: var(--red-ink);
 }
 
+/* The conversations drawer */
+
+.drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--unit);
+  width: min(24rem, 100%);
+  padding: var(--gutter);
+  overflow-y: auto;
+  background: var(--paper);
+  border-right: var(--rule-width) solid var(--rule);
+}
+
+.drawer[hidden],
+.bar button[hidden] {
+  display: none;
+}
+
+.drawer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--unit);
+}
+
+.drawer h2 {
+  font-size: var(--size-title);
+  line-height: var(--line-title);
+  font-weight: var(--weight-label);
+}
+
+.drawer .message {
+  color: var(--red-ink);
+}
+
+.drawer .message:empty {
+  display: none;
+}
+
+.drawer ol {
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-row {
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.conversation-row button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: var(--unit) 0;
+  border: 0;
+  text-align: left;
+}
+
+.conversation-row .first {
+  overflow-wrap: anywhere;
+}
+
+.drawer .empty {
+  color: var(--ink-soft);
+}
+
+.conversation-row .meta {
+  color: var(--ink-soft);
+}
+
 /* The desk: the conversation, the bundle and the viewer */
 
 .desk {

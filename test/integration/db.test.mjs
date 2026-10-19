@@ -7,6 +7,12 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../../scripts/db-migrate.mjs";
 import { DEFAULT_DATABASE_URL } from "../../packages/core/db.mjs";
+import {
+  conversationTurns,
+  listConversations,
+  recordSession,
+  recordTurn,
+} from "../../packages/core/sessions.mjs";
 
 const enabled = process.env.CONCORDANCE_DB_TESTS === "1";
 if (!enabled) console.log("database tier skipped: set CONCORDANCE_DB_TESTS=1 to run it");
@@ -32,9 +38,12 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
 
   it("applies migrations once and skips them on a second run", async () => {
     const log = [];
-    expect(await migrate(client, { log: (l) => log.push(l) })).toContain("0001_initial.sql");
+    expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([
+      "0001_initial.sql",
+      "0002_session_frames.sql",
+    ]);
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([]);
-    expect(log.at(-1)).toMatch(/^skip\s+0001_initial\.sql$/);
+    expect(log.slice(-2)).toEqual(["skip    0001_initial.sql", "skip    0002_session_frames.sql"]);
   });
 
   it("creates the tables, the triples view and the search indexes", async () => {
@@ -155,5 +164,65 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       [ids[1]],
     );
     expect(res.rows).toEqual([{ prev: "neighbour 0", cur: "neighbour 1", next: "neighbour 2" }]);
+  });
+
+  it("writes a session and its turns and reads them through the conversations view", async () => {
+    const sessionId = "6f1c2b9e-3a4d-4e5f-8a6b-7c8d9e0f1a2b";
+    await recordSession(client, { id: sessionId, userId: "laptop" });
+    await recordSession(client, { id: sessionId, userId: "laptop" });
+    const frames = [
+      { type: "token", thread: "t1", turnId: "u1", text: "Dark " },
+      { type: "token", thread: "t1", turnId: "u1", text: "[E1]." },
+      { type: "done", thread: "t1", turnId: "u1", checks: { supported: 1 }, citations: [] },
+    ];
+    await recordTurn(client, {
+      sessionId,
+      thread: "t1",
+      turnId: "u1",
+      userText: "Were the stairs dark?",
+      result: {
+        answer: "Dark [E1].",
+        abstained: false,
+        checks: { model: "m1", promptVersion: "p1" },
+      },
+      frames,
+    });
+    await recordTurn(client, {
+      sessionId,
+      thread: "t1",
+      turnId: "u2",
+      userText: "And the lobby?",
+      result: null,
+      frames: [{ type: "cancelled", thread: "t1", turnId: "u2" }],
+    });
+
+    const [conversation] = await listConversations(client, "laptop");
+    expect(conversation).toMatchObject({
+      sessionId,
+      thread: "t1",
+      firstQuestion: "Were the stairs dark?",
+      turnCount: 2,
+    });
+    expect(conversation.lastTurnAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    expect(await listConversations(client, "someone-else")).toEqual([]);
+
+    const { turns } = await conversationTurns(client, {
+      sessionId,
+      userId: "laptop",
+      thread: "t1",
+    });
+    expect(turns.map((t) => [t.turnId, t.modelId])).toEqual([
+      ["u1", "m1"],
+      ["u2", null],
+    ]);
+    expect(turns[0].frames).toEqual([
+      { type: "token", thread: "t1", turnId: "u1", text: "Dark [E1]." },
+      frames[2],
+    ]);
+    expect(await conversationTurns(client, { sessionId, userId: "someone-else" })).toBeNull();
+    const row = await client.query(
+      "SELECT query_rewrites, retrieved_ids, reranker_scores FROM session_turns WHERE turn_id = 'u1'",
+    );
+    expect(row.rows).toEqual([{ query_rewrites: [], retrieved_ids: [], reranker_scores: {} }]);
   });
 });

@@ -44,6 +44,7 @@ const event = (routeKey, body) => ({
     connectionId: "c1",
     domainName: "abc.execute-api.eu-west-2.amazonaws.com",
     stage: "prod",
+    authorizer: { principalId: "sub-1", username: "demo" },
   },
   body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
 });
@@ -73,6 +74,7 @@ describe("WebSocket routes", () => {
       {
         frame: { type: "turn", thread: "t1", turnId: "u1", text: "Dark?", attachments: [] },
         ...TARGET,
+        userId: "sub-1",
       },
     ]);
     expect(posted).toEqual([]);

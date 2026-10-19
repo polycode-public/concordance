@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The laptop server: static UI over HTTP, /health, /config.json, /spend, and the chat
-// WebSocket at /ws.
+// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations, and
+// the chat WebSocket at /ws.
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
@@ -11,6 +12,14 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
+import {
+  LAPTOP_USER,
+  conversationTurns,
+  isUuid,
+  listConversations,
+  recordSession,
+  recordTurn,
+} from "../core/sessions.mjs";
 import { PAGE_ASSETS } from "../../scripts/stage-page-assets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -158,6 +167,7 @@ export async function createServer({
           auth: null,
           corpus: DEFAULT_CORPUS,
           spendUrl: "/spend",
+          conversationsUrl: "/conversations",
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
@@ -167,6 +177,10 @@ export async function createServer({
         // The laptop has no budget; null hides the spend strip.
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : "null");
+        return;
+      }
+      if (pathname === "/conversations" || pathname.startsWith("/conversations/")) {
+        await serveConversations(req, res, pathname, new URL(req.url, "http://localhost"));
         return;
       }
       if (pathname.startsWith("/doc/")) {
@@ -194,6 +208,33 @@ export async function createServer({
       else if (!res.headersSent) res.writeHead(500).end();
     }
   });
+
+  async function serveConversations(req, res, pathname, url) {
+    const json = (status, body) => {
+      res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
+    };
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    if (pathname === "/conversations") {
+      json(200, { conversations: await listConversations(db, LAPTOP_USER) });
+      return;
+    }
+    const sessionId = decodeURIComponent(pathname.slice("/conversations/".length));
+    if (!isUuid(sessionId)) {
+      res.writeHead(400).end();
+      return;
+    }
+    const thread = url.searchParams.get("thread");
+    const conversation = await conversationTurns(db, { sessionId, userId: LAPTOP_USER, thread });
+    if (!conversation) {
+      res.writeHead(404).end();
+      return;
+    }
+    json(200, conversation);
+  }
 
   async function serveOriginal(req, res, documentId) {
     if (!isSafeSegment(documentId)) {
@@ -238,6 +279,26 @@ export async function createServer({
     const threads = new Map();
     const send = (frame) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+    };
+
+    const sessionId = randomUUID();
+    // The session log is a queue beside the chat: a failed write is logged with its cause and
+    // the turn's frames have already reached the client.
+    const sessionWritten = db
+      ? recordSession(db, { id: sessionId, userId: LAPTOP_USER }).catch((err) =>
+          console.error(`session log: session ${sessionId} was not written`, err),
+        )
+      : null;
+    const logTurn = async (turn) => {
+      try {
+        await sessionWritten;
+        await recordTurn(db, { sessionId, ...turn });
+      } catch (err) {
+        console.error(
+          `session log: turn ${turn.turnId} of session ${sessionId} was not written`,
+          err,
+        );
+      }
     };
 
     const cancel = (thread, turnId) => {
@@ -303,6 +364,12 @@ export async function createServer({
       const { signal } = controller;
       threads.set(thread, { turnId, controller });
       const live = () => !signal.aborted;
+      const frames = [];
+      const emit = (frame) => {
+        frames.push(frame);
+        send(frame);
+      };
+      let finished = null;
       try {
         const result = await runQuery({
           question: text,
@@ -310,17 +377,17 @@ export async function createServer({
           db,
           signal,
           onStage: (stage) => {
-            if (live()) send(serverFrame.status(thread, turnId, stage));
+            if (live()) emit(serverFrame.status(thread, turnId, stage));
           },
           onEvidence: (blocks) => {
-            if (live()) send(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));
+            if (live()) emit(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));
           },
           onToken: (piece) => {
-            if (live()) send(serverFrame.token(thread, turnId, piece));
+            if (live()) emit(serverFrame.token(thread, turnId, piece));
           },
         });
         signal.throwIfAborted();
-        send(
+        emit(
           serverFrame.done(
             thread,
             turnId,
@@ -328,12 +395,14 @@ export async function createServer({
             result.citations,
           ),
         );
+        finished = result;
       } catch (err) {
-        if (signal.aborted) send(serverFrame.cancelled(thread, turnId));
-        else send(serverFrame.error(err.message, thread, turnId));
+        if (signal.aborted) emit(serverFrame.cancelled(thread, turnId));
+        else emit(serverFrame.error(err.message, thread, turnId));
       } finally {
         if (threads.get(thread)?.turnId === turnId) threads.delete(thread);
       }
+      await logTurn({ thread, turnId, userText: text, result: finished, frames });
     }
   });
 

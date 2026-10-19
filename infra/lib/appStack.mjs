@@ -2,8 +2,8 @@
 // Copyright 2026 Polycode Limited
 
 // The serving layer: the chat WebSocket on API Gateway with a Lambda per route, the turn
-// function it invokes asynchronously, the cancel table, GET /doc/{id} and GET /spend on an HTTP
-// API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
+// function it invokes asynchronously, the cancel table, GET /doc/{id}, GET /spend and the
+// conversation routes on an HTTP API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
 // is destroyable and nothing costs money at idle.
 
 import path from "node:path";
@@ -134,6 +134,9 @@ export class AppStack extends Stack {
       environment: { ...dbEnv, TURN_FUNCTION_NAME: turnFn.functionName },
     });
     const docFn = fn("doc", { environment: { CORPUS_BUCKET: corpusBucket.bucketName } });
+    const conversationsFn = fn("conversations", {
+      environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
+    });
     const spendFn = fn("spend", {
       environment: { BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
     });
@@ -170,8 +173,8 @@ export class AppStack extends Stack {
       autoDeploy: true,
     });
 
-    for (const f of [turnFn, wsRoutesFn]) {
-      webSocketApi.grantManageConnections(f);
+    for (const f of [turnFn, wsRoutesFn]) webSocketApi.grantManageConnections(f);
+    for (const f of [turnFn, wsRoutesFn, conversationsFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -246,6 +249,18 @@ export class AppStack extends Stack {
       integration: new HttpLambdaIntegration("SpendIntegration", spendFn),
       authorizer: userAuthorizer,
     });
+    const conversationsIntegration = new HttpLambdaIntegration(
+      "ConversationsIntegration",
+      conversationsFn,
+    );
+    for (const routePath of ["/conversations", "/conversations/{id}"]) {
+      httpApi.addRoutes({
+        path: routePath,
+        methods: [apigwv2.HttpMethod.GET],
+        integration: conversationsIntegration,
+        authorizer: userAuthorizer,
+      });
+    }
 
     // The presigned GET is the access control, and a holder of the URL can fetch it outside a
     // browser anyway. A rule naming the distribution's domain would make the data stack
@@ -267,6 +282,7 @@ export class AppStack extends Stack {
           wsUrl: stage.url,
           httpUrl: httpApi.apiEndpoint,
           spendUrl: `${httpApi.apiEndpoint}/spend`,
+          conversationsUrl: `${httpApi.apiEndpoint}/conversations`,
           auth: {
             region: this.region,
             userPoolId: userPool.userPoolId,
