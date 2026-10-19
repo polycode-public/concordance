@@ -4,7 +4,7 @@ import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
 import { showSpend } from "./spend.js";
-import { TAG, tagNumbers } from "./tags.mjs";
+import { chipInline, renderMarkdown } from "./markdown.mjs";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -115,7 +115,12 @@ function onFrame(frame) {
       break;
     case "token":
       turn.streamed += frame.text;
-      turn.answer.textContent = turn.streamed;
+      turn.answer.replaceChildren(
+        ...renderMarkdown(
+          turn.streamed,
+          chipInline((n) => chipOrDropped(turn, n)),
+        ),
+      );
       break;
     case "done":
       renderChecked(turn, frame.checks);
@@ -193,7 +198,7 @@ function startTurn(text, id = crypto.randomUUID()) {
     li.dataset.state = "pending";
     stages.append(li);
   }
-  const answer = el("p", "answer plain");
+  const answer = el("div", "answer plain");
   const score = el("p", "score");
   const note = el("p", "note");
   note.setAttribute("role", "alert");
@@ -259,42 +264,66 @@ function renderEvidence(turn, cited) {
   );
 }
 
-/** Splits a sentence into text and citation chips. */
-function withChips(turn, text) {
-  const parts = [];
-  let last = 0;
-  for (const match of text.matchAll(TAG)) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-    for (const n of tagNumbers(match)) {
-      const block = turn.blocks.get(n);
-      parts.push(
-        block
-          ? chip(block)
-          : Object.assign(document.createElement("span"), {
-              className: "dropped-tag",
-              title: "no such evidence block",
-              textContent: `[E${n}]`,
-            }),
-      );
+function chipOrDropped(turn, n) {
+  const block = turn.blocks.get(n);
+  return block
+    ? chip(block)
+    : Object.assign(document.createElement("span"), {
+        className: "dropped-tag",
+        title: "no such evidence block",
+        textContent: `[E${n}]`,
+      });
+}
+
+/**
+ * Inline renderer for the checked answer: each run of text joins the sentence mark that holds it,
+ * so the Markdown structure and the support colours both show.
+ */
+function markedInline(turn, marks) {
+  const chips = chipInline((n) => chipOrDropped(turn, n));
+  let i = 0;
+  const span = (mark, text) => {
+    const node = el("span", mark.supported ? "supported" : "unsupported");
+    node.title = mark.supported ? "cites evidence" : "unsupported";
+    node.append(...chips(text));
+    return node;
+  };
+  return (run) => {
+    const out = [];
+    let pos = 0;
+    while (pos < run.length) {
+      const mark = marks[i];
+      if (!mark) {
+        out.push(...chips(run.slice(pos)));
+        break;
+      }
+      const at = run.indexOf(mark.text, pos);
+      if (at >= 0) {
+        if (at > pos) out.push(...chips(run.slice(pos, at)));
+        out.push(span(mark, mark.text));
+        pos = at + mark.text.length;
+        i += 1;
+        continue;
+      }
+      const rest = run.slice(pos);
+      if (rest.trim() && mark.text.includes(rest.trim())) {
+        out.push(span(mark, rest));
+        if (mark.text.endsWith(rest.trim())) i += 1;
+      } else {
+        out.push(...chips(rest));
+      }
+      break;
     }
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
+    return out;
+  };
 }
 
 function renderChecked(turn, checks) {
   turn.answer.classList.remove("plain");
-  if (checks.marks.length > 0)
-    turn.answer.replaceChildren(
-      ...checks.marks.map((mark) => {
-        const span = document.createElement("span");
-        span.className = mark.supported ? "supported" : "unsupported";
-        span.title = mark.supported ? "cites evidence" : "unsupported";
-        span.append(...withChips(turn, mark.text), " ");
-        return span;
-      }),
-    );
+  if (checks.marks.length > 0) {
+    const text = turn.streamed || checks.marks.map((mark) => mark.text).join(" ");
+    turn.answer.replaceChildren(...renderMarkdown(text, markedInline(turn, checks.marks)));
+  }
   turn.score.classList.toggle("warning", Boolean(checks.warning) && !checks.abstained);
   turn.score.classList.toggle("abstained", Boolean(checks.abstained));
   if (checks.abstained) {

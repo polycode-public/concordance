@@ -44,7 +44,8 @@ const TOKENS = [
   "The stairwell was dark and filling with smoke ",
   "[E2]. ",
   "One resident shouted from the window ",
-  "[E1][E3].",
+  "\n\n**Window:**\n- ",
+  "One resident shouted from the window [E1][E3].",
 ];
 const BLOCKS = [
   ["IWS00000169", 3, 11, "I looked out of the window at about 01:14 and saw thick black smoke."],
@@ -295,6 +296,28 @@ describe.skipIf(!enabled)(
         0,
       );
       await shot("laptop-done");
+    });
+
+    it("renders bold text and a bullet list in the answer, with chips inside the list", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      expect(await evaluate(`document.querySelector(".answer strong").textContent`)).toBe(
+        "Window:",
+      );
+      expect(await evaluate(`document.querySelectorAll(".answer ul > li").length`)).toBe(1);
+      expect(await evaluate(`document.querySelectorAll(".answer li .cite").length`)).toBe(2);
+      expect(await evaluate(`document.querySelector(".answer").textContent`)).not.toContain("**");
+    });
+
+    it("renders two chips for a tag with two numbers", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      expect(
+        await evaluate(`(() => {
+          const li = document.querySelector(".answer li");
+          return [...li.querySelectorAll(".cite")].map((c) => c.textContent).join(",");
+        })()`),
+      ).toBe("1,3");
     });
 
     it("opens the viewer with its bar and a link to the original when a chip is clicked", async () => {

@@ -19,7 +19,7 @@ export default [
     languageOptions: { ecmaVersion: 2024, sourceType: "module", globals: { ...globals.node } },
   },
   {
-    files: ["packages/ui/**/*.js"],
+    files: ["packages/ui/**/*.{js,mjs}"],
     languageOptions: { globals: { ...globals.browser } },
   },
 ];
