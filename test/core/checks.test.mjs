@@ -66,3 +66,23 @@ describe("verifyQuote", () => {
     expect(verifyQuote("  ", "anything")).toBe(false);
   });
 });
+
+describe("joined citation tags", () => {
+  it("reads [E3, E4] and [E3][E4] as two tags", () => {
+    expect(citationTags("Both saw it [E3, E4].")).toEqual([3, 4]);
+    expect(citationTags("Both saw it [E3][E4].")).toEqual([3, 4]);
+    expect(citationTags("Both saw it [E3, 4].")).toEqual([3, 4]);
+  });
+
+  it("counts a sentence ending in [E3, E4] as supported", () => {
+    const result = markUnsupported("They left together [E3, E4].");
+    expect(result.supported).toBe(1);
+  });
+
+  it("keeps a joined tag written after the full stop with its sentence", () => {
+    expect(splitAnswerSentences("She left. [E2, E3] He stayed. [E4]")).toEqual([
+      "She left. [E2, E3]",
+      "He stayed. [E4]",
+    ]);
+  });
+});

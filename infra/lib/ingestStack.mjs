@@ -20,7 +20,7 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AWS_DIR = path.join(ROOT, "packages", "aws");
 
-export const MAX_CONCURRENT_DOCUMENTS = 2;
+export const MAX_CONCURRENT_DOCUMENTS = 1;
 
 // The bundle is ESM; pg and other CommonJS dependencies call require().
 const REQUIRE_BANNER =

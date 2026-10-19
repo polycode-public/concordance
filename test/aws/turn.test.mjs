@@ -9,6 +9,16 @@ import { checkAnswer } from "../../packages/core/query.mjs";
 
 const TOKENS = ["The stairs were dark ", "[E1]. ", "Nobody ", "came."];
 
+const DOCUMENT = {
+  title: "Witness statement of IWS1",
+  witnessId: "IWS1",
+  cipherOnly: false,
+  role: "Resident",
+  statementDate: "2018-02-14",
+  type: "pdf",
+  pages: 9,
+};
+
 const BLOCKS = [
   {
     evidence: 1,
@@ -19,6 +29,7 @@ const BLOCKS = [
     locator: { page: 3, paragraph: 11 },
     header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
     text: "The stairs were dark.",
+    document: DOCUMENT,
   },
 ];
 
@@ -151,6 +162,7 @@ describe("turn function", () => {
         locator: { page: 3, paragraph: 11 },
         header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
         text: "The stairs were dark.",
+        document: DOCUMENT,
       },
     ]);
     expect(frames.filter((f) => f.type === "token").map((f) => f.text)).toEqual(TOKENS);

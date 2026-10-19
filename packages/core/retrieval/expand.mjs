@@ -129,3 +129,55 @@ function fromRow(r, text) {
     text,
   };
 }
+
+const isoDate = (value) => {
+  if (value == null) return null;
+  return (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10);
+};
+
+/**
+ * The document and witness facts the page shows for each cited document. A cipher-only witness
+ * carries its cipher only; the title and role stay out of the frame.
+ * @param {{ query: Function }} db
+ * @param {string[]} documentIds
+ * @returns {Promise<Map<string, { title: string | null, witnessId: string | null, cipherOnly: boolean,
+ *   role: string | null, statementDate: string | null, type: string, pages: number | null }>>}
+ */
+export async function loadDocuments(db, documentIds) {
+  const out = new Map();
+  const ids = [...new Set(documentIds)];
+  if (!ids.length) return out;
+  const { rows } = await db.query(
+    `SELECT d.id, d.title, d.witness_id, d.role, d.statement_date, d.format, d.page_count,
+            w.cipher_only, w.role AS witness_role
+       FROM documents d LEFT JOIN witnesses w ON w.id = d.witness_id
+      WHERE d.id = ANY($1::text[])`,
+    [ids],
+  );
+  for (const row of rows) {
+    const cipherOnly = row.cipher_only === true;
+    out.set(String(row.id), {
+      title: cipherOnly ? null : (row.title ?? null),
+      witnessId: row.witness_id ?? null,
+      cipherOnly,
+      role: cipherOnly ? null : (row.role ?? row.witness_role ?? null),
+      statementDate: isoDate(row.statement_date),
+      type: row.format,
+      pages: row.page_count ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Adds `document` to every block.
+ * @param {{ documentId: string }[]} blocks
+ * @param {Map<string, object>} documents from loadDocuments
+ */
+export function withDocuments(blocks, documents) {
+  return blocks.map((block) => {
+    const document = documents.get(block.documentId);
+    if (!document) throw new Error(`document ${block.documentId} was not loaded`);
+    return { ...block, document };
+  });
+}

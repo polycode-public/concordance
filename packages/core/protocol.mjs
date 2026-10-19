@@ -72,6 +72,15 @@ export function parseClientFrame(json) {
   }
 }
 
+/**
+ * The facts about a block's document. A cipher-only witness has `title: null` and carries its
+ * cipher as `witnessId`.
+ * @typedef {{ title: string | null, witnessId: string | null, cipherOnly: boolean,
+ *   role: string | null, statementDate: string | null, type: string, pages: number | null }} DocumentFacts
+ * @typedef {{ evidence: number, documentId: string, locator: object, header: string | null,
+ *   text: string, document: DocumentFacts }} EvidenceFrameBlock
+ */
+
 /** Frame builders for server to client. */
 export const serverFrame = {
   status: (thread, turnId, stage) => {
@@ -79,7 +88,14 @@ export const serverFrame = {
     return { type: "status", thread, turnId, stage };
   },
   token: (thread, turnId, text) => ({ type: "token", thread, turnId, text }),
-  evidence: (thread, turnId, blocks) => ({ type: "evidence", thread, turnId, blocks }),
+  evidence: (thread, turnId, blocks) => {
+    for (const block of blocks) {
+      if (block.document == null || typeof block.document !== "object") {
+        throw new ProtocolError(`evidence block ${block.evidence} has no document facts`);
+      }
+    }
+    return { type: "evidence", thread, turnId, blocks };
+  },
   done: (thread, turnId, checks, citations = [], sessionId = null) => ({
     type: "done",
     thread,

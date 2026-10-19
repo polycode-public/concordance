@@ -430,8 +430,13 @@ export async function ingestDocument({
       locator,
     });
 
+  const started = Date.now();
+  const stage = (name, count) =>
+    log(JSON.stringify({ evidenceId: id, stage: name, count, ms: Date.now() - started }));
+  stage("text-extracted", pages.length);
   const sections = planChunks(pages);
   const extractedText = pages.map((p) => p.text).join("\f");
+  stage("sections-split", sections.length);
 
   for (const [i, section] of sections.entries()) {
     section.header = headerFor(section.locator);
@@ -448,6 +453,7 @@ export async function ingestDocument({
       "context",
     );
   }
+  stage("context-lines-done", sections.length);
   const documentHeader = headerFor(undefined);
   const abstract = await extractString(
     provider,
@@ -464,6 +470,7 @@ export async function ingestDocument({
     "abstract",
   );
 
+  stage("abstract-done", 1);
   const rows = {
     document: [
       {
@@ -496,6 +503,7 @@ export async function ingestDocument({
     });
   }
 
+  stage("embeddings-done", all.length);
   const client = await db.pool.connect();
   let status = "ingested";
   try {
@@ -591,6 +599,7 @@ export async function ingestDocument({
       [meta.sha256, ...[0, 1, 2, 3, 4, 5].map((col) => provenance.map((p) => p[col]))],
     );
     await client.query("COMMIT");
+    stage("rows-written", all.length);
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 import { splitSentences } from "../chunking/sentences.mjs";
 
-const TAG = /\[E(\d+)\]/g;
+const TAG = /\[E(\d+(?:\s*,\s*E?\d+)*)\]/g;
+const LEADING = /^((?:\[E\d+(?:\s*,\s*E?\d+)*\]\s*)+)(.*)$/s;
 
 /**
  * Splits a model answer into sentences. Citation tags written after the full
@@ -13,7 +14,7 @@ const TAG = /\[E(\d+)\]/g;
 export function splitAnswerSentences(text) {
   const out = [];
   for (const sentence of splitSentences(text)) {
-    const leading = /^((?:\[E\d+\]\s*)+)(.*)$/.exec(sentence);
+    const leading = LEADING.exec(sentence);
     if (leading && out.length) {
       out[out.length - 1] += ` ${leading[1].trim()}`;
       if (leading[2].trim()) out.push(leading[2].trim());
@@ -32,8 +33,10 @@ export function splitAnswerSentences(text) {
 export function citationTags(sentence) {
   const tags = [];
   for (const match of sentence.matchAll(TAG)) {
-    const n = Number(match[1]);
-    if (!tags.includes(n)) tags.push(n);
+    for (const part of match[1].split(",")) {
+      const n = Number(part.replace(/\D/g, ""));
+      if (!tags.includes(n)) tags.push(n);
+    }
   }
   return tags;
 }

@@ -4,6 +4,8 @@ import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
 import { showSpend } from "./spend.js";
+import { chipInline, renderMarkdown } from "./markdown.mjs";
+import { suggestionsFor } from "./suggestions.mjs";
 import { closeViewer, openPdf, showViewerMessage } from "./viewer.js";
 
 const $ = (id) => document.getElementById(id);
@@ -12,6 +14,7 @@ const connectionEl = $("connection");
 const form = $("ask");
 const question = $("question");
 const cancelButton = $("cancel");
+const suggestionsEl = $("suggestions");
 const documentsEl = $("documents");
 const documentsCount = $("documents-count");
 const documentsEmpty = $("documents-empty");
@@ -20,7 +23,6 @@ const evidenceCount = $("evidence-count");
 const evidenceEmpty = $("evidence-empty");
 
 const STAGES = ["rewriting", "retrieving", "answering", "checking"];
-const TAG = /\[E(\d+)\]/g;
 /** The conversation: a thread on this connection's session. */
 let thread = crypto.randomUUID();
 
@@ -30,11 +32,13 @@ let current = null;
 /** @type {Turn | null} The last turn started; the keys act on its chips. */
 let newest = null;
 let opening = null;
+/** @type {Turn | null} The turn whose blocks the evidence panel shows. */
+let evidenceTurn = null;
 
 /**
  * @typedef {{ evidence: number, documentId: string, locator: { page?: number, paragraph?: number },
  *   header?: string | null, text?: string }} Block
- * @typedef {{ id: string, blocks: Map<number, Block>, streamed: string, startedAt: number | null,
+ * @typedef {{ id: string, blocks: Map<number, Block>, streamed: string, unfolded: Set<number>, startedAt: number | null,
  *   article: HTMLElement, stages: HTMLElement, answer: HTMLElement, score: HTMLElement,
  *   note: HTMLElement }} Turn
  */
@@ -115,7 +119,12 @@ function onFrame(frame) {
       break;
     case "token":
       turn.streamed += frame.text;
-      turn.answer.textContent = turn.streamed;
+      turn.answer.replaceChildren(
+        ...renderMarkdown(
+          turn.streamed,
+          chipInline((n) => chipOrDropped(turn, n)),
+        ),
+      );
       break;
     case "done":
       renderChecked(turn, frame.checks);
@@ -154,15 +163,26 @@ function referenceName(block) {
   return `Evidence ${block.evidence}: ${parts.join(", ")}`;
 }
 
-function chip(block) {
+function chip(block, turn) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "cite";
   button.textContent = String(block.evidence);
   button.title = reference(block);
   button.setAttribute("aria-label", referenceName(block));
-  button.addEventListener("click", () => open(block.documentId, block.locator));
+  button.addEventListener("click", () => {
+    openBlock(turn, block.evidence);
+    open(block.documentId, block.locator);
+  });
   return button;
+}
+
+/** Unfolds a block of the evidence panel; the panel shows one turn at a time. */
+function openBlock(turn, evidence) {
+  if (!turn || turn !== evidenceTurn) return;
+  turn.unfolded.add(evidence);
+  const details = evidenceEl.querySelector(`details[data-evidence="${evidence}"]`);
+  if (details) details.open = true;
 }
 
 function open(documentId, locator) {
@@ -183,6 +203,7 @@ function el(tag, className, text) {
 
 /** @returns {Turn} */
 function startTurn(text, id = crypto.randomUUID()) {
+  suggestionsEl.hidden = true;
   const article = el("article", "turn");
   const q = el("div", "question");
   q.append(el("span", "label small", "You asked"), el("p", null, text));
@@ -193,7 +214,7 @@ function startTurn(text, id = crypto.randomUUID()) {
     li.dataset.state = "pending";
     stages.append(li);
   }
-  const answer = el("p", "answer plain");
+  const answer = el("div", "answer plain");
   const score = el("p", "score");
   const note = el("p", "note");
   note.setAttribute("role", "alert");
@@ -205,6 +226,7 @@ function startTurn(text, id = crypto.randomUUID()) {
     id,
     blocks: new Map(),
     streamed: "",
+    unfolded: new Set(),
     startedAt: null,
     article,
     stages,
@@ -240,6 +262,7 @@ function finishStages(turn, timings) {
 }
 
 function renderEvidence(turn, cited) {
+  evidenceTurn = turn;
   const blocks = [...turn.blocks.values()];
   evidenceCount.textContent = blocks.length ? ` ${blocks.length}` : "";
   evidenceEmpty.hidden = blocks.length > 0;
@@ -247,52 +270,90 @@ function renderEvidence(turn, cited) {
     ...blocks.map((block) => {
       const item = el("li", "block");
       item.dataset.cited = cited.size === 0 || cited.has(block.evidence) ? "yes" : "no";
-      const heading = el("div", "heading");
+      const details = el("details");
+      details.dataset.evidence = String(block.evidence);
+      details.open = turn.unfolded.has(block.evidence);
+      details.addEventListener("toggle", () => {
+        if (details.open) turn.unfolded.add(block.evidence);
+        else turn.unfolded.delete(block.evidence);
+      });
+      const summary = el("summary", "heading");
       const ref = el("button", "reference quiet small", reference(block));
       ref.type = "button";
-      ref.addEventListener("click", () => open(block.documentId, block.locator));
-      heading.append(chip(block), ref);
-      item.append(heading);
-      if (block.text) item.append(el("blockquote", "quote", block.text));
+      ref.addEventListener("click", () => {
+        openBlock(turn, block.evidence);
+        open(block.documentId, block.locator);
+      });
+      summary.append(chip(block, turn), ref);
+      if (block.text) summary.append(el("span", "first-line small", block.text.split("\n")[0]));
+      details.append(summary);
+      if (block.text) details.append(el("blockquote", "quote", block.text));
+      item.append(details);
       return item;
     }),
   );
 }
 
-/** Splits a sentence into text and citation chips. */
-function withChips(turn, text) {
-  const parts = [];
-  let last = 0;
-  for (const match of text.matchAll(TAG)) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-    const block = turn.blocks.get(Number(match[1]));
-    parts.push(
-      block
-        ? chip(block)
-        : Object.assign(document.createElement("span"), {
-            className: "dropped-tag",
-            title: "no such evidence block",
-            textContent: match[0],
-          }),
-    );
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
+function chipOrDropped(turn, n) {
+  const block = turn.blocks.get(n);
+  return block
+    ? chip(block, turn)
+    : Object.assign(document.createElement("span"), {
+        className: "dropped-tag",
+        title: "no such evidence block",
+        textContent: `[E${n}]`,
+      });
+}
+
+/**
+ * Inline renderer for the checked answer: each run of text joins the sentence mark that holds it,
+ * so the Markdown structure and the support colours both show.
+ */
+function markedInline(turn, marks) {
+  const chips = chipInline((n) => chipOrDropped(turn, n));
+  let i = 0;
+  const span = (mark, text) => {
+    const node = el("span", mark.supported ? "supported" : "unsupported");
+    node.title = mark.supported ? "cites evidence" : "unsupported";
+    node.append(...chips(text));
+    return node;
+  };
+  return (run) => {
+    const out = [];
+    let pos = 0;
+    while (pos < run.length) {
+      const mark = marks[i];
+      if (!mark) {
+        out.push(...chips(run.slice(pos)));
+        break;
+      }
+      const at = run.indexOf(mark.text, pos);
+      if (at >= 0) {
+        if (at > pos) out.push(...chips(run.slice(pos, at)));
+        out.push(span(mark, mark.text));
+        pos = at + mark.text.length;
+        i += 1;
+        continue;
+      }
+      const rest = run.slice(pos);
+      if (rest.trim() && mark.text.includes(rest.trim())) {
+        out.push(span(mark, rest));
+        if (mark.text.endsWith(rest.trim())) i += 1;
+      } else {
+        out.push(...chips(rest));
+      }
+      break;
+    }
+    return out;
+  };
 }
 
 function renderChecked(turn, checks) {
   turn.answer.classList.remove("plain");
-  if (checks.marks.length > 0)
-    turn.answer.replaceChildren(
-      ...checks.marks.map((mark) => {
-        const span = document.createElement("span");
-        span.className = mark.supported ? "supported" : "unsupported";
-        span.title = mark.supported ? "cites evidence" : "unsupported";
-        span.append(...withChips(turn, mark.text), " ");
-        return span;
-      }),
-    );
+  if (checks.marks.length > 0) {
+    const text = turn.streamed || checks.marks.map((mark) => mark.text).join(" ");
+    turn.answer.replaceChildren(...renderMarkdown(text, markedInline(turn, checks.marks)));
+  }
   turn.score.classList.toggle("warning", Boolean(checks.warning) && !checks.abstained);
   turn.score.classList.toggle("abstained", Boolean(checks.abstained));
   if (checks.abstained) {
@@ -324,6 +385,7 @@ function recordCitations(turn, citations) {
       documentId: block.documentId,
       header: block.header,
       locator: block.locator,
+      document: block.document,
       count: 0,
     };
     entry.count += 1;
@@ -331,6 +393,25 @@ function recordCitations(turn, citations) {
   }
   renderEvidence(turn, cited);
   renderDocuments();
+}
+
+const longDate = (iso) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  });
+
+/** The facts line for a document: a cipher-only witness shows its cipher and nothing else. */
+function documentFacts(facts) {
+  if (!facts) return [];
+  if (facts.cipherOnly) return [`Witness ${facts.witnessId}`];
+  const parts = [facts.title];
+  if (facts.witnessId) parts.push(`Witness ${facts.witnessId}`);
+  if (facts.role) parts.push(facts.role);
+  if (facts.statementDate) parts.push(longDate(facts.statementDate));
+  const type = facts.pages != null ? `${facts.type}, ${facts.pages} pages` : facts.type;
+  parts.push(type);
+  return parts.filter(Boolean);
 }
 
 const times = (n) => (n === 1 ? "cited once" : `cited ${n} times`);
@@ -345,6 +426,7 @@ function renderDocuments() {
       const text = el("div");
       text.append(
         el("div", "reference", entry.documentId),
+        el("div", "facts small", documentFacts(entry.document).join(" · ")),
         el("div", "meta small", times(entry.count)),
       );
       const page = entry.locator?.page;
@@ -363,8 +445,26 @@ function finish(turn, message) {
   cancelButton.disabled = true;
 }
 
+/** Fills the pills for a corpus; they show until the first turn of a thread. */
+function mountSuggestions(corpusId) {
+  const pills = suggestionsFor(corpusId).map(({ text }) => {
+    const button = el("button", "pill", text);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      question.value = text;
+      form.requestSubmit();
+    });
+    const item = el("li");
+    item.append(button);
+    return item;
+  });
+  suggestionsEl.replaceChildren(...pills);
+  suggestionsEl.hidden = pills.length === 0;
+}
+
 /** Empties the page for another conversation on a new thread. */
 function startNew() {
+  suggestionsEl.hidden = suggestionsEl.children.length === 0;
   if (current) cancel();
   current = null;
   newest = null;
@@ -372,6 +472,7 @@ function startNew() {
   turnsEl.replaceChildren();
   documents.clear();
   renderDocuments();
+  evidenceTurn = null;
   evidenceCount.textContent = "";
   evidenceEmpty.hidden = false;
   evidenceEl.replaceChildren();
@@ -474,6 +575,7 @@ if (new URLSearchParams(location.search).has("present")) {
 try {
   config = await loadConfig();
   nameCorpus(config.corpus);
+  mountSuggestions(config.corpus.id);
   await connect();
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;

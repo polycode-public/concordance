@@ -114,6 +114,7 @@ const blockFrame = (b) => ({
   locator: b.locator,
   header: b.header,
   text: b.text,
+  document: b.document,
 });
 
 /**

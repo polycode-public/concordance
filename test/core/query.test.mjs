@@ -12,7 +12,9 @@ import {
   blockChars,
   buildEvidence,
   joinOverlapping,
+  loadDocuments,
   neighbourIds,
+  withDocuments,
 } from "../../packages/core/retrieval/expand.mjs";
 import { halfvecLiteral, retrieve } from "../../packages/core/retrieval/hybrid.mjs";
 import { evidencePrompt } from "../../packages/core/prompt.mjs";
@@ -131,6 +133,70 @@ describe("buildEvidence", () => {
   });
 });
 
+describe("loadDocuments", () => {
+  const dbOf = (rows) => ({ query: async () => ({ rows }) });
+
+  it("reads title, witness, role, date, type and pages", async () => {
+    const docs = await loadDocuments(
+      dbOf([
+        {
+          id: "doc1",
+          title: "Statement",
+          witness_id: "IWS1",
+          role: null,
+          witness_role: "Resident",
+          statement_date: new Date("2018-02-14T00:00:00Z"),
+          format: "pdf",
+          page_count: 9,
+          cipher_only: false,
+        },
+      ]),
+      ["doc1", "doc1"],
+    );
+    expect(docs.get("doc1")).toEqual({
+      title: "Statement",
+      witnessId: "IWS1",
+      cipherOnly: false,
+      role: "Resident",
+      statementDate: "2018-02-14",
+      type: "pdf",
+      pages: 9,
+    });
+  });
+
+  it("gives a cipher-only witness its cipher and no title", async () => {
+    const docs = await loadDocuments(
+      dbOf([
+        {
+          id: "doc2",
+          title: "A name in a title",
+          witness_id: "A7",
+          role: "Commander",
+          cipher_only: true,
+          format: "pdf",
+          page_count: null,
+        },
+      ]),
+      ["doc2"],
+    );
+    expect(docs.get("doc2")).toMatchObject({
+      title: null,
+      witnessId: "A7",
+      cipherOnly: true,
+      role: null,
+    });
+  });
+
+  it("asks the database for nothing when no block cites a document", async () => {
+    const docs = await loadDocuments({ query: () => Promise.reject(new Error("asked")) }, []);
+    expect(docs.size).toBe(0);
+  });
+
+  it("throws when a block's document row is missing", () => {
+    expect(() => withDocuments([{ documentId: "gone" }], new Map())).toThrow(/not loaded/);
+  });
+});
+
 describe("checkAnswer", () => {
   const blocks = [
     { evidence: 1, documentId: "doc1", locator: { paragraph: 11, page: 3, line: 4 } },
@@ -198,7 +264,14 @@ describe("runQuery", () => {
     parent_id: null,
   };
   const db = {
-    query: async (text) => ({ rows: /SELECT id FROM/.test(text) ? [{ id: "1" }] : [row] }),
+    query: async (text) => {
+      if (/FROM documents/.test(text)) {
+        return {
+          rows: [{ id: "doc1", title: "T", witness_id: "W1", format: "pdf", page_count: 9 }],
+        };
+      }
+      return { rows: /SELECT id FROM/.test(text) ? [{ id: "1" }] : [row] };
+    },
   };
   const providerOf = (reply) => ({
     name: "p",

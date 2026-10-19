@@ -5,7 +5,13 @@
 // the citation check, and the map from [En] to the locator stored at ingest.
 import { markUnsupported } from "./checks/citations.mjs";
 import { ABSTAIN_PHRASE, PROMPT_VERSION, answerMessages } from "./prompt.mjs";
-import { buildEvidence, neighbourIds, MAX_HITS } from "./retrieval/expand.mjs";
+import {
+  buildEvidence,
+  loadDocuments,
+  neighbourIds,
+  withDocuments,
+  MAX_HITS,
+} from "./retrieval/expand.mjs";
 import { loadChunks, retrieve } from "./retrieval/hybrid.mjs";
 
 /** A response with more flagged sentences than this ratio carries a warning. */
@@ -104,7 +110,14 @@ export async function runQuery({ question, provider, db, signal, onToken, onStag
     rows.set(id, r);
   }
   signal?.throwIfAborted();
-  const evidenceBlocks = buildEvidence(hitIds, rows);
+  const built = buildEvidence(hitIds, rows);
+  const evidenceBlocks = withDocuments(
+    built,
+    await loadDocuments(
+      db,
+      built.map((b) => b.documentId),
+    ),
+  );
   onEvidence?.(evidenceBlocks);
   endStage("retrieving");
 

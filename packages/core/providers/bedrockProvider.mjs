@@ -9,9 +9,10 @@ const EMBED_CONCURRENCY = 4;
 const MAX_EMBED_CHARS = 45000;
 const MAX_EMBED_TOKENS = 8000;
 const CHARS_PER_TOKEN = 4;
-const RETRY_ATTEMPTS = 6;
+const RETRY_ATTEMPTS = 8;
 const RETRY_BASE_MS = 1000;
-const RETRY_CAP_MS = 32000;
+const RETRY_CAP_MS = 60000;
+const EXTRACT_INTERVAL_MS = 1500;
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -34,12 +35,13 @@ function loadSdk() {
  * @param {object} [injected]
  * @param {object} [injected.sdk]     The module exports of @aws-sdk/client-bedrock-runtime.
  * @param {object} [injected.client]  A ready client with send(command, options).
- * @param {(ms: number) => Promise<void>} [injected.sleep]  The wait between throttling retries.
+ * @param {(ms: number) => Promise<void>} [injected.sleep]  The wait between throttling retries and between extraction calls.
+ * @param {() => number} [injected.now]  The clock, in milliseconds, that paces extraction calls.
  * @returns {import('./modelProvider.mjs').ModelProvider}
  */
 export function createBedrockProvider(
   env = process.env,
-  { sdk, client, sleep = defaultSleep } = {},
+  { sdk, client, sleep = defaultSleep, now = Date.now } = {},
 ) {
   const region = env.AWS_REGION || "eu-west-2";
   const embedModel = env.BEDROCK_EMBED_MODEL || "amazon.titan-embed-text-v2:0";
@@ -54,6 +56,19 @@ export function createBedrockProvider(
       return { mod, runtime: client ?? new mod.BedrockRuntimeClient({ region }) };
     })();
     return ready;
+  }
+
+  // The extraction model's quota is shared by every concurrent caller, so each call takes the next free slot.
+  let nextExtractSlot = 0;
+  async function paceExtraction(signal) {
+    const slot = Math.max(now(), nextExtractSlot);
+    nextExtractSlot = slot + EXTRACT_INTERVAL_MS;
+    const wait = slot - now();
+    if (wait > 0) {
+      signal?.throwIfAborted();
+      await sleep(wait);
+      signal?.throwIfAborted();
+    }
   }
 
   /** Runs call(); on throttling waits with full-jitter backoff and tries again. */
@@ -166,10 +181,10 @@ export function createBedrockProvider(
         messages: [{ role: "user", content: [{ text: `${prompt}\n\n${instruction}` }] }],
         inferenceConfig: { temperature: 0 },
       });
-      const response = await withRetry(
-        () => runtime.send(command, { abortSignal: signal }),
-        signal,
-      );
+      const response = await withRetry(async () => {
+        await paceExtraction(signal);
+        return runtime.send(command, { abortSignal: signal });
+      }, signal);
       const content = response.output?.message?.content?.[0]?.text ?? "";
       const json = content
         .trim()

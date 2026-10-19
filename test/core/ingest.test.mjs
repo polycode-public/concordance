@@ -268,7 +268,7 @@ describe("ingestDocument statements", () => {
     role: null,
     statementDate: "2019-08-06",
   };
-  const run = async () => {
+  const run = async (log = () => {}) => {
     const db = recordingDb();
     const provider = createFakeProvider({
       tokens: [],
@@ -277,9 +277,28 @@ describe("ingestDocument statements", () => {
       extractJson: ({ schema }) =>
         schema.required[0] === "context" ? { context: "Context." } : { abstract: "Abstract." },
     });
-    const result = await ingestDocument({ pages, meta, provider, db, log: () => {} });
+    const result = await ingestDocument({ pages, meta, provider, db, log });
     return { db, result };
   };
+
+  it("logs one structured line per stage with the document id, count and elapsed time", async () => {
+    const lines = [];
+    await run((line) => lines.push(line));
+    const stages = lines.filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
+    expect(stages.map((l) => l.stage)).toEqual([
+      "text-extracted",
+      "sections-split",
+      "context-lines-done",
+      "abstract-done",
+      "embeddings-done",
+      "rows-written",
+    ]);
+    stages.forEach((l) => {
+      expect(l.evidenceId).toBe("IWS1");
+      expect(l.ms).toBeGreaterThanOrEqual(0);
+    });
+    expect(stages[2].count).toBe(paragraphs);
+  });
 
   it("inserts each level in batches that fit a Data API request", async () => {
     const { db, result } = await run();

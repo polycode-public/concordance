@@ -44,7 +44,8 @@ const TOKENS = [
   "The stairwell was dark and filling with smoke ",
   "[E2]. ",
   "One resident shouted from the window ",
-  "[E1][E3].",
+  "\n\n**Window:**\n- ",
+  "One resident shouted from the window [E1][E3].",
 ];
 const BLOCKS = [
   ["IWS00000169", 3, 11, "I looked out of the window at about 01:14 and saw thick black smoke."],
@@ -56,6 +57,15 @@ const BLOCKS = [
   locator: { page, paragraph },
   header: `[Grenfell Inquiry | Witness ${documentId} | p.${page} para ${paragraph}]`,
   text,
+  document: {
+    title: `Statement of ${documentId}`,
+    witnessId: documentId,
+    cipherOnly: false,
+    role: "Resident",
+    statementDate: "2018-02-14",
+    type: "pdf",
+    pages: 20,
+  },
 }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -295,6 +305,87 @@ describe.skipIf(!enabled)(
         0,
       );
       await shot("laptop-done");
+    });
+
+    it("shows four suggestion pills that submit their text and hide after the first turn", async () => {
+      await open({ width: 1280, height: 800 });
+      expect(await evaluate(`document.querySelectorAll("#suggestions button.pill").length`)).toBe(
+        4,
+      );
+      expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(false);
+      await evaluate(`document.querySelector("#suggestions button.pill").click(); true`);
+      await until(`document.querySelector(".score")?.textContent.length > 0`);
+      expect(await evaluate(`document.querySelector(".turn .question p").textContent`)).toBe(
+        "What did residents on floor 16 see when they first noticed the fire?",
+      );
+      expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(true);
+    });
+
+    it("folds each evidence block, toggles it from the keyboard and opens the block a chip names", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      const state = () =>
+        evaluate(
+          `[...document.querySelectorAll("#evidence details")].map((d) => d.open).join(",")`,
+        );
+      expect(await state()).toBe("false,false,false");
+      expect(
+        await evaluate(`document.querySelector("#evidence summary .first-line").textContent`),
+      ).toContain("thick black smoke");
+      await evaluate(`document.querySelector("#evidence summary").focus(); true`);
+      await press(" ");
+      await until(`document.querySelector("#evidence details").open`);
+      expect(await state()).toBe("true,false,false");
+      await press(" ");
+      await until(`!document.querySelector("#evidence details").open`);
+      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await until(`document.querySelector("#evidence details").open`);
+      expect(await state()).toBe("true,false,false");
+    });
+
+    it("shows the document facts in the referenced-documents row", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      const facts = await evaluate(`document.querySelector("#documents .facts").textContent`);
+      expect(facts).toContain("Statement of IWS00000169");
+      expect(facts).toContain("Resident");
+      expect(facts).toContain("14 Feb 2018");
+      expect(facts).toContain("pdf, 20 pages");
+    });
+
+    it("names a locator past the end of the document as a defect in the viewer bar", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await until(`document.querySelector("#viewer-page.defect")`);
+      expect(await evaluate(`document.getElementById("viewer-page").textContent`)).toContain(
+        "past the end",
+      );
+      expect(await evaluate(`document.getElementById("viewer-message").textContent`)).toContain(
+        "names page 3",
+      );
+    });
+
+    it("renders bold text and a bullet list in the answer, with chips inside the list", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      expect(await evaluate(`document.querySelector(".answer strong").textContent`)).toBe(
+        "Window:",
+      );
+      expect(await evaluate(`document.querySelectorAll(".answer ul > li").length`)).toBe(1);
+      expect(await evaluate(`document.querySelectorAll(".answer li .cite").length`)).toBe(2);
+      expect(await evaluate(`document.querySelector(".answer").textContent`)).not.toContain("**");
+    });
+
+    it("renders two chips for a tag with two numbers", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      expect(
+        await evaluate(`(() => {
+          const li = document.querySelector(".answer li");
+          return [...li.querySelectorAll(".cite")].map((c) => c.textContent).join(",");
+        })()`),
+      ).toBe("1,3");
     });
 
     it("opens the viewer with its bar and a link to the original when a chip is clicked", async () => {

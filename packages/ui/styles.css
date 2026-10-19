@@ -382,8 +382,16 @@ body[data-viewer="open"] .desk {
 }
 
 .answer {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.answer p,
+.answer ul {
+  margin: 0 0 var(--unit);
+}
+
+.answer ul {
+  padding-left: 1.25rem;
 }
 
 .answer.plain {
@@ -526,6 +534,15 @@ body[data-viewer="open"] .desk {
   align-items: center;
 }
 
+.document .facts {
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.viewer-bar .page.defect {
+  color: var(--red-ink);
+}
+
 .document .meta {
   color: var(--ink-soft);
 }
@@ -534,6 +551,33 @@ body[data-viewer="open"] .desk {
   display: flex;
   align-items: baseline;
   gap: var(--unit);
+  cursor: pointer;
+}
+
+.block .heading::before {
+  content: "\25B8";
+  color: var(--ink-soft);
+}
+
+.block details[open] .heading::before {
+  content: "\25BE";
+}
+
+.block .first-line {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block details[open] .first-line {
+  display: none;
+}
+
+.block details[open] .heading {
+  margin-bottom: var(--unit);
 }
 
 .block .heading .cite {
@@ -636,6 +680,35 @@ button.icon {
   padding: var(--gutter);
   background: var(--paper);
   border-top: var(--rule-width) solid var(--rule);
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--unit);
+  margin: 0 0 var(--unit);
+  padding: 0;
+  list-style: none;
+}
+
+.suggestions[hidden] {
+  display: none;
+}
+
+button.pill {
+  min-height: var(--target);
+  padding: calc(var(--unit) / 2) calc(var(--unit) * 2);
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule);
+  border-radius: 999px;
+  font-size: var(--size-small);
+  line-height: var(--line-small);
+  text-align: left;
+}
+
+button.pill:hover {
+  background: var(--paper-deep);
 }
 
 .ask form {
