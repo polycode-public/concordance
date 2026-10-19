@@ -84,3 +84,9 @@ describe("serverFrame", () => {
     expect(() => serverFrame.status("t", "u", "thinking")).toThrow(ProtocolError);
   });
 });
+
+describe("the evidence frame", () => {
+  it("refuses a block without document facts", () => {
+    expect(() => serverFrame.evidence("t", "u", [{ evidence: 1 }])).toThrow(ProtocolError);
+  });
+});

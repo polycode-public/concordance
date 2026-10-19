@@ -57,6 +57,15 @@ const BLOCKS = [
   locator: { page, paragraph },
   header: `[Grenfell Inquiry | Witness ${documentId} | p.${page} para ${paragraph}]`,
   text,
+  document: {
+    title: `Statement of ${documentId}`,
+    witnessId: documentId,
+    cipherOnly: false,
+    role: "Resident",
+    statementDate: "2018-02-14",
+    type: "pdf",
+    pages: 20,
+  },
 }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -332,6 +341,29 @@ describe.skipIf(!enabled)(
       await evaluate(`document.querySelector(".answer .cite").click(); true`);
       await until(`document.querySelector("#evidence details").open`);
       expect(await state()).toBe("true,false,false");
+    });
+
+    it("shows the document facts in the referenced-documents row", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      const facts = await evaluate(`document.querySelector("#documents .facts").textContent`);
+      expect(facts).toContain("Statement of IWS00000169");
+      expect(facts).toContain("Resident");
+      expect(facts).toContain("14 Feb 2018");
+      expect(facts).toContain("pdf, 20 pages");
+    });
+
+    it("names a locator past the end of the document as a defect in the viewer bar", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await until(`document.querySelector("#viewer-page.defect")`);
+      expect(await evaluate(`document.getElementById("viewer-page").textContent`)).toContain(
+        "past the end",
+      );
+      expect(await evaluate(`document.getElementById("viewer-message").textContent`)).toContain(
+        "names page 3",
+      );
     });
 
     it("renders bold text and a bullet list in the answer, with chips inside the list", async () => {

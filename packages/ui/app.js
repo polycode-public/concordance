@@ -385,6 +385,7 @@ function recordCitations(turn, citations) {
       documentId: block.documentId,
       header: block.header,
       locator: block.locator,
+      document: block.document,
       count: 0,
     };
     entry.count += 1;
@@ -392,6 +393,25 @@ function recordCitations(turn, citations) {
   }
   renderEvidence(turn, cited);
   renderDocuments();
+}
+
+const longDate = (iso) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  });
+
+/** The facts line for a document: a cipher-only witness shows its cipher and nothing else. */
+function documentFacts(facts) {
+  if (!facts) return [];
+  if (facts.cipherOnly) return [`Witness ${facts.witnessId}`];
+  const parts = [facts.title];
+  if (facts.witnessId) parts.push(`Witness ${facts.witnessId}`);
+  if (facts.role) parts.push(facts.role);
+  if (facts.statementDate) parts.push(longDate(facts.statementDate));
+  const type = facts.pages != null ? `${facts.type}, ${facts.pages} pages` : facts.type;
+  parts.push(type);
+  return parts.filter(Boolean);
 }
 
 const times = (n) => (n === 1 ? "cited once" : `cited ${n} times`);
@@ -406,6 +426,7 @@ function renderDocuments() {
       const text = el("div");
       text.append(
         el("div", "reference", entry.documentId),
+        el("div", "facts small", documentFacts(entry.document).join(" · ")),
         el("div", "meta small", times(entry.count)),
       );
       const page = entry.locator?.page;

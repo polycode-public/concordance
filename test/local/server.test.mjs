@@ -46,6 +46,16 @@ function connect(port) {
   });
 }
 
+const DOCUMENT = {
+  title: "Witness statement of IWS1",
+  witnessId: "IWS1",
+  cipherOnly: false,
+  role: "Resident",
+  statementDate: "2018-02-14",
+  type: "pdf",
+  pages: 9,
+};
+
 const BLOCKS = [
   {
     evidence: 1,
@@ -56,6 +66,7 @@ const BLOCKS = [
     locator: { page: 3, paragraph: 11 },
     header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
     text: "The stairs were dark.",
+    document: DOCUMENT,
   },
 ];
 
@@ -198,6 +209,7 @@ describe("local server", () => {
         locator: { page: 3, paragraph: 11 },
         header: "[Grenfell Inquiry | Witness IWS1 | p.3 para 11]",
         text: "The stairs were dark.",
+        document: DOCUMENT,
       },
     ]);
     expect(indexOfFrame(client.frames, "evidence")).toBeLessThan(

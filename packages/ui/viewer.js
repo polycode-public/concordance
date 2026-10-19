@@ -40,10 +40,23 @@ function linkOriginal(url, page) {
   original.hidden = false;
 }
 
+function pastTheEnd(page, pages) {
+  current.page = page;
+  pageEl.textContent = `p.${page} of ${pages}: past the end`;
+  pageEl.classList.add("defect");
+  prev.disabled = false;
+  next.disabled = true;
+  canvas.hidden = true;
+  linkOriginal(current.url, pages);
+  message(`The locator names page ${page}; the document has ${pages} pages.`);
+}
+
 async function renderPage(n) {
   const { doc, url } = current;
-  const page = Math.min(Math.max(1, n), doc.numPages);
+  const page = Math.max(1, n);
   current.page = page;
+  pageEl.classList.remove("defect");
+  canvas.hidden = false;
   pageEl.textContent = `p.${page} of ${doc.numPages}`;
   prev.disabled = page <= 1;
   next.disabled = page >= doc.numPages;
@@ -108,7 +121,10 @@ export async function openPdf({ url, page, title }) {
         page: 1,
       };
     }
-    canvas.hidden = false;
+    if (page > current.doc.numPages) {
+      pastTheEnd(page, current.doc.numPages);
+      return;
+    }
     await renderPage(page);
     message("");
   } catch (err) {

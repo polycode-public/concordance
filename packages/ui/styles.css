@@ -534,6 +534,15 @@ body[data-viewer="open"] .desk {
   align-items: center;
 }
 
+.document .facts {
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.viewer-bar .page.defect {
+  color: var(--red-ink);
+}
+
 .document .meta {
   color: var(--ink-soft);
 }
