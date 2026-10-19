@@ -109,7 +109,8 @@ CloudFront page with the abstention phrase; `deploy.yml` and its smoke step gree
 
 The Grenfell importer over the files O2 delivers, the manifest, the upload to the originals
 bucket, the first ingest execution. Exit: 20 statements in Aurora; a second execution changes no
-row counts; then 300.
+row counts; then 300. Ten statements are in Aurora (2026-10-19) and serve Phases 3 to 5 until W1
+widens the corpus; the second execution proved the idempotence.
 
 ### Phase 3: retrieval and citations (F5b, F6, F7)
 
