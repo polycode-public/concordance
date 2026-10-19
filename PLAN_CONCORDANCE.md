@@ -27,6 +27,14 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
   bedrock spend banner and the ability to create docs." (2026-10-19). The chat there is React with
   Vite under a proprietary licence; this repository's raw-ESM and AGPL decisions yield to the
   operator's direction where the review (U1) shows the adoption pays, with the licence change named.
+- "Add a feature to the board to be able to request a report is created from the current session,
+  on a topical subset and referencing documents - similar to a chat completion, this a longer form
+  one shot with an internal: draft, write, and review cycle to generate a report similar to how we
+  have "Referenced documents / No document cited yet. / Evidence this turn / Ask a question to
+  retrieve evidence." but a new one "Generated reports" and these can be deleted from the UI with a
+  confirmation and edited by asking in the chat (which is the same review cycle but with a prompt of
+  the change) and a matching filename to an existing report so a new version is created (also
+  reports are versioned)." (2026-10-19, evening; Phase R, row R1.)
 - From the specification's scope line: "single-tenant demo, Grenfell only, about 15,000 pages plus
   media transcribed on the laptop, cloud ingest spend capped at $25 with a billing alarm, no real
   ICC evidence touches the system."
@@ -133,6 +141,39 @@ seek, the image viewer with boxes, export of the transcript with its bibliograph
 The slice sized to the $25 cap, first token under 2 seconds on the deployed page, the eval
 scoreboard, the slides, the screen recording as the fallback, the dry run. Exit: the demo script
 recorded end to end.
+
+### Phase R: generated reports (R1)
+
+A report is a one-shot, longer-form answer over a topical subset of the corpus, built in one
+request through an internal draft, write and review cycle, stored with versions, and shown in a
+"Generated reports" panel beside "Referenced documents" and "Evidence this turn".
+
+- Request: from the chat, a `report` frame with the topic (a question or brief), the document ids
+  it may draw on (empty means the whole corpus), and a filename. The turn Lambda's async shape
+  runs it; status frames name the stage (`drafting`, `writing`, `reviewing`, `done`).
+- Cycle: **draft** retrieves over the topic (the Phase 3 retrieval, more hits and a larger context
+  budget than a turn) and writes an outline whose every heading names its evidence blocks;
+  **write** produces the report section by section from those blocks, every sentence cited with
+  `[En]`, "the corpus does not say" for a section the blocks do not cover; **review** runs the
+  Phase 4 checks over every sentence and sends the flagged sentences back for one rewrite, then
+  stores the result with its check scores. The model never writes a citation string; the server
+  resolves `[En]` to locators as it does for a turn.
+- Store: a `reports` table (session, filename, version, title, topic, document ids, body as
+  Markdown with `[En]`, the resolved citations as jsonb, the check scores, prompt version, model
+  id, created at), unique on session, filename and version. A request whose filename matches an
+  existing report in the session runs the same cycle with the change prompt and the latest version
+  as input and stores version n+1. Delete removes every version of a filename.
+- Page: the "Generated reports" panel lists filenames with their versions; opening one renders the
+  Markdown with each citation as a locator link into the viewer; a Delete control asks for
+  confirmation first; the request form takes topic, documents and filename. A chat message that
+  names an existing filename is an edit request.
+- Routes: HTTP `GET /reports`, `GET /reports/{filename}` (versions), `DELETE /reports/{filename}`;
+  the WebSocket carries the request and the status frames. Export (F12's bibliography shape)
+  includes reports.
+
+Exit: on the deployed page, a report over two named statements is requested, written, reviewed
+and listed; an edit by chat stores version 2; delete removes it after confirmation; every
+sentence in the stored report carries a resolved citation or the abstention phrase.
 
 ### Phase L: the laptop port check (L1)
 
