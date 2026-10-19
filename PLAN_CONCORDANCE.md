@@ -112,7 +112,7 @@ bucket, the first ingest execution. Exit: 20 statements in Aurora; a second exec
 row counts; then 300. Ten statements are in Aurora (2026-10-19) and serve Phases 3 to 5 until W1
 widens the corpus; the second execution proved the idempotence.
 
-### Phase 3: retrieval and citations (F5b, F6, F7)
+### Phase 3: retrieval and citations (B1, F6, F7)
 
 Query rewrite, `tsvector` with register expansion and exact-phrase search, HNSW top 40 passages and
 top 20 sections, RRF, reranker, neighbour expansion with a 6,000-token cap, evidence blocks
