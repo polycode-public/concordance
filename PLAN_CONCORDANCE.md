@@ -35,6 +35,8 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
   confirmation and edited by asking in the chat (which is the same review cycle but with a prompt of
   the change) and a matching filename to an existing report so a new version is created (also
   reports are versioned)." (2026-10-19, evening; Phase R, row R1.)
+- "Please add a task to lean towards this in terms of look and accessibility standards
+  https://www.icc-cpi.int/ (possibly spawning additional tasks)" (2026-10-19, evening; row U10).
 - From the specification's scope line: "single-tenant demo, Grenfell only, about 15,000 pages plus
   media transcribed on the laptop, cloud ingest spend capped at $25 with a billing alarm, no real
   ICC evidence touches the system."
