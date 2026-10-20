@@ -44,6 +44,7 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       "0003_fact_registers.sql",
       "0004_reports.sql",
       "0005_comparisons.sql",
+      "0006_extraction_progress.sql",
     ]);
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([]);
     expect(log.slice(-5)).toEqual([
