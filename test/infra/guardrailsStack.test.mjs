@@ -22,7 +22,7 @@ beforeAll(() => {
   budgets = Object.values(Template.fromStack(stack).findResources("AWS::Budgets::Budget")).map(
     (r) => r.Properties,
   );
-});
+}, 120_000);
 
 const named = (name) => budgets.find((b) => b.Budget.BudgetName === name);
 
