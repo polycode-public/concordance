@@ -20,8 +20,31 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--focus);
+  outline-offset: var(--focus-width);
+}
+
+/* The skip link: off screen until a keyboard user focuses it */
+
+.skip-link {
+  position: absolute;
+  top: var(--unit);
+  left: var(--gutter);
+  z-index: 3;
+  padding: var(--unit) calc(var(--unit) * 2);
+  background: var(--navy);
+  color: var(--action-ink);
+  font-weight: var(--weight-label);
+  border-radius: var(--radius);
+  transform: translateY(calc(-100% - var(--unit) * 2));
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+.conversation:focus {
+  outline: 0;
 }
 
 h1,
@@ -42,16 +65,16 @@ textarea {
 button {
   min-height: var(--target);
   padding: 0 calc(var(--unit) * 2);
-  background: var(--ink);
-  color: var(--button-ink);
-  border: var(--rule-width) solid var(--ink);
+  background: var(--navy);
+  color: var(--action-ink);
+  border: var(--rule-width) solid var(--navy);
   border-radius: var(--radius);
   cursor: pointer;
 }
 
 button.quiet {
   background: transparent;
-  color: var(--ink);
+  color: var(--navy);
 }
 
 button:disabled {
@@ -60,7 +83,7 @@ button:disabled {
 }
 
 a {
-  color: var(--ink);
+  color: var(--link);
 }
 
 .small {
@@ -84,10 +107,12 @@ a {
   align-items: baseline;
   gap: 0 calc(var(--unit) * 2);
   padding: var(--unit) var(--gutter);
+  border-top: calc(var(--unit) / 2) solid var(--navy);
   border-bottom: var(--rule-width) solid var(--rule);
 }
 
 .bar h1 {
+  color: var(--navy);
   font-size: var(--size-title);
   line-height: var(--line-title);
   font-weight: var(--weight-label);
@@ -329,6 +354,11 @@ body[data-viewer="open"] .desk {
     inset: auto 0 0 0;
     z-index: 1;
   }
+
+  /* Keeps a focused control clear of the fixed composer. */
+  html {
+    scroll-padding-bottom: calc(var(--unit) * 20);
+  }
 }
 
 /* A turn: the question, the stages, the answer, the score line */
@@ -404,6 +434,8 @@ body[data-viewer="open"] .desk {
 
 .unsupported {
   color: var(--grey);
+  text-decoration: underline dotted var(--grey);
+  text-underline-offset: 0.25em;
 }
 
 .interrupted {
@@ -486,6 +518,7 @@ body[data-viewer="open"] .desk {
 /* The bundle: the referenced documents and this turn's evidence */
 
 .bundle h2 {
+  color: var(--navy);
   font-size: var(--size-title);
   line-height: var(--line-title);
   font-weight: var(--weight-label);
@@ -595,6 +628,7 @@ body[data-viewer="open"] .desk {
 
 .block .reference {
   min-height: 0;
+  color: var(--ink);
   padding: 0;
   border: 0;
   text-decoration: underline;
@@ -707,9 +741,9 @@ button.icon {
 button.pill {
   min-height: var(--target);
   padding: calc(var(--unit) / 2) calc(var(--unit) * 2);
-  background: transparent;
+  background: var(--paper);
   color: var(--ink);
-  border-color: var(--rule);
+  border-color: var(--edge);
   border-radius: 999px;
   font-size: var(--size-small);
   line-height: var(--line-small);
@@ -731,7 +765,7 @@ button.pill:hover {
   min-height: var(--target);
   padding: var(--unit);
   background: var(--paper);
-  border: var(--rule-width) solid var(--rule);
+  border: var(--rule-width) solid var(--edge);
   border-radius: var(--radius);
   resize: vertical;
 }
@@ -784,7 +818,7 @@ button.pill:hover {
   min-height: var(--target);
   padding: 0 var(--unit);
   background: var(--paper);
-  border: var(--rule-width) solid var(--rule);
+  border: var(--rule-width) solid var(--edge);
   border-radius: var(--radius);
 }
 
@@ -803,4 +837,14 @@ button.pill:hover {
 .signin[hidden],
 .signed-out .desk {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
 }

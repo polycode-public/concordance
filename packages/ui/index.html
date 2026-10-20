@@ -25,6 +25,7 @@
     <script type="module" src="/app.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header class="bar">
       <h1>Concordance</h1>
       <p class="inquiry" id="corpus-name"></p>
@@ -69,7 +70,7 @@
       <p id="signin-message" class="message" role="alert"></p>
     </form>
     <div class="desk">
-      <main class="conversation" aria-label="Conversation">
+      <main id="main" class="conversation" aria-label="Conversation" tabindex="-1">
         <section id="turns" class="turns" aria-live="polite">
           <p id="opening" class="opening">
             Ask a question about the witness statements. Every sentence of the answer carries its
@@ -115,7 +116,7 @@
         <p id="viewer-message" class="viewer-message small" role="status"></p>
         <div class="viewer-body"><canvas id="viewer-canvas"></canvas></div>
       </aside>
-      <aside class="bundle" aria-label="Bundle">
+      <aside class="bundle" aria-label="Evidence bundle">
         <section aria-labelledby="documents-title">
           <h2 id="documents-title">
             Referenced documents<span id="documents-count" class="count"></span>
