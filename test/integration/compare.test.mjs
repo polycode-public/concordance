@@ -47,15 +47,18 @@ async function seed(db) {
   }
   for (const a of s.assertions) {
     await db.query(
-      `INSERT INTO assertions (id, witness_id, source_chunk_id, event_id, predicate, object_text,
-                               time_text, place_text, polarity, modality, confidence, extractor,
-                               pipeline_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      `INSERT INTO assertions (id, witness_id, source_chunk_id, event_id, subject_text, subject_kind,
+                               claim_kind, predicate, object_text, time_text, place_text, polarity,
+                               modality, confidence, extractor, pipeline_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [
         a.id,
         a.witness_id,
         a.source_chunk_id,
         a.event_id,
+        a.subject_text,
+        a.subject_kind,
+        a.claim_kind,
         a.predicate,
         a.object_text,
         a.time_text,

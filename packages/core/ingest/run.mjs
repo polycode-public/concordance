@@ -44,6 +44,7 @@ const LOCATOR_SCHEME = "page-paragraph";
 
 const CORPORA = Object.freeze({
   grenfell: Object.freeze({ label: "Grenfell Inquiry", eventDate: "2017-06-14" }),
+  ucpi: Object.freeze({ label: "Undercover Policing Inquiry", eventDate: null }),
 });
 
 const CONTEXT_SCHEMA = Object.freeze({
