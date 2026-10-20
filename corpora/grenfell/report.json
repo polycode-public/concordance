@@ -1,0 +1,66 @@
+{
+  "inquiry": "Grenfell Tower Inquiry",
+  "report": "Phase 1 report",
+  "files": [
+    {
+      "file": "raw/report/phase1-volume-1.pdf",
+      "title": "GTI - Phase 1 full report - volume 1",
+      "sha256": "9f5042005add7226ef208fd666ff7527919478a3c7443b2d1824a3b02f46d82f",
+      "bytes": 3071511,
+      "source": "https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%201.pdf",
+      "archived": "https://webarchive.nationalarchives.gov.uk/ukgwa/20250320210859id_/https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%201.pdf",
+      "fetchedAt": "2026-10-20T18:53:29.821Z",
+      "fetchedBy": "a browser session on the UK Government Web Archive after the operator passed its human check; the files saved through the browser",
+      "published": "2019-10-30",
+      "licence": "Crown copyright, Open Government Licence v3.0"
+    },
+    {
+      "file": "raw/report/phase1-volume-2.pdf",
+      "title": "GTI - Phase 1 full report - volume 2",
+      "sha256": "e5a851f704b6a76829847b855f913339c206f71fd3a552993a77a91eab18610e",
+      "bytes": 6412760,
+      "source": "https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%202.pdf",
+      "archived": "https://webarchive.nationalarchives.gov.uk/ukgwa/20250320213316id_/https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%202.pdf",
+      "fetchedAt": "2026-10-20T18:53:29.821Z",
+      "fetchedBy": "a browser session on the UK Government Web Archive after the operator passed its human check; the files saved through the browser",
+      "published": "2019-10-30",
+      "licence": "Crown copyright, Open Government Licence v3.0"
+    },
+    {
+      "file": "raw/report/phase1-volume-3.pdf",
+      "title": "GTI - Phase 1 full report - volume 3",
+      "sha256": "1416f7742fd50e43a4220a26770998c12dd3fe9e0cfa4fb86337f46b5d52c411",
+      "bytes": 6432982,
+      "source": "https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%203.pdf",
+      "archived": "https://webarchive.nationalarchives.gov.uk/ukgwa/20250321025849id_/https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%203.pdf",
+      "fetchedAt": "2026-10-20T18:53:29.821Z",
+      "fetchedBy": "a browser session on the UK Government Web Archive after the operator passed its human check; the files saved through the browser",
+      "published": "2019-10-30",
+      "licence": "Crown copyright, Open Government Licence v3.0"
+    },
+    {
+      "file": "raw/report/phase1-volume-4.pdf",
+      "title": "GTI - Phase 1 full report - volume 4",
+      "sha256": "1188ca8da2a374d4fba2de7afbb73bc1fedea41358d4aaecc2d3b5a10a36a47e",
+      "bytes": 6720049,
+      "source": "https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%204.pdf",
+      "archived": "https://webarchive.nationalarchives.gov.uk/ukgwa/20250320210904id_/https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20full%20report%20-%20volume%204.pdf",
+      "fetchedAt": "2026-10-20T18:53:29.821Z",
+      "fetchedBy": "a browser session on the UK Government Web Archive after the operator passed its human check; the files saved through the browser",
+      "published": "2019-10-30",
+      "licence": "Crown copyright, Open Government Licence v3.0"
+    },
+    {
+      "file": "raw/report/phase1-executive-summary.pdf",
+      "title": "GTI - Phase 1 report Executive Summary",
+      "sha256": "9a8e5d48eb93620e6b6033c361bbff1c5e8eeae46eb763a23387098867bbde6a",
+      "bytes": 430862,
+      "source": "https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20report%20Executive%20Summary.pdf",
+      "archived": "https://webarchive.nationalarchives.gov.uk/ukgwa/20250320210908id_/https://assets.grenfelltowerinquiry.org.uk/GTI%20-%20Phase%201%20report%20Executive%20Summary.pdf",
+      "fetchedAt": "2026-10-20T18:53:29.821Z",
+      "fetchedBy": "a browser session on the UK Government Web Archive after the operator passed its human check; the files saved through the browser",
+      "published": "2019-10-30",
+      "licence": "Crown copyright, Open Government Licence v3.0"
+    }
+  ]
+}
