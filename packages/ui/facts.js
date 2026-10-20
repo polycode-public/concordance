@@ -191,7 +191,7 @@ export function mountFacts(config, { token, open }) {
       const option = el(
         "option",
         null,
-        `${name}: ${side.witnessId}, ${side.predicate} ${side.objectText ?? ""}`.trim(),
+        `${name}: ${side.witnessId}, ${[side.subjectText, side.predicate, side.objectText].filter(Boolean).join(" ")}`,
       );
       option.value = side.assertionId;
       which.append(option);
