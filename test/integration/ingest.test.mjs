@@ -210,18 +210,20 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
     expect(await tableCounts()).toEqual(before);
   });
 
-  it("fails a document with no numbered paragraph and writes nothing for it", async () => {
-    const before = await tableCounts();
-    await expect(
-      ingestDocument({
-        pages: [{ page: 1, text: "A covering letter." }],
-        meta: { ...META, evidenceId: "IWS00000002", sha256: "c".repeat(64) },
-        provider,
-        db,
-        log: () => {},
-      }),
-    ).rejects.toThrow(/no numbered paragraph/);
-    expect(await tableCounts()).toEqual(before);
+  it("stores a document with no numbered paragraph by page", async () => {
+    const result = await ingestDocument({
+      pages: [{ page: 1, text: "A covering letter." }],
+      meta: { ...META, evidenceId: "IWS00000002", sha256: "c".repeat(64) },
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(result.status).toBe("ingested");
+    const { rows } = await db.query(
+      "SELECT locator FROM chunks WHERE level = 'section' AND document_id = $1",
+      ["IWS00000002"],
+    );
+    expect(rows.map((r) => r.locator)).toEqual([{ page: 1, paragraph: null }]);
   });
 
   it("replaces the chunks when the pipeline version changes", async () => {

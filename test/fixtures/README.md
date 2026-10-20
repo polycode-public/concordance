@@ -17,3 +17,7 @@ Source: Grenfell Tower Inquiry, witness statements, https://www.grenfelltowerinq
 
 Licence: Crown copyright, reproduced under the Open Government Licence v3.0
 (https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
+
+`MG11-unnumbered-pages-1-3.txt` is a made-up police statement form of three pages with invented
+sentences: prose paragraphs without numbers and the three header lines on every page. It is not
+a real statement.
