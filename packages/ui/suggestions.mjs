@@ -18,6 +18,11 @@ export const SUGGESTIONS = {
     { text: "What advice did the fire service give to residents who called?", panel: null },
     { text: "List the statements in the corpus", panel: "documents" },
     { text: "Show the evidence about smoke in the stairwell", panel: "evidence" },
+    {
+      text: "Write me a report on how residents first became aware of the fire",
+      panel: "reports",
+      filename: "first-awareness.md",
+    },
   ],
 };
 

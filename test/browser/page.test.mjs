@@ -671,7 +671,7 @@ describe.skipIf(!enabled)(
       `document.querySelector('#reports-list li[data-filename="${filename}"]')`;
     const resetReports = () => reportStore.reports.splice(0);
 
-    it("shows the Generated reports panel with its empty state", async () => {
+    it("shows the Generated reports panel with its empty state and the pill", async () => {
       resetReports();
       await open({ width: 1280, height: 800 });
       await until(`!document.getElementById("reports-empty").hidden`);
@@ -679,6 +679,33 @@ describe.skipIf(!enabled)(
         "Generated reports",
       );
       expect(await evaluate(`document.getElementById("reports-list").children.length`)).toBe(0);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#reports-suggestions button.pill")].map((b) => b.textContent)`,
+        ),
+      ).toEqual(["Write me a report on how residents first became aware of the fire"]);
+    });
+
+    it("fills the request form from the pill without sending, and hides the pill once a report is listed", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await evaluate(`document.querySelector("#reports-suggestions button.pill").click(); true`);
+      expect(await evaluate(`document.getElementById("report-request").open`)).toBe(true);
+      expect(await evaluate(`document.getElementById("report-topic").value`)).toBe(
+        "Write me a report on how residents first became aware of the fire",
+      );
+      expect(await evaluate(`document.getElementById("report-filename").value`)).toBe(
+        "first-awareness.md",
+      );
+      expect(
+        await evaluate(`document.querySelectorAll("#report-documents input:checked").length`),
+      ).toBe(0);
+      expect(await evaluate(`document.getElementById("report-status").textContent`)).toBe("");
+      await evaluate(`document.getElementById("report-form").requestSubmit(); true`);
+      await until(`${listed("first-awareness.md")}`);
+      expect(await evaluate(`document.getElementById("reports-suggestions").hidden`)).toBe(true);
+      expect(await evaluate(`document.getElementById("reports-empty").hidden`)).toBe(true);
     });
 
     it("sends a report frame, follows the stages and lists the stored report", async () => {
