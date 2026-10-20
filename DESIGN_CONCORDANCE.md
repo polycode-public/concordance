@@ -72,7 +72,7 @@ the hearing transcript as the inquiry printed them, and the schedules counsel pr
 | The redline of two drafts                                                                            | The diff of two accounts: removed words struck once and still legible, added words in ink                                                                                                                            |
 | Agreed facts (an admission both sides accept)                                                        | Accepted facts. Promotion is a slip that names the source citation and who promoted it; a session hypothesis stays in pencil                                                                                         |
 | A restriction order                                                                                  | A cipher shows as the cipher. A refused side-by-side says `This pairing is marked identity-revealing` and nothing more                                                                                               |
-| Black ink is the record; grey is a note; red ink is a correction                                     | A supported sentence is ink. An unsupported sentence is grey. A contradicted sentence is red ink. A dropped citation is struck through                                                                               |
+| Black ink is the record; grey is a note; red ink is a correction                                     | A supported sentence is ink. An unsupported sentence is grey, underlined dotted. A contradicted sentence is red ink. A dropped citation is struck through                                                            |
 
 Boldness is spent in one place: the reference system, the chip on its highlighter mark and the
 score line under every answer. Everything else is quiet paper. The matrix inherits the same
@@ -88,28 +88,37 @@ outside its origin.
 
 ### Colour
 
-The base is document white under room light, the ink is black, the one colour is the
-highlighter.
+The base is document white under room light, the ink is near-black, the one colour is the
+highlighter. The institutional colours (navy, link blue, the panel grey, the muted grey) follow
+the International Criminal Court's site; see "Accessibility" below.
 
-| Token                             | Light                | Dark                 | Use                                                                     |
-| --------------------------------- | -------------------- | -------------------- | ----------------------------------------------------------------------- |
-| `--paper`                         | `#fbfbf9`            | `#17191c`            | the page                                                                |
-| `--paper-deep`                    | `#f0f0ec`            | `#21242a`            | a second sheet: the question, the bundle panel, the viewer bar, sign-in |
-| `--rule`                          | `#cfd0cb`            | `#3a3e45`            | the 1 px rules between regions and rows                                 |
-| `--ink`                           | `#16191d`            | `#ecedef`            | prose, a supported sentence, labels                                     |
-| `--ink-soft`                      | `#4a4f57`            | `#b5b9c0`            | secondary prose, the done stages, counts                                |
-| `--grey`                          | `#6b7079`            | `#8a9099`            | an unsupported sentence, a pending stage, placeholders                  |
-| `--red-ink`                       | `#a1232b`            | `#f0787e`            | a contradicted sentence, an error, a dropped citation                   |
-| `--amber`                         | `#8a5a00`            | `#e3b04b`            | the score line's warning, an interrupted answer                         |
-| `--highlight`, `--highlight-deep` | `#f7e36b`, `#e9cf3a` | `#5c4e0f`, `#75651a` | the chip and its hover; the cited span in the PDF                       |
-| `--focus`                         | `#0b5bd3`            | `#7fb0ff`            | the focus ring                                                          |
-| `--button-ink`                    | `#fbfbf9`            | `#17191c`            | text on an ink button                                                   |
-| `--scrim`                         | ink at 60 %          | ink at 60 %          | behind a sheet on a narrow screen                                       |
+| Token                             | Light                | Dark                 | Use                                                                              |
+| --------------------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------- |
+| `--paper`                         | `#ffffff`            | `#17191c`            | the page                                                                         |
+| `--paper-deep`                    | `#f8f9fa`            | `#21242a`            | a second sheet: the question, the bundle panel, the viewer bar, sign-in          |
+| `--rule`                          | `#dee2e6`            | `#3a3e45`            | the 1 px rules between regions and rows                                          |
+| `--edge`                          | `#868e96`            | `#7c838c`            | the border of a control (a pill, the composer, an input); 3:1 or more            |
+| `--ink`                           | `#212529`            | `#ecedef`            | prose, a supported sentence, labels, references                                  |
+| `--ink-soft`                      | `#495057`            | `#b5b9c0`            | secondary prose, the done stages, counts                                         |
+| `--grey`                          | `#666e76`            | `#949aa3`            | an unsupported sentence, an uncited block, a pending stage, placeholders         |
+| `--red-ink`                       | `#a1232b`            | `#f0787e`            | a contradicted sentence, an error, a dropped citation                            |
+| `--amber`                         | `#8a5a00`            | `#e3b04b`            | the score line's warning, an interrupted answer                                  |
+| `--highlight`, `--highlight-deep` | `#f7e36b`, `#e9cf3a` | `#5c4e0f`, `#75651a` | the chip and its hover; the cited span in the PDF                                |
+| `--navy`                          | `#003366`            | `#9ec5fe`            | the product name, panel headings, the header's top band, a button, the skip link |
+| `--link`                          | `#0056b3`            | `#8ab4f8`            | a link                                                                           |
+| `--focus`                         | `#0056b3`            | `#8ab4f8`            | the focus ring                                                                   |
+| `--action-ink`                    | `#ffffff`            | `#0b1a2e`            | text on a navy button and the skip link                                          |
+| `--scrim`                         | ink at 60 %          | ink at 60 %          | behind a sheet on a narrow screen                                                |
 
-Contrast (WCAG): ink on paper 17.0:1; ink-soft on paper 8.0:1; grey on paper 4.8:1 (4.4:1 on
-paper-deep, so grey text sits on `--paper` only); red ink on paper 7.3:1; amber on paper 5.7:1;
-ink on highlight 13.6:1. Dark: ink on paper 15.0:1; grey on paper 5.5:1; red ink on paper 6.5:1;
-ink on highlight 7.0:1.
+Contrast (WCAG 2.2), light: ink on paper 15.4:1; ink-soft on paper 8.2:1; grey on paper 5.2:1 and
+on paper-deep 4.9:1; red ink on paper 7.5:1; amber on paper 5.9:1; ink on highlight 11.9:1 and on
+highlight-deep 9.9:1; navy on paper 12.6:1 (white on navy the same); link blue on paper 7.0:1;
+edge on paper 3.3:1 and on paper-deep 3.2:1. Dark: ink on paper 15.0:1; ink-soft 9.0:1; grey on
+paper 6.2:1 and on paper-deep 5.5:1; red ink 6.5:1; amber 8.9:1; ink on highlight 7.0:1 and on
+highlight-deep 4.9:1; navy 10.0:1; focus 8.4:1; edge 4.6:1 and 4.1:1. Ink against grey is 3.0:1
+(2.4:1 dark), under the 3:1 that colour alone needs, so an unsupported sentence also carries a
+dotted underline. `test/browser/page.test.mjs` computes these from the page's computed styles in
+both modes.
 
 ### Faces
 
@@ -121,8 +130,6 @@ the two voices, so the distinction is never decorative.
 | Source Sans 3  | `--face-tool`    | The tool's voice: the answer, labels, buttons, the stage line, references, the score line, sign-in | Open (OFL), a tall x-height for a projector, tabular figures for page and paragraph numbers. Falls back to Helvetica Neue and Arial     |
 | Source Serif 4 | `--face-witness` | The witness's words: every evidence block, the hover span, the diff, a cell's two spans            | The statements were typeset in a serif; the words keep their face. Falls back to Times New Roman, the face of the statements themselves |
 
-Today both load from the system stack; self-hosting the two faces from `@fontsource` is row U1b,
-because the venue's network is not ours (PDF.js loads from cdnjs today, the same concern).
 References use `font-variant-numeric: tabular-nums`. Sentence case everywhere. No capitals-only
 labels, no eyebrow labels, no accented single word in a heading.
 
@@ -150,7 +157,53 @@ and grows its hit box with a pseudo-element.
 
 Each motion answers an action, runs 150 ms or less, and is an instant change under
 `prefers-reduced-motion`. The chip's hover and the stage change are the only motions. Nothing
-enters, fades or slides.
+enters, fades or slides. Under `prefers-reduced-motion: reduce` a rule in `styles.css` sets every
+transition and animation to 0 s.
+
+## Accessibility: WCAG 2.2 AA
+
+The page's target is WCAG 2.2 level AA. The reference for the institutional look is the
+International Criminal Court's site, `https://www.icc-cpi.int/`, as it answered on 2026-10-20
+(the home page and its two Drupal stylesheets).
+
+What the ICC site shows:
+
+| Observed on icc-cpi.int                                                                                                                  | Taken here                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inter, self-hosted (`Inter18pt-Light` and `-Regular` woff2), falling back to the system sans                                             | Not taken. Source Sans 3 stays the tool's voice; Inter is not in `node_modules` (horizon below)                                                                      |
+| Navy `#003366`: the top header band, links in the theme, action buttons, inline SVG icons                                                | `--navy`: a 4 px band above the header, the product name, panel headings, every filled button and the outline buttons' ink                                           |
+| Link blue `#0056b3` (the Bootstrap 4 primary)                                                                                            | `--link` and `--focus`                                                                                                                                               |
+| Body text `#212529` on `#fff`; panels `#f8f9fa`; borders `#dee2e6`                                                                       | `--ink`, `--paper`, `--paper-deep`, `--rule`                                                                                                                         |
+| Muted text `#6c757d`                                                                                                                     | Taken one step darker, `#666e76`: `#6c757d` is 4.45:1 on `#f8f9fa`, under AA for the uncited blocks on the bundle panel                                              |
+| `Skip to main content`, the first link in the page, visually hidden until focused, to an anchor before the content                       | Taken: `.skip-link` to `main#main` (`tabindex="-1"`), shown on focus                                                                                                 |
+| `lang="en"` and `dir="ltr"` on `html`; the EN/FR switch carries `hreflang` only; French and Spanish alt text has no `lang`               | `lang="en"` kept. The page has one language today                                                                                                                    |
+| Landmarks: `header`, labelled `nav` blocks, `main`, `footer`                                                                             | `header`, `main` labelled "Conversation", the "Evidence bundle" `aside` with its two labelled sections, the viewer `aside`                                           |
+| Focus on form controls and nav links: Bootstrap's `box-shadow: 0 0 0 0.25rem` in blue at 25 % opacity; other buttons the browser default | Not taken: a 2 px solid outline in `--focus`, offset 2 px, on every control (7.0:1 on paper); a translucent shadow measures under 3:1 and vanishes in forced colours |
+| Font Awesome 5.13.1 from cdnjs and Bootstrap Icons linked; the home page's icons are inline SVG                                          | Not taken: no icon font and no CDN. An icon, when one is needed, is inline SVG                                                                                       |
+| Light only; three `prefers-reduced-motion` rules from Bootstrap                                                                          | Dark mode kept; the reduced-motion rule above                                                                                                                        |
+| Photography and a carousel on the home page                                                                                              | Not taken: no imagery. The restraint in spacing and colour is taken                                                                                                  |
+
+What the page does for AA:
+
+- Text at 4.5:1 or more against its own background in both modes, including every evidence colour
+  (supported ink, unsupported grey, the chip on its highlighter, an uncited block on the panel).
+- Control borders at 3:1 (`--edge`); the focus ring at 3:1 or more against the paper under it.
+- An unsupported sentence is grey with a dotted underline, so the mark does not rely on colour.
+- The skip link is the first focusable element; Tab reaches the pills, the composer and every
+  button; Enter or Space works each one.
+- On a narrow screen `scroll-padding-bottom` keeps a focused control clear of the fixed composer.
+
+Open:
+
+- An accessibility statement page (the conformance claim, known gaps, a contact).
+- Text resize to 200 % and reflow at 320 px checked against the three layouts.
+- A French `lang` variant of the page and `lang` on any quoted text not in English.
+- An accessible name for the support mark: today an unsupported sentence carries a `title` only,
+  which a screen reader does not reliably announce.
+- Target size: the chip is inline in a sentence (exempt); the reference button in an evidence row
+  is under 24 px tall and relies on the spacing exception.
+- Inter as the tool's face, staged by `scripts/stage-page-assets.mjs` from `@fontsource/inter`
+  once that package is a dependency.
 
 ## Layout: the three regions
 

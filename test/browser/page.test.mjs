@@ -68,6 +68,8 @@ const BLOCKS = [
   },
 }));
 
+const KEY_CODES = { Escape: 27, Tab: 9, Enter: 13 };
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function stubQuery({ question, provider, signal, onStage, onEvidence, onToken }) {
@@ -175,10 +177,11 @@ describe.skipIf(!enabled)(
 
     const press = async (key) => {
       const printable = key.length === 1;
+      const text = printable ? key : key === "Enter" ? "\r" : undefined;
       const base = printable
-        ? { key, text: key }
-        : { key, code: key, windowsVirtualKeyCode: key === "Escape" ? 27 : 0 };
-      await cdp("Input.dispatchKeyEvent", { type: printable ? "keyDown" : "rawKeyDown", ...base });
+        ? { key, text }
+        : { key, code: key, windowsVirtualKeyCode: KEY_CODES[key] ?? 0, text };
+      await cdp("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base });
       await cdp("Input.dispatchKeyEvent", { type: "keyUp", key });
     };
 
@@ -321,6 +324,33 @@ describe.skipIf(!enabled)(
       expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(true);
     });
 
+    for (const [panel, text] of [
+      ["documents", "List the statements in the corpus"],
+      ["evidence", "Show the evidence about smoke in the stairwell"],
+    ]) {
+      it(`shows a pill in the empty ${panel} panel that submits and hides once the panel fills`, async () => {
+        await open({ width: 1280, height: 800 });
+        const list = `document.getElementById("${panel}-suggestions")`;
+        expect(await evaluate(`${list}.hidden`)).toBe(false);
+        expect(await evaluate(`!document.getElementById("${panel}-empty").hidden`)).toBe(true);
+        expect(
+          await evaluate(`[...${list}.querySelectorAll("button.pill")].map((b) => b.textContent)`),
+        ).toEqual([text]);
+        await evaluate(`${list}.querySelector("button.pill").click(); true`);
+        await until(`document.querySelector(".score")?.textContent.length > 0`);
+        expect(await evaluate(`document.querySelector(".turn .question p").textContent`)).toBe(
+          text,
+        );
+        expect(
+          await evaluate(`document.getElementById("${panel}").children.length`),
+        ).toBeGreaterThan(0);
+        expect(await evaluate(`${list}.hidden`)).toBe(true);
+        await evaluate(`document.getElementById("conversations-new").click(); true`);
+        expect(await evaluate(`document.getElementById("${panel}").children.length`)).toBe(0);
+        expect(await evaluate(`${list}.hidden`)).toBe(false);
+      });
+    }
+
     it("folds each evidence block, toggles it from the keyboard and opens the block a chip names", async () => {
       await open({ width: 1280, height: 800 });
       await ask();
@@ -433,25 +463,148 @@ describe.skipIf(!enabled)(
       await shot("phone-done");
     });
 
-    for (const dark of [false, true]) {
-      it(`keeps the answer text at 4.5:1 contrast or better in ${dark ? "dark" : "light"}`, async () => {
-        await open({ width: 1280, height: 800, dark });
-        await ask();
-        const { ink, paper } = await evaluate(`(() => {
-        const answer = document.querySelector(".answer");
-        let node = answer;
+    /**
+     * The text colour, the colour under it (its own or the nearest painted ancestor's) and the
+     * outline colour of each element a selector matches, from the computed styles.
+     */
+    const paints = (selector) =>
+      evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((node) => {
+        const own = getComputedStyle(node);
+        let at = node;
         let paper = "rgba(0, 0, 0, 0)";
-        while (node) {
-          paper = getComputedStyle(node).backgroundColor;
+        while (at) {
+          paper = getComputedStyle(at).backgroundColor;
           if (!/rgba\\(.*, 0\\)$/.test(paper) && paper !== "transparent") break;
-          node = node.parentElement;
+          at = at.parentElement;
         }
-        return { ink: getComputedStyle(answer).color, paper };
-      })()`);
-        expect(contrast(parseColour(ink), parseColour(paper))).toBeGreaterThanOrEqual(4.5);
+        return { ink: own.color, paper, outline: own.outlineColor, edge: own.borderTopColor };
+      })`);
+
+    const lowest = async (selector, key = "ink") => {
+      const found = await paints(selector);
+      expect(found.length, selector).toBeGreaterThan(0);
+      return Math.min(...found.map((p) => contrast(parseColour(p[key]), parseColour(p.paper))));
+    };
+
+    for (const dark of [false, true]) {
+      it(`keeps every text and evidence colour at 4.5:1 and every control edge at 3:1 in ${dark ? "dark" : "light"}`, async () => {
+        await open({ width: 1280, height: 800, dark });
+        for (const selector of [
+          ".bar h1",
+          "header .inquiry",
+          "#suggestions button.pill",
+          "#documents-suggestions button.pill",
+          "#evidence-suggestions button.pill",
+          ".bundle .empty",
+          "#send",
+          ".keys",
+        ]) {
+          expect(await lowest(selector), selector).toBeGreaterThanOrEqual(4.5);
+        }
+        for (const selector of ["button.pill", "#question"]) {
+          expect(await lowest(selector, "edge"), selector).toBeGreaterThanOrEqual(3);
+        }
+        await ask();
+        for (const selector of [
+          ".answer",
+          ".answer .supported",
+          ".answer .cite",
+          ".score",
+          "#evidence .reference",
+          "#documents .facts",
+        ]) {
+          expect(await lowest(selector), selector).toBeGreaterThanOrEqual(4.5);
+        }
+        // The fake answer cites every sentence and every block, so the grey of an unsupported
+        // sentence and of an uncited block is measured on a probe in each one's container.
+        const probe = (container, className) =>
+          evaluate(`(() => {
+            const span = document.createElement("span");
+            span.className = ${JSON.stringify(className)};
+            span.textContent = "probe";
+            const host = document.querySelector(${JSON.stringify(container)});
+            host.append(span);
+            let at = span;
+            let paper;
+            do {
+              paper = getComputedStyle(at).backgroundColor;
+              at = at.parentElement;
+            } while (at && /rgba\\(.*, 0\\)$/.test(paper));
+            const style = getComputedStyle(span);
+            const found = { ink: style.color, paper, line: style.textDecorationLine };
+            span.remove();
+            return found;
+          })()`);
+        const unsupported = await probe(".answer p", "unsupported");
+        expect(
+          contrast(parseColour(unsupported.ink), parseColour(unsupported.paper)),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(unsupported.line).toBe("underline");
+        await evaluate(`document.querySelector("#evidence .block").dataset.cited = "no"; true`);
+        const uncited = await probe("#evidence .block details", "quote");
+        expect(
+          contrast(parseColour(uncited.ink), parseColour(uncited.paper)),
+        ).toBeGreaterThanOrEqual(4.5);
         await shot(dark ? "laptop-dark" : "laptop-light");
       });
     }
+
+    it("puts the skip link first in the tab order, lands on the main landmark and reaches a pill with Tab", async () => {
+      await open({ width: 1280, height: 800 });
+      await press("Tab");
+      expect(await evaluate(`document.activeElement.className`)).toBe("skip-link");
+      expect(await evaluate(`document.activeElement.textContent`)).toBe("Skip to main content");
+      expect(await evaluate(`document.activeElement.getBoundingClientRect().top >= 0`)).toBe(true);
+      await press("Enter");
+      await until(`document.activeElement?.id === "main"`);
+      expect(await evaluate(`document.activeElement.tagName`)).toBe("MAIN");
+      for (let i = 0; i < 10; i++) {
+        await press("Tab");
+        if (await evaluate(`document.activeElement.classList.contains("pill")`)) break;
+      }
+      expect(await evaluate(`document.activeElement.classList.contains("pill")`)).toBe(true);
+      expect(await evaluate(`getComputedStyle(document.activeElement).outlineStyle`)).toBe("solid");
+      const [ring] = (await paints(":focus")).map((p) =>
+        contrast(parseColour(p.outline), parseColour(p.paper)),
+      );
+      expect(ring).toBeGreaterThanOrEqual(3);
+      await press("Enter");
+      await until(`document.querySelector(".score")?.textContent.length > 0`);
+      expect(await evaluate(`document.querySelector(".turn .question p").textContent`)).toBe(
+        "What did residents on floor 16 see when they first noticed the fire?",
+      );
+    });
+
+    it("names the landmarks: the banner, the main conversation and the labelled panels", async () => {
+      await open({ width: 1280, height: 800 });
+      expect(await evaluate(`document.querySelectorAll("main").length`)).toBe(1);
+      expect(await evaluate(`document.querySelector("main").getAttribute("aria-label")`)).toBe(
+        "Conversation",
+      );
+      expect(await evaluate(`document.querySelector("body > header") !== null`)).toBe(true);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll(".bundle section")].map((s) => document.getElementById(s.getAttribute("aria-labelledby")).textContent.trim())`,
+        ),
+      ).toEqual(["Referenced documents", "Evidence this turn"]);
+      expect(await evaluate(`document.querySelector(".bundle").getAttribute("aria-label")`)).toBe(
+        "Evidence bundle",
+      );
+    });
+
+    it("drops transitions under prefers-reduced-motion", async () => {
+      await cdp("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      await cdp("Page.navigate", { url: `${base}/` });
+      await until(`document.getElementById("connection")?.textContent === "connected"`);
+      await ask();
+      expect(
+        await evaluate(
+          `getComputedStyle(document.querySelector(".answer .cite")).transitionDuration`,
+        ),
+      ).toBe("0s");
+    });
 
     it("moves focus among chips with ], opens with o and closes with Escape", async () => {
       await open({ width: 1280, height: 800 });

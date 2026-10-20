@@ -32,20 +32,23 @@
   color-scheme: light dark;
 
   /* Paper and ink */
-  --paper: #fbfbf9;
-  --paper-deep: #f0f0ec;
-  --rule: #cfd0cb;
-  --ink: #16191d;
-  --ink-soft: #4a4f57;
-  --grey: #6b7079;
+  --paper: #ffffff;
+  --paper-deep: #f8f9fa;
+  --rule: #dee2e6;
+  --edge: #868e96;
+  --ink: #212529;
+  --ink-soft: #495057;
+  --grey: #666e76;
   --red-ink: #a1232b;
   --amber: #8a5a00;
   --highlight: #f7e36b;
   --highlight-deep: #e9cf3a;
-  --focus: #0b5bd3;
-  --button-ink: #fbfbf9;
-  --spend-fill: #4a4f57;
-  --spend-empty: #cfd0cb;
+  --navy: #003366;
+  --link: #0056b3;
+  --focus: #0056b3;
+  --action-ink: #ffffff;
+  --spend-fill: #495057;
+  --spend-empty: #dee2e6;
   --scrim: color-mix(in srgb, var(--ink) 60%, transparent);
 
   /* Faces */
@@ -73,6 +76,9 @@
   --rule-width: 1px;
   --radius: 2px;
 
+  /* Focus */
+  --focus-width: 2px;
+
   /* Motion */
   --quick: 150ms;
 }
@@ -82,15 +88,18 @@
     --paper: #17191c;
     --paper-deep: #21242a;
     --rule: #3a3e45;
+    --edge: #7c838c;
     --ink: #ecedef;
     --ink-soft: #b5b9c0;
-    --grey: #8a9099;
+    --grey: #949aa3;
     --red-ink: #f0787e;
     --amber: #e3b04b;
     --highlight: #5c4e0f;
     --highlight-deep: #75651a;
-    --focus: #7fb0ff;
-    --button-ink: #17191c;
+    --navy: #9ec5fe;
+    --link: #8ab4f8;
+    --focus: #8ab4f8;
+    --action-ink: #0b1a2e;
     --spend-fill: #b5b9c0;
     --spend-empty: #3a3e45;
   }

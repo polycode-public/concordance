@@ -32,6 +32,41 @@ describe("splitStatements", () => {
     expect(statements[2]).toContain("AS turn_count");
   });
 
+  it("splits 0003_fact_registers.sql into the pairing table, the name indexes and the cascades", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0003_fact_registers.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(10);
+    const pairs = statements[0];
+    expect(pairs).toMatch(/^CREATE TABLE identity_revealing_pairs \(/);
+    for (const column of [
+      "document_a  text NOT NULL",
+      "document_b  text NOT NULL",
+      "reason      text NOT NULL",
+      "marked_by   text NOT NULL",
+    ])
+      expect(pairs).toContain(column);
+    expect(pairs).toContain("PRIMARY KEY (document_a, document_b)");
+    expect(pairs).toContain("CHECK (document_a < document_b)");
+    expect(pairs).not.toMatch(/REFERENCES/);
+    expect(statements.slice(1, 4)).toEqual([
+      "CREATE UNIQUE INDEX entities_kind_canonical_idx ON entities (kind, lower(canonical))",
+      "CREATE UNIQUE INDEX events_name_idx ON events (lower(name))",
+      "CREATE INDEX assertions_source_chunk_idx ON assertions (source_chunk_id)",
+    ]);
+    const cascades = statements.slice(4).join("\n");
+    for (const [table, column, target] of [
+      ["assertions", "source_chunk_id", "chunks"],
+      ["assertion_comparisons", "assertion_a", "assertions"],
+      ["assertion_comparisons", "assertion_b", "assertions"],
+    ]) {
+      expect(cascades).toContain(`ALTER TABLE ${table} DROP CONSTRAINT ${table}_${column}_fkey`);
+      expect(cascades).toMatch(
+        new RegExp(`FOREIGN KEY \\(${column}\\) REFERENCES ${target} \\(id\\) ON DELETE CASCADE`),
+      );
+    }
+    expect(sql).not.toMatch(/accepted_facts\s+(DROP|ADD)/);
+  });
+
   it("does not split on a ; inside a string literal or an identifier", () => {
     expect(splitStatements(`SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"; SELECT 2`)).toEqual([
       `SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"`,
