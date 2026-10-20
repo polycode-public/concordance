@@ -59,7 +59,7 @@ describe("the matrix", () => {
       label: "contradict",
       spanA: "about 1.00 am",
       spanB: "1.30 am",
-      model: "rules-v1",
+      model: "rules-v2",
       identityRevealing: false,
       a: {
         witnessId: "IWS-A",
@@ -67,6 +67,8 @@ describe("the matrix", () => {
         chunkId: "101",
         locator: { page: 2, paragraph: 5 },
         sentence: "I first saw smoke in the lobby at about 1.00 am.",
+        subjectText: "I",
+        subjectKind: "witness",
       },
       b: { witnessId: "C123", cipherOnly: true, documentId: "C123-1" },
     });
@@ -88,7 +90,11 @@ describe("the matrix", () => {
     const { body } = await call("GET", "/facts/matrix", { query: { topic: "dark" } });
     expect(body.group).toEqual({ eventId: null, name: null, topic: "dark" });
     expect(body.pairs).toHaveLength(1);
-    expect(body.pairs[0]).toMatchObject({ label: "unrelated", model: "fake-extract" });
+    expect(body.pairs[0]).toMatchObject({
+      label: "unrelated",
+      model: "fake-extract",
+      a: { subjectText: "The stairs", subjectKind: "thing", predicate: "were dark" },
+    });
   });
 
   it("answers 404 for an unknown event and 400 for no group", async () => {
@@ -257,6 +263,8 @@ describe("the witness report and the timeline", () => {
     expect(one.body.points[0]).toMatchObject({
       documentId: "IWS-A1",
       locator: { page: 2, paragraph: 5 },
+      subjectText: "I",
+      subjectKind: "witness",
     });
   });
 });
