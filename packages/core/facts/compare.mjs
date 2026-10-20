@@ -30,6 +30,8 @@ import {
 } from "./nli.mjs";
 
 export const COMPARE_PIPELINE_VERSION = "compare-v1";
+/** A running row older than this belongs to an invocation that died; the Lambda timeout is 15. */
+export const LEASE_MINUTES = 16;
 const ASSERTION_PAGE = 400;
 const LABELLED_PAGE = 2000;
 
@@ -46,12 +48,18 @@ export const RUN_SQL = Object.freeze({
    ORDER BY a.id LIMIT $3`,
   facts: `SELECT id, assertion_id, text, is_hypothesis FROM accepted_facts ORDER BY id`,
   findRun: `
-  SELECT id, status, counts FROM comparison_runs
+  SELECT id, status, counts, started_at FROM comparison_runs
    WHERE corpus = $1 AND pipeline_version = $2 AND input_sha256 = $3 AND model = $4`,
   insertRun: `
   INSERT INTO comparison_runs (corpus, pipeline_version, prompt_version, input_sha256, model)
   VALUES ($1, $2, $3, $4, $5)
-  ON CONFLICT (corpus, pipeline_version, input_sha256, model) DO NOTHING`,
+  ON CONFLICT (corpus, pipeline_version, input_sha256, model) DO NOTHING
+  RETURNING id`,
+  claimRun: `
+  UPDATE comparison_runs SET status = 'running', started_at = now(), finished_at = NULL
+   WHERE id = $1::bigint
+     AND (status <> 'running' OR started_at < now() - make_interval(mins => $2::int))
+  RETURNING id`,
   labelled: `
   SELECT c.id, c.kind, c.assertion_a, c.assertion_b, c.accepted_fact_id
     FROM assertion_comparisons c JOIN comparison_runs r ON r.id = c.run_id
@@ -250,18 +258,85 @@ export async function runComparison({
   stage("assertions-loaded", assertions.length, { facts: facts.length });
   const hash = inputHash(assertions, facts);
 
-  const found = await db.query(RUN_SQL.findRun, [corpus, pipelineVersion, hash, model]);
-  if (found.rows[0]?.status === "complete") {
-    stage("skipped", 0, { runId: String(found.rows[0].id) });
-    return { status: "skipped", runId: String(found.rows[0].id), counts: found.rows[0].counts };
+  const key = [corpus, pipelineVersion, hash, model];
+  let found = (await db.query(RUN_SQL.findRun, key)).rows[0];
+  if (found?.status === "complete") {
+    stage("skipped", 0, { runId: String(found.id) });
+    return { status: "skipped", runId: String(found.id), counts: found.counts };
   }
-  let runId = found.rows[0]?.id;
-  if (!runId) {
-    await db.query(RUN_SQL.insertRun, [corpus, pipelineVersion, NLI_PROMPT_VERSION, hash, model]);
-    runId = (await db.query(RUN_SQL.findRun, [corpus, pipelineVersion, hash, model])).rows[0]?.id;
-    if (!runId) throw new Error(`${corpus}: the comparison run row was not stored`);
+  let owned = false;
+  if (!found) {
+    const inserted = await db.query(RUN_SQL.insertRun, [
+      corpus,
+      pipelineVersion,
+      NLI_PROMPT_VERSION,
+      hash,
+      model,
+    ]);
+    owned = inserted.rows.length > 0;
+    found = (await db.query(RUN_SQL.findRun, key)).rows[0];
+    if (!found) throw new Error(`${corpus}: the comparison run row was not stored`);
   }
-  runId = String(runId);
+  const runId = String(found.id);
+  if (!owned) {
+    const claimed = await db.query(RUN_SQL.claimRun, [runId, LEASE_MINUTES]);
+    if (claimed.rows.length === 0) {
+      const startedAt =
+        found.started_at instanceof Date
+          ? found.started_at.toISOString()
+          : String(found.started_at);
+      stage("held", 0, { runId, startedAt });
+      return { status: "running", runId, startedAt };
+    }
+  }
+  const progress = { counts: {} };
+  try {
+    return await labelRun({
+      corpus,
+      db,
+      provider,
+      pipelineVersion,
+      deadline,
+      signal,
+      log,
+      now,
+      bounds,
+      model,
+      stage,
+      assertions,
+      facts,
+      runId,
+      progress,
+    });
+  } catch (error) {
+    // Best effort: the original error is the one that surfaces, and a stale lease frees the row
+    // if this write fails too.
+    try {
+      await db.query(RUN_SQL.finishRun, [runId, "partial", progress.counts]);
+    } catch (finishError) {
+      stage("finish-failed", 0, { runId, error: String(finishError?.message ?? finishError) });
+    }
+    throw error;
+  }
+}
+
+async function labelRun({
+  corpus,
+  db,
+  provider,
+  pipelineVersion,
+  deadline,
+  signal,
+  log,
+  now,
+  bounds,
+  model,
+  stage,
+  assertions,
+  facts,
+  runId,
+  progress,
+}) {
   const labelled = await loadLabelled(db, corpus, pipelineVersion, model);
   stage("run-opened", labelled.size, { runId });
 
@@ -297,6 +372,7 @@ export async function runComparison({
     written: 0,
     remaining: 0,
   };
+  progress.counts = counts;
   const forModel = [];
   const ruled = [];
   for (const pair of open) {

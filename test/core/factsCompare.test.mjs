@@ -12,6 +12,8 @@ import {
 } from "../../packages/core/facts/align.mjs";
 import {
   COMPARE_PIPELINE_VERSION,
+  LEASE_MINUTES,
+  RUN_SQL,
   assertionFromRow,
   modelBatches,
   runComparison,
@@ -302,6 +304,75 @@ describe("runComparison", () => {
     });
     expect(prompts).toHaveLength(1);
     expect(store.tables.assertion_comparisons).toHaveLength(10);
+  });
+
+  describe("a run in progress", () => {
+    async function runningStore() {
+      const store = createCompareStore(compareSeed());
+      const { provider, prompts } = compareProvider();
+      const first = await runComparison({
+        corpus: "grenfell",
+        db: store,
+        provider,
+        log: quiet,
+        deadline: 0,
+      });
+      store.tables.comparison_runs[0].status = "running";
+      return { store, provider, prompts, first };
+    }
+
+    it("returns running and touches no model and writes nothing", async () => {
+      const { store, provider, first } = await runningStore();
+      const startedAt = store.tables.comparison_runs[0].started_at;
+      const writes = store.statements.length;
+      const idle = { extractModel: provider.extractModel };
+      const second = await runComparison({
+        corpus: "grenfell",
+        db: store,
+        provider: idle,
+        log: quiet,
+      });
+      expect(second).toEqual({ status: "running", runId: first.runId, startedAt });
+      const written = store.statements
+        .slice(writes)
+        .filter((s) => /INSERT|UPDATE/.test(s.text) && s.text !== RUN_SQL.claimRun);
+      expect(written).toEqual([]);
+      expect(store.tables.comparison_runs[0]).toMatchObject({
+        status: "running",
+        started_at: startedAt,
+      });
+    });
+
+    it("resumes a lease older than sixteen minutes", async () => {
+      const { store, provider, prompts, first } = await runningStore();
+      store.advance((LEASE_MINUTES + 1) * 60_000);
+      const second = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      expect(second).toMatchObject({ status: "complete", runId: first.runId });
+      expect(prompts).toHaveLength(1);
+    });
+
+    it("keeps a lease younger than sixteen minutes", async () => {
+      const { store, provider, first } = await runningStore();
+      store.advance((LEASE_MINUTES - 1) * 60_000);
+      const second = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      expect(second).toMatchObject({ status: "running", runId: first.runId });
+    });
+
+    it("marks the run partial with its counts when a model call throws", async () => {
+      const store = createCompareStore(compareSeed());
+      const { provider } = compareProvider({
+        answer: () => {
+          throw new Error("throttled after 8 attempts");
+        },
+      });
+      await expect(
+        runComparison({ corpus: "grenfell", db: store, provider, log: quiet }),
+      ).rejects.toThrow(/throttled/);
+      expect(store.tables.comparison_runs[0]).toMatchObject({
+        status: "partial",
+        counts: { rules: 7 },
+      });
+    });
   });
 
   it("drops a label whose span is not in its sentence and counts it", async () => {

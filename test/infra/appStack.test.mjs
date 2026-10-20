@@ -277,6 +277,7 @@ describe("AppStack", () => {
     const [compareId, { Properties: fn }] = functionNamed("CompareFunction");
     expect(fn.Timeout).toBe(900);
     expect(fn.MemorySize).toBe(1769);
+    expect(fn.ReservedConcurrentExecutions).toBe(1);
     expect(fn.Environment.Variables).toEqual({
       MODEL_PROVIDER: "bedrock",
       DB_RESOURCE_ARN: CLUSTER,
