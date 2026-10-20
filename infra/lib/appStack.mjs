@@ -2,9 +2,10 @@
 // Copyright 2026 Polycode Limited
 
 // The serving layer: the chat WebSocket on API Gateway with a Lambda per route, the turn
-// function it invokes asynchronously, the cancel table, GET /doc/{id}, GET /spend and the
-// conversation routes and POST /export on an HTTP API, one Cognito user, and the page on CloudFront with a generated config.json. Every resource
-// is destroyable and nothing costs money at idle.
+// function and the report function it invokes asynchronously, the cancel table, GET /doc/{id},
+// GET /spend, the conversation and report routes and POST /export on an HTTP API, one Cognito
+// user, and the page on CloudFront with a generated config.json. Every resource is destroyable
+// and nothing costs money at idle.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,11 +131,23 @@ export class AppStack extends Stack {
       memorySize: 1024,
       environment: dbEnv,
     });
+    const reportFn = fn("report", {
+      timeout: Duration.minutes(15),
+      memorySize: 1024,
+      environment: dbEnv,
+    });
     const wsRoutesFn = fn("wsRoutes", {
-      environment: { ...dbEnv, TURN_FUNCTION_NAME: turnFn.functionName },
+      environment: {
+        ...dbEnv,
+        TURN_FUNCTION_NAME: turnFn.functionName,
+        REPORT_FUNCTION_NAME: reportFn.functionName,
+      },
     });
     const docFn = fn("doc", { environment: { CORPUS_BUCKET: corpusBucket.bucketName } });
     const conversationsFn = fn("conversations", {
+      environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
+    });
+    const reportsFn = fn("reports", {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
     const exportFn = fn("export", {
@@ -162,6 +175,11 @@ export class AppStack extends Stack {
       function: turnFn,
       retryAttempts: 0,
     });
+    // A retried report would store a second version of the same request.
+    new lambda.EventInvokeConfig(this, "ReportInvokeConfig", {
+      function: reportFn,
+      retryAttempts: 0,
+    });
 
     const webSocketApi = new apigwv2.WebSocketApi(this, "ChatApi", {
       connectRouteOptions: {
@@ -183,8 +201,8 @@ export class AppStack extends Stack {
       autoDeploy: true,
     });
 
-    for (const f of [turnFn, wsRoutesFn]) webSocketApi.grantManageConnections(f);
-    for (const f of [turnFn, wsRoutesFn, conversationsFn, exportFn]) {
+    for (const f of [turnFn, reportFn, wsRoutesFn]) webSocketApi.grantManageConnections(f);
+    for (const f of [turnFn, reportFn, wsRoutesFn, conversationsFn, reportsFn, exportFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -203,18 +221,21 @@ export class AppStack extends Stack {
         }),
       );
     }
-    turnFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        resources: [
-          "arn:aws:bedrock:*::foundation-model/*",
-          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
-        ],
-      }),
-    );
+    for (const f of [turnFn, reportFn]) {
+      f.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+          resources: [
+            "arn:aws:bedrock:*::foundation-model/*",
+            `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
+          ],
+        }),
+      );
+    }
     cancelTable.grantReadWriteData(turnFn);
     cancelTable.grantReadWriteData(wsRoutesFn);
     turnFn.grantInvoke(wsRoutesFn);
+    reportFn.grantInvoke(wsRoutesFn);
     corpusBucket.grantRead(wsRoutesFn, "*/raw/*");
     corpusBucket.grantRead(docFn, "*/raw/*");
     exportFn.addToRolePolicy(
@@ -245,7 +266,11 @@ export class AppStack extends Stack {
     const httpApi = new apigwv2.HttpApi(this, "DocApi", {
       corsPreflight: {
         allowOrigins: [`https://${distribution.distributionDomainName}`],
-        allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.POST],
+        allowMethods: [
+          apigwv2.CorsHttpMethod.GET,
+          apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.DELETE,
+        ],
         allowHeaders: ["authorization", "content-type"],
         maxAge: Duration.hours(1),
       },
@@ -284,6 +309,20 @@ export class AppStack extends Stack {
       });
     }
 
+    const reportsIntegration = new HttpLambdaIntegration("ReportsIntegration", reportsFn);
+    httpApi.addRoutes({
+      path: "/reports",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: reportsIntegration,
+      authorizer: userAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: "/reports/{filename}",
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
+      integration: reportsIntegration,
+      authorizer: userAuthorizer,
+    });
+
     // The presigned GET is the access control, and a holder of the URL can fetch it outside a
     // browser anyway. A rule naming the distribution's domain would make the data stack
     // depend on this one, which already depends on it for the bucket.
@@ -305,6 +344,7 @@ export class AppStack extends Stack {
           httpUrl: httpApi.apiEndpoint,
           spendUrl: `${httpApi.apiEndpoint}/spend`,
           conversationsUrl: `${httpApi.apiEndpoint}/conversations`,
+          reportsUrl: `${httpApi.apiEndpoint}/reports`,
           exportUrl: `${httpApi.apiEndpoint}/export`,
           auth: {
             region: this.region,

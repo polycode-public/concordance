@@ -5,6 +5,7 @@
 // and review cycle, and stored with versions. The model writes [En] tags over the evidence
 // blocks it was given; the server resolves them with checkAnswer, as it does for a turn.
 import { ABSTAIN_PHRASE } from "./prompt.mjs";
+import { isReportFilename } from "./protocol.mjs";
 import { NO_EVIDENCE_ANSWER, checkAnswer } from "./query.mjs";
 import {
   CHARS_PER_TOKEN,
@@ -27,13 +28,6 @@ export const REPORT_LIMITS = Object.freeze({
 export const MAX_SECTIONS = 8;
 export const MAX_TITLE = 200;
 export const MAX_REPORTS = 100;
-
-export const REPORT_FILENAME = /^[a-z0-9][a-z0-9-]*\.md$/;
-export const MAX_FILENAME = 128;
-
-/** True when a value can name a stored report. */
-export const isReportFilename = (value) =>
-  typeof value === "string" && value.length <= MAX_FILENAME && REPORT_FILENAME.test(value);
 
 export const REPORT_SYSTEM_PROMPT = [
   "You write one section of a report about a corpus of witness statements.",
@@ -615,6 +609,31 @@ export async function deleteReport(db, { userId, filename }) {
     [userId, filename],
   );
   return rows.length;
+}
+
+/**
+ * The answer to one reports request: the HTTP routes on AWS and on the laptop answer with it.
+ * @param {{ query: Function }} db
+ * @param {{ method: string, filename?: string, userId: string }} request
+ * @returns {Promise<{ status: number, body: object }>}
+ */
+export async function reportsResponse(db, { method, filename, userId }) {
+  if (filename === undefined) {
+    if (method !== "GET") return { status: 405, body: { message: "Use GET for the list." } };
+    return { status: 200, body: { reports: await listReports(db, { userId }) } };
+  }
+  if (!isReportFilename(filename)) {
+    return { status: 400, body: { message: "The filename is not a lower-case .md name." } };
+  }
+  if (method === "DELETE") {
+    const deleted = await deleteReport(db, { userId, filename });
+    if (!deleted) return { status: 404, body: { message: "No such report." } };
+    return { status: 200, body: { filename, deleted } };
+  }
+  if (method !== "GET") return { status: 405, body: { message: "Use GET or DELETE." } };
+  const versions = await reportVersions(db, { userId, filename });
+  if (!versions.length) return { status: 404, body: { message: "No such report." } };
+  return { status: 200, body: { filename, versions } };
 }
 
 /**

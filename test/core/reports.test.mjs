@@ -7,7 +7,6 @@ import {
   REPORT_PROMPT_VERSION,
   REPORT_SYSTEM_PROMPT,
   deleteReport,
-  isReportFilename,
   keepKnownTags,
   latestReport,
   listReports,
@@ -20,6 +19,7 @@ import {
   storeReport,
   stripTags,
 } from "../../packages/core/reports.mjs";
+import { isReportFilename } from "../../packages/core/protocol.mjs";
 import { MAX_HITS } from "../../packages/core/retrieval/expand.mjs";
 import { createReportsStore } from "./reportsFakeStore.mjs";
 

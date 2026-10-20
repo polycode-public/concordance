@@ -11,11 +11,13 @@ const DOCS = {
 
 function setup({ inFlight = {}, objects = ["grenfell/raw/IWS1.pdf"] } = {}) {
   const invoked = [];
+  const reports = [];
   const posted = [];
   const started = [];
   const closed = [];
   const handler = createHandler({
     invokeTurn: async (payload) => invoked.push(payload),
+    invokeReport: async (payload) => reports.push(payload),
     cancels: {
       start: async (pk, turnId, ttl) => {
         started.push({ pk, turnId, ttl });
@@ -35,7 +37,7 @@ function setup({ inFlight = {}, objects = ["grenfell/raw/IWS1.pdf"] } = {}) {
     },
     now: () => NOW,
   });
-  return { handler, invoked, posted, started, closed };
+  return { handler, invoked, reports, posted, started, closed };
 }
 
 const event = (routeKey, body) => ({
@@ -77,6 +79,23 @@ describe("WebSocket routes", () => {
         userId: "sub-1",
       },
     ]);
+    expect(posted).toEqual([]);
+  });
+
+  it("invokes the report function with the report frame and the user", async () => {
+    const { handler, invoked, reports, started, posted } = setup();
+    const frame = {
+      type: "report",
+      thread: "t1",
+      requestId: "r1",
+      topic: "The stairs",
+      documentIds: ["IWS1"],
+      filename: "stairs.md",
+    };
+    expect(await handler(event("$default", frame))).toEqual({ statusCode: 200 });
+    expect(reports).toEqual([{ frame, ...TARGET, userId: "sub-1" }]);
+    expect(invoked).toEqual([]);
+    expect(started).toEqual([]);
     expect(posted).toEqual([]);
   });
 
