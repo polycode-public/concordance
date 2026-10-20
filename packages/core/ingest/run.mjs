@@ -306,6 +306,7 @@ export function planChunks(pages) {
     return {
       ordinal,
       text: section.text,
+      heading: section.heading,
       locator,
       passages: slidingPassages(sentences).map((p) => ({
         ordinal: passageOrdinal++,
@@ -420,13 +421,14 @@ export async function ingestDocument({
   }
 
   const info = corpusInfo(meta.corpus);
-  const headerFor = (locator) =>
+  const headerFor = (locator, heading) =>
     buildHeader({
       corpus: info.label,
       witnessId: meta.witnessId,
       role: meta.role ?? undefined,
       statementDate: meta.statementDate ?? undefined,
       eventDate: info.eventDate,
+      heading,
       locator,
     });
 
@@ -439,7 +441,7 @@ export async function ingestDocument({
   stage("sections-split", sections.length);
 
   for (const [i, section] of sections.entries()) {
-    section.header = headerFor(section.locator);
+    section.header = headerFor(section.locator, section.heading);
     section.context = await extractString(
       provider,
       {

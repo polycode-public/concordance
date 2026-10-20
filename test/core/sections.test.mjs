@@ -11,8 +11,7 @@ describe("splitNumberedParagraphs", () => {
       "3. I woke at 01:00.\n   I smelt smoke.",
     ];
     expect(splitNumberedParagraphs(pages)).toEqual([
-      { paragraph: null, page: 1, text: "WITNESS STATEMENT" },
-      { paragraph: 1, page: 1, text: "My name is Witness A." },
+      { paragraph: 1, page: 1, text: "My name is Witness A.", heading: "WITNESS STATEMENT" },
       { paragraph: 2, page: 1, text: "I lived on the eighteenth floor." },
       { paragraph: 3, page: 2, text: "I woke at 01:00. I smelt smoke." },
     ]);
@@ -183,6 +182,49 @@ describe("splitNumberedParagraphs", () => {
     });
   });
 
+  describe("footer and headings", () => {
+    const footer = "Jo Smith 1\nIWS00000001 0001";
+
+    it("drops a footer of the learnt pattern and keeps a page whose footer differs", () => {
+      const pages = [
+        { page: 1, text: `1. First.\n${footer}` },
+        { page: 2, text: "2. Second.\nJo Smith 2\nIWS00000002 0002" },
+      ];
+      expect(splitNumberedParagraphs(pages).map((s) => s.text)).toEqual([
+        "First.",
+        "Second. Jo Smith 2 IWS00000002 0002",
+      ]);
+    });
+
+    it("drops a footer that gives the page number before the name", () => {
+      const pages = [{ page: 1, text: "1. First.\n7\nJO SMITH\nIWS00000001_0001" }];
+      expect(splitNumberedParagraphs(pages)).toEqual([{ paragraph: 1, page: 1, text: "First." }]);
+    });
+
+    it("drops nothing when the first page shows no footer", () => {
+      const pages = [{ page: 1, text: "1. First.\nJo Smith 1" }];
+      expect(splitNumberedParagraphs(pages)[0].text).toBe("First. Jo Smith 1");
+    });
+
+    it("keeps a short line inside the paragraph when no numbered paragraph follows it", () => {
+      const pages = [{ page: 1, text: "1. First.\nThe end of it all" }];
+      expect(splitNumberedParagraphs(pages)[0].text).toBe("First. The end of it all");
+    });
+
+    it("keeps a lower-case wrapped line before a paragraph in the paragraph", () => {
+      const pages = [{ page: 1, text: "1. First and\nthe thick\n2. Second." }];
+      expect(splitNumberedParagraphs(pages)[0].text).toBe("First and the thick");
+    });
+
+    it("carries a heading over a numbered paragraph that has no text", () => {
+      const pages = [{ page: 1, text: "1. First.\n2.\nTravel\n3.\n4. Fourth." }];
+      expect(splitNumberedParagraphs(pages)).toEqual([
+        { paragraph: 1, page: 1, text: "First." },
+        { paragraph: 4, page: 1, text: "Fourth.", heading: "Travel" },
+      ]);
+    });
+  });
+
   describe("statement fixtures", () => {
     const load = (name) =>
       readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8")
@@ -202,8 +244,43 @@ describe("splitNumberedParagraphs", () => {
       expect(numbers("IWS00000913-pages-3-4.txt")).toEqual(range(10, 20));
     });
 
-    it("finds paragraphs 1 to 6, 10 and 11 of IWS00000490 pages 1 to 2", () => {
-      expect(numbers("IWS00000490-pages-1-2.txt")).toEqual([...range(1, 6), 10, 11]);
+    it("finds paragraphs 1 to 5, 10 and 11 of IWS00000490 pages 1 to 2", () => {
+      expect(numbers("IWS00000490-pages-1-2.txt")).toEqual([...range(1, 5), 10, 11]);
+    });
+
+    it("leaves the footer out of every section of IWS00000490", () => {
+      const sections = splitNumberedParagraphs(load("IWS00000490-pages-1-2.txt"));
+      for (const s of sections) expect(s.text).not.toMatch(/IWS00000490|Behailu Kebede \d/);
+      expect(sections.find((s) => s.paragraph === 5).text).toMatch(/memories of my childhood\.$/);
+      expect(sections.find((s) => s.paragraph === 11).text).toMatch(/look after them\.$/);
+    });
+
+    it("makes the section lines of IWS00000490 the headings of the paragraphs after them", () => {
+      const sections = splitNumberedParagraphs(load("IWS00000490-pages-1-2.txt"));
+      const headings = sections.filter((s) => s.heading).map((s) => [s.paragraph, s.heading]);
+      expect(headings).toEqual([
+        [1, "STATEMENT OF BEHAILU KEBEDE"],
+        [3, "Ethiopia"],
+        [10, "Coming to the UK"],
+        [11, "Living at Grenfell Tower"],
+      ]);
+      expect(sections.find((s) => s.paragraph === 2).text).toMatch(/since then\.$/);
+    });
+
+    it("leaves the footer and the page number out of IWS00000913 and IWS00000990", () => {
+      for (const name of ["IWS00000913-pages-3-4.txt", "IWS00000990-pages-1-2.txt"]) {
+        for (const s of splitNumberedParagraphs(load(name))) {
+          expect(s.text).not.toMatch(/IWS0000\d{4} \d{4}|Richard FLETCHER|Hime GASHAW/);
+        }
+      }
+    });
+
+    it("heads IWS00000913 paragraph 15 and IWS00000990 paragraphs 1 and 11", () => {
+      const heading = (name, n) =>
+        splitNumberedParagraphs(load(name)).find((s) => s.paragraph === n).heading;
+      expect(heading("IWS00000913-pages-3-4.txt", 15)).toBe("THE MORNING OF 14 JUNE 2017");
+      expect(heading("IWS00000990-pages-1-2.txt", 1)).toBe("INTRODUCTION");
+      expect(heading("IWS00000990-pages-1-2.txt", 11)).toBe("The Morning of the 14 June 2017");
     });
 
     it("places each IWS00000913 paragraph on the page where it starts", () => {
