@@ -11,7 +11,7 @@ import {
 
 describe("the closed-world prompt", () => {
   it("tells the model to abstain with the one phrase and nothing else", () => {
-    expect(SYSTEM_PROMPT).toContain(`'The corpus does not say.'`);
+    expect(SYSTEM_PROMPT).toContain(`'the corpus does not say'`);
     expect(SYSTEM_PROMPT).toMatch(/write nothing else/);
     expect(SYSTEM_PROMPT.toLowerCase()).toContain(ABSTAIN_PHRASE);
   });
