@@ -10,6 +10,8 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 
 ## Operator assertions (verbatim, binding)
 
+- "Please add a task to add tools or MCPs which are available to the llm for access to computations on the data for anything we can do without incurring a lot of cost and build whatn we can based on how the current data is stored and more inference based stuff using F11." (2026-10-20; rows T1 and T2)
+
 - "Please create a task to give this a domain name. I think concordance.polycode.co.uk" (2026-10-20; row A6)
 
 - "add a task for keyed-by-corpus … including the drop list and we'll have the 2 data sets as grenfel and undercover policing and include in that task splitting the budget allocation per corpus for tracking with a click through the billing banner to see this split in a historic graph but still having a shared application cap." (2026-10-20; row C6)
@@ -186,6 +188,10 @@ request through an internal draft, write and review cycle, stored with versions,
 Exit: on the deployed page, a report over two named statements is requested, written, reviewed
 and listed; an edit by chat stores version 2; delete removes it after confirmation; every
 sentence in the stored report carries a resolved citation or the abstention phrase.
+
+### Phase T: tools for the model over the store (T1, T2)
+
+The turn gives the model tools that compute over the stored data, so a question that needs a count, a timeline window, a witness's set of claims or a cell of the contradiction matrix is answered from the store with locators, under the closed-world rule (a tool result is evidence with chunk ids, never a fact). Cheapest first: Postgres views and the existing routes behind Bedrock Converse tool use in the turn Lambda (no new service); the inference tools come from F11's RDF-star export and live SPARQL on Lambda; an MCP server is the laptop form of the same tools for the operator's own assistant, not a second service for the deployed turn. Exit: a deployed turn answers a counting or timeline question through a tool call with citations; the eval gains tool-needing rows.
 
 ### Phase L: the laptop port check (L1)
 
