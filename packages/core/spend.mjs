@@ -77,6 +77,31 @@ export function spendHistory(rows, { days, today }) {
   };
 }
 
+export const MONTH_SQL = `
+  SELECT model, sum(input_tokens)::bigint AS input_tokens, sum(output_tokens)::bigint AS output_tokens
+    FROM usage_daily
+   WHERE day >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+   GROUP BY model`;
+
+/**
+ * The list-price estimate of this month's model spend over every corpus, in dollars. Models
+ * without a list price add nothing.
+ * @param {{ query: Function }} db
+ */
+export async function readMonthEstimate(db) {
+  const { rows } = await db.query(MONTH_SQL, []);
+  return rows.reduce(
+    (sum, r) =>
+      sum +
+      (costOf({
+        model: r.model,
+        inputTokens: Number(r.input_tokens),
+        outputTokens: Number(r.output_tokens),
+      }) ?? 0),
+    0,
+  );
+}
+
 /**
  * Reads and prices the history of the last `days` days.
  * @param {{ query: Function }} db

@@ -3,52 +3,71 @@
 import { describe, expect, it } from "vitest";
 import { createHandler } from "../../packages/aws/checkBudget.mjs";
 
-const budget = (actual, limit) => ({
+const budget = (name, actual, limit) => ({
   Budget: {
-    BudgetName: "concordance-sandbox-monthly",
+    BudgetName: name,
     BudgetLimit: { Amount: limit, Unit: "USD" },
     CalculatedSpend: { ActualSpend: { Amount: actual, Unit: "USD" } },
   },
 });
 
-const handlerFor = (response) => {
+const NAMES = ["concordance-sandbox-monthly", "concordance-sandbox-models"];
+
+const handlerFor = (actuals, estimate = 0) => {
   const calls = [];
   const handler = createHandler({
     describeBudget: async (input) => {
       calls.push(input);
-      return response;
+      return typeof actuals[input.BudgetName] === "object"
+        ? actuals[input.BudgetName]
+        : budget(input.BudgetName, actuals[input.BudgetName], "25.0");
     },
+    readEstimate: async () => estimate,
     accountId: "111111111111",
-    budgetName: "concordance-sandbox-monthly",
+    budgetNames: NAMES,
   });
   return { handler, calls };
 };
 
 describe("checkBudget handler", () => {
-  it("returns the spend and the limit when the spend is under the limit", async () => {
-    const { handler, calls } = handlerFor(budget("3.21", "25.0"));
-    expect(await handler({ corpus: "grenfell" })).toEqual({ actual: 3.21, limit: 25, unit: "USD" });
-    expect(calls).toEqual([
-      { AccountId: "111111111111", BudgetName: "concordance-sandbox-monthly" },
-    ]);
+  it("reads both budgets and returns the highest spend with the estimate", async () => {
+    const { handler, calls } = handlerFor({ [NAMES[0]]: "3.21", [NAMES[1]]: "10.5" }, 12.25);
+    expect(await handler({ corpus: "grenfell" })).toEqual({
+      actual: 10.5,
+      limit: 25,
+      unit: "USD",
+      estimate: 12.25,
+    });
+    expect(calls).toEqual(NAMES.map((BudgetName) => ({ AccountId: "111111111111", BudgetName })));
   });
 
-  it("throws when the spend has reached the limit", async () => {
-    await expect(handlerFor(budget("25.0", "25.0")).handler()).rejects.toThrow(
+  it("throws when either budget has reached the limit", async () => {
+    await expect(handlerFor({ [NAMES[0]]: "25.0", [NAMES[1]]: "1" }).handler()).rejects.toThrow(
       "budget concordance-sandbox-monthly: spend 25 USD has reached the limit 25",
     );
-    await expect(handlerFor(budget("30.5", "25.0")).handler()).rejects.toThrow(/reached the limit/);
+    await expect(handlerFor({ [NAMES[0]]: "1", [NAMES[1]]: "30.5" }).handler()).rejects.toThrow(
+      "budget concordance-sandbox-models: spend 30.5 USD has reached the limit 25",
+    );
   });
 
-  it("throws when the budget has no amounts", async () => {
-    await expect(handlerFor({ Budget: {} }).handler()).rejects.toThrow(/no actual spend/);
+  it("throws when the store's estimate has reached the limit", async () => {
+    await expect(handlerFor({ [NAMES[0]]: "1", [NAMES[1]]: "1" }, 26.4).handler()).rejects.toThrow(
+      /estimate of the month's model spend, 26.40 USD, has reached the limit 25/,
+    );
   });
 
-  it("throws without an account id or a budget name", async () => {
+  it("throws when a budget has no amounts", async () => {
+    await expect(
+      handlerFor({ [NAMES[0]]: { Budget: {} }, [NAMES[1]]: "1" }).handler(),
+    ).rejects.toThrow(/no actual spend/);
+  });
+
+  it("throws without an account id or budget names", async () => {
     const handler = createHandler({
-      describeBudget: async () => budget("0", "1"),
-      budgetName: "b",
+      describeBudget: async () => budget("b", "0", "1"),
+      readEstimate: async () => 0,
+      budgetNames: ["b"],
     });
-    await expect(handler()).rejects.toThrow(/account id and budget name/);
+    await expect(handler()).rejects.toThrow(/account id and budget names/);
   });
 });

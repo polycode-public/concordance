@@ -7,6 +7,9 @@
 // - A monthly cost budget for the resources tagged project=<project>. The tag filter reads
 //   only what Cost Explorer knows as a cost allocation tag, so the operator activates the
 //   `project` tag in the management account first (AWS_ACCOUNT.md, operator steps).
+// - A second budget on the Bedrock model services. Model usage carries no cost allocation tag,
+//   so the tag budget cannot see it; a budget that filtered on both the tag and the service
+//   would need both to match.
 // - The agent kill switch, /<project>/<env>/agents/kill-switch. Every agent workflow reads it
 //   through .github/actions/agent-kill-switch and stops when it is on. This stack creates it
 //   with the value off; agent-kill-switch.yml only overwrites it.
@@ -18,6 +21,30 @@ import * as ssm from "aws-cdk-lib/aws-ssm";
 const MONTHLY_LIMIT_USD = 25;
 const ALERT_PERCENTAGES = [80, 100];
 
+/** The service names Cost Explorer prints for model usage in the Bedrock family. */
+export const MODEL_SERVICES = Object.freeze([
+  "Claude Haiku 4.5 (Amazon Bedrock Edition)",
+  "Claude Sonnet 4.5 (Amazon Bedrock Edition)",
+  "Amazon Bedrock",
+]);
+
+/** The budgets the ingest guard reads: the tagged resources and the model services. */
+export const budgetNamesFor = ({ project, envName }) => [
+  `${project}-${envName}-monthly`,
+  `${project}-${envName}-models`,
+];
+
+const subscribers = (email) =>
+  ALERT_PERCENTAGES.map((threshold) => ({
+    notification: {
+      notificationType: "ACTUAL",
+      comparisonOperator: "GREATER_THAN",
+      threshold,
+      thresholdType: "PERCENTAGE",
+    },
+    subscribers: [{ subscriptionType: "EMAIL", address: email }],
+  }));
+
 export class GuardrailsStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
@@ -26,7 +53,7 @@ export class GuardrailsStack extends Stack {
       throw new Error("GuardrailsStack needs envName, project and budgetEmail");
     }
 
-    const budgetName = `${project}-${envName}-monthly`;
+    const [budgetName, modelsBudgetName] = budgetNamesFor({ project, envName });
     new budgets.CfnBudget(this, "MonthlyBudget", {
       budget: {
         budgetName,
@@ -35,15 +62,17 @@ export class GuardrailsStack extends Stack {
         budgetLimit: { amount: MONTHLY_LIMIT_USD, unit: "USD" },
         costFilters: { TagKeyValue: [`user:project$${project}`] },
       },
-      notificationsWithSubscribers: ALERT_PERCENTAGES.map((threshold) => ({
-        notification: {
-          notificationType: "ACTUAL",
-          comparisonOperator: "GREATER_THAN",
-          threshold,
-          thresholdType: "PERCENTAGE",
-        },
-        subscribers: [{ subscriptionType: "EMAIL", address: budgetEmail }],
-      })),
+      notificationsWithSubscribers: subscribers(budgetEmail),
+    });
+    new budgets.CfnBudget(this, "ModelsBudget", {
+      budget: {
+        budgetName: modelsBudgetName,
+        budgetType: "COST",
+        timeUnit: "MONTHLY",
+        budgetLimit: { amount: MONTHLY_LIMIT_USD, unit: "USD" },
+        costFilters: { Service: [...MODEL_SERVICES] },
+      },
+      notificationsWithSubscribers: subscribers(budgetEmail),
     });
 
     this.killSwitch = new ssm.StringParameter(this, "AgentKillSwitch", {
@@ -53,6 +82,7 @@ export class GuardrailsStack extends Stack {
     });
 
     new CfnOutput(this, "BudgetName", { value: budgetName });
+    new CfnOutput(this, "ModelsBudgetName", { value: modelsBudgetName });
     new CfnOutput(this, "AgentKillSwitchParameter", { value: this.killSwitch.parameterName });
   }
 }

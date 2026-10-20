@@ -14,7 +14,7 @@
 
 import { App, Tags } from "aws-cdk-lib";
 import { DataStack } from "../lib/dataStack.mjs";
-import { GuardrailsStack } from "../lib/guardrailsStack.mjs";
+import { GuardrailsStack, budgetNamesFor } from "../lib/guardrailsStack.mjs";
 import { StoreStack } from "../lib/storeStack.mjs";
 import { AppStack, DEFAULT_CORPORA } from "../lib/appStack.mjs";
 import { IngestStack } from "../lib/ingestStack.mjs";
@@ -66,7 +66,7 @@ new IngestStack(app, stackName("ingest"), {
   dbResourceArn: storeStack.cluster.clusterArn,
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
-  budgetName: `${PROJECT}-${envName}-monthly`,
+  budgetNames: budgetNamesFor({ project: PROJECT, envName }),
   description: `${PROJECT} ${envName}: the ingest state machine over a corpus manifest, one Lambda per document`,
 });
 
