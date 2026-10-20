@@ -15,6 +15,12 @@ describe("the facts panel's text", () => {
       window: { startClock: "01:25", endClock: "01:35" },
     };
     expect(pointText(point)).toBe('01:25–01:35 C123: saw smoke ("1.30 am")');
+    expect(pointText({ ...point, subjectText: "I", subjectKind: "witness" })).toBe(
+      '01:25–01:35 C123: saw smoke ("1.30 am")',
+    );
+    expect(pointText({ ...point, subjectText: "The fire brigade", subjectKind: "group" })).toBe(
+      '01:25–01:35 C123: The fire brigade saw smoke ("1.30 am")',
+    );
     expect(pointText({ ...point, polarity: "negative", objectText: null })).toBe(
       '01:25–01:35 C123: not saw ("1.30 am")',
     );

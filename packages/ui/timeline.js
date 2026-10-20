@@ -36,7 +36,7 @@ const reference = (point) => {
 export function pointText(point) {
   const { startClock, endClock } = point.window;
   const claim = [
-    point.subjectText,
+    point.subjectKind === "witness" ? null : point.subjectText,
     point.polarity === "negative" ? "not" : null,
     point.predicate,
     point.objectText,
