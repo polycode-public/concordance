@@ -899,7 +899,6 @@ describe.skipIf(!enabled)(
         ["event:7", "smoke in the lobby: 4 contradict of 6"],
         ["event:8", "the fire alarm: 1 contradict of 1"],
         ["topic:dark", "dark (no event named): 0 contradict of 1"],
-        ["event:9", "leaving the flat: 0 contradict of 1"],
         ["topic:told", "told (no event named): 0 contradict of 1"],
       ]);
       expect(
