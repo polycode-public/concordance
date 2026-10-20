@@ -16,6 +16,8 @@ import { createServer } from "../../packages/local/server.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { PROMPT_VERSION, answerMessages } from "../../packages/core/prompt.mjs";
 import { checkAnswer } from "../../packages/core/query.mjs";
+import { requestReport } from "../../packages/core/reports.mjs";
+import { createReportsStore } from "../core/reportsFakeStore.mjs";
 
 const CHROME_PATHS = [
   process.env.CHROME_BIN,
@@ -111,6 +113,56 @@ const fakeDb = {
       ? { rows: [{ corpus: "grenfell", title: `Statement of ${params[0]}` }] }
       : { rows: [] },
 };
+
+const reportStore = createReportsStore();
+
+/** The reports tables answer from the fake store; every other statement from fakeDb. */
+const reportsDb = {
+  ...reportStore,
+  query: async (text, params) => {
+    if (/FROM documents WHERE id/.test(text)) return fakeDb.query(text, params);
+    try {
+      return await reportStore.query(text, params);
+    } catch (err) {
+      if (/does not answer/.test(err.message)) return { rows: [] };
+      throw err;
+    }
+  },
+};
+
+const REPORT_BODY = (change) =>
+  [
+    "# Smoke on the stairs",
+    "",
+    "## The stairs",
+    "The stairwell was dark and full of smoke [E1].",
+    "",
+    "## The lift",
+    `The lift stopped at the fourth floor [E2].${change ? ` Changed: ${change}` : ""}`,
+  ].join("\n");
+
+/** The real request path with a report writer that needs no model. */
+const stubRequestReport = (args) =>
+  requestReport({
+    ...args,
+    run: async ({ changePrompt, onStage }) => {
+      for (const stage of ["drafting", "writing", "reviewing"]) {
+        onStage(stage);
+        await sleep(120);
+      }
+      return {
+        title: "Smoke on the stairs",
+        body: REPORT_BODY(changePrompt),
+        citations: [
+          { evidence: 1, locator: { document: "IWS00000169", page: 3, paragraph: 11 } },
+          { evidence: 2, locator: { document: "IWS00000342", page: 7, paragraph: 4 } },
+        ],
+        checks: { sentences: 2, supported: 2, abstained: 0, removed: 0, droppedCitations: 0 },
+        promptVersion: "stub",
+        model: "fake",
+      };
+    },
+  });
 
 /** Parses `rgb(r, g, b)`, `rgba(...)` and `color(srgb r g b / a)` into [r, g, b, a] in 0..255. */
 function parseColour(value) {
@@ -224,8 +276,9 @@ describe.skipIf(!enabled)(
       app = await createServer({
         corporaDir: corpora,
         provider: createFakeProvider({ tokens: TOKENS, delayMs: 5 }),
-        db: fakeDb,
+        db: reportsDb,
         runQuery: stubQuery,
+        requestReport: stubRequestReport,
       });
       base = `http://127.0.0.1:${app.port}`;
       profile = await mkdtemp(path.join(tmpdir(), "concordance-browser-"));
@@ -586,7 +639,7 @@ describe.skipIf(!enabled)(
         await evaluate(
           `[...document.querySelectorAll(".bundle section")].map((s) => document.getElementById(s.getAttribute("aria-labelledby")).textContent.trim())`,
         ),
-      ).toEqual(["Referenced documents", "Evidence this turn"]);
+      ).toEqual(["Referenced documents", "Evidence this turn", "Generated reports"]);
       expect(await evaluate(`document.querySelector(".bundle").getAttribute("aria-label")`)).toBe(
         "Evidence bundle",
       );
@@ -604,6 +657,133 @@ describe.skipIf(!enabled)(
           `getComputedStyle(document.querySelector(".answer .cite")).transitionDuration`,
         ),
       ).toBe("0s");
+    });
+
+    const requestReportFromForm = async (topic, filename) => {
+      await evaluate(
+        `document.getElementById("report-request").open = true;
+         document.getElementById("report-topic").value = ${JSON.stringify(topic)};
+         document.getElementById("report-filename").value = ${JSON.stringify(filename)};
+         document.getElementById("report-form").requestSubmit(); true`,
+      );
+    };
+    const listed = (filename) =>
+      `document.querySelector('#reports-list li[data-filename="${filename}"]')`;
+    const resetReports = () => reportStore.reports.splice(0);
+
+    it("shows the Generated reports panel with its empty state", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      expect(await evaluate(`document.getElementById("reports-title").textContent.trim()`)).toBe(
+        "Generated reports",
+      );
+      expect(await evaluate(`document.getElementById("reports-list").children.length`)).toBe(0);
+    });
+
+    it("sends a report frame, follows the stages and lists the stored report", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await ask();
+      await requestReportFromForm("The stairs and the lift", "stairs.md");
+      const seen = new Set();
+      await until(
+        `(() => { const t = document.getElementById("report-status").textContent; window.__seen = (window.__seen ?? "") + "|" + t; return Boolean(document.querySelector('#reports-list li[data-filename="stairs.md"]')); })()`,
+      );
+      for (const part of (await evaluate(`window.__seen`)).split("|")) seen.add(part);
+      expect([...seen].some((t) => /Drafting|Writing|Checking/.test(t))).toBe(true);
+      expect(await evaluate(`document.getElementById("report-status").textContent`)).toContain(
+        "Stored stairs.md version 1",
+      );
+      expect(await evaluate(`${listed("stairs.md")}.textContent`)).toContain("Smoke on the stairs");
+      expect(await evaluate(`${listed("stairs.md")}.textContent`)).toContain("v1");
+      expect(await evaluate(`document.getElementById("report-submit").disabled`)).toBe(false);
+      expect(reportStore.reports[0].document_ids).toEqual([]);
+    });
+
+    it("sends the documents ticked from the referenced-documents row", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await ask();
+      await evaluate(
+        `document.getElementById("report-request").open = true;
+         document.querySelector('#report-documents input[value="IWS00000342"]').click(); true`,
+      );
+      await requestReportFromForm("The stairs", "ticked.md");
+      await until(`${listed("ticked.md")}`);
+      expect(reportStore.reports[0].document_ids).toEqual(["IWS00000342"]);
+    });
+
+    it("opens a version as headings, a sentence and a chip that opens the viewer", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await requestReportFromForm("The stairs and the lift", "stairs.md");
+      await until(`${listed("stairs.md")}`);
+      await evaluate(`${listed("stairs.md")}.querySelector(".version").click(); true`);
+      await until(`!document.getElementById("report-view").hidden`);
+      expect(await evaluate(`document.querySelector("#report-view h3").textContent`)).toBe(
+        "Smoke on the stairs",
+      );
+      expect(await evaluate(`document.querySelector("#report-view h4").textContent`)).toBe(
+        "The stairs",
+      );
+      expect(await evaluate(`document.querySelector("#report-view p").textContent`)).toContain(
+        "The stairwell was dark",
+      );
+      expect(await evaluate(`document.querySelector("#report-view .score").textContent`)).toBe(
+        "2 of 2 sentences supported",
+      );
+      await shot("laptop-report");
+      await evaluate(`document.querySelector("#report-view .cite").click(); true`);
+      await until(`!document.getElementById("viewer").hidden`);
+      expect(await evaluate(`document.getElementById("viewer-title").textContent`)).toContain(
+        "IWS00000169",
+      );
+    });
+
+    it("asks for confirmation before it deletes and keeps the report on Cancel", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await requestReportFromForm("The stairs and the lift", "stairs.md");
+      await until(`${listed("stairs.md")}`);
+      await evaluate(`${listed("stairs.md")}.querySelector(".delete").click(); true`);
+      expect(reportStore.reports.length).toBe(1);
+      expect(await evaluate(`document.activeElement.textContent`)).toBe("Confirm");
+      await evaluate(`${listed("stairs.md")}.querySelector(".confirm-no").click(); true`);
+      expect(await evaluate(`document.activeElement.textContent`)).toBe("Delete");
+      expect(reportStore.reports.length).toBe(1);
+      await evaluate(
+        `${listed("stairs.md")}.querySelector(".delete").click();
+         ${listed("stairs.md")}.querySelector(".confirm-yes").click(); true`,
+      );
+      await until(`!${listed("stairs.md")}`);
+      expect(reportStore.reports.length).toBe(0);
+      expect(await evaluate(`!document.getElementById("reports-empty").hidden`)).toBe(true);
+    });
+
+    it("sends a chat message that names a listed filename as an edit and stores version 2", async () => {
+      resetReports();
+      await open({ width: 1280, height: 800 });
+      await until(`!document.getElementById("reports-empty").hidden`);
+      await requestReportFromForm("The stairs and the lift", "stairs.md");
+      await until(`${listed("stairs.md")}`);
+      await evaluate(
+        `document.getElementById("question").value = "In stairs.md, add the time of the first call";
+         document.getElementById("ask").requestSubmit(); true`,
+      );
+      await until(`${listed("stairs.md")}.querySelectorAll(".version").length === 2`);
+      expect(await evaluate(`document.querySelector(".turn .note").textContent`)).toContain(
+        "Stored stairs.md version 2",
+      );
+      expect(await evaluate(`document.querySelectorAll(".turn .stages").length`)).toBe(0);
+      expect(reportStore.reports.map((r) => r.version)).toEqual([1, 2]);
+      expect(reportStore.reports[1].change_prompt).toBe(
+        "In stairs.md, add the time of the first call",
+      );
     });
 
     it("moves focus among chips with ], opens with o and closes with Escape", async () => {

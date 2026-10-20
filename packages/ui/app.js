@@ -3,6 +3,7 @@
 import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
+import { mountReports } from "./reports.js";
 import { showSpend } from "./spend.js";
 import { chipInline, renderMarkdown } from "./markdown.mjs";
 import { suggestionsFor } from "./suggestions.mjs";
@@ -45,6 +46,8 @@ let evidenceTurn = null;
  *   note: HTMLElement }} Turn
  */
 
+/** @type {ReturnType<typeof mountReports> | null} */
+let reports = null;
 /** @type {{ ready: (sessionId: string, thread: string) => void, reset: () => void } | null} */
 let exporter = null;
 let replaying = false;
@@ -52,7 +55,7 @@ let replaying = false;
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, reportsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -81,17 +84,20 @@ async function connect() {
   ws.addEventListener("open", () => {
     opened = true;
     connectionEl.textContent = "connected";
+    reports?.refresh();
   });
   ws.addEventListener("close", () => {
     // A $connect the authorizer denies closes before it opens.
     if (token && (!opened || isExpired(token))) signOut();
     connectionEl.textContent = "disconnected; retrying";
+    reports?.disconnected();
     setTimeout(connect, 2000);
   });
   ws.addEventListener("message", (event) => onFrame(JSON.parse(event.data)));
 }
 
 function onFrame(frame) {
+  if (frame.requestId && reports?.onFrame(frame)) return;
   if (frame.type === "opened") {
     if (frame.docId === opening) openPdf(frame);
     opening = null;
@@ -421,6 +427,7 @@ const times = (n) => (n === 1 ? "cited once" : `cited ${n} times`);
 
 function renderDocuments() {
   const entries = [...documents.values()];
+  reports?.syncDocuments(entries.map((entry) => entry.documentId));
   documentsCount.textContent = entries.length ? ` ${entries.length}` : "";
   documentsEmpty.hidden = entries.length > 0;
   showPanelPills(documentsSuggestions, entries.length === 0);
@@ -520,10 +527,32 @@ function replay(turns, sessionId) {
   if (turns.length) exporter?.ready(sessionId, turns[0].thread);
 }
 
+/** A turn-area entry for a chat message that became a report edit; the panel keeps its note. */
+function startEditNote(text, filename) {
+  suggestionsEl.hidden = true;
+  const article = el("article", "turn");
+  const q = el("div", "question");
+  q.append(el("span", "label small", "You asked"), el("p", null, text));
+  const note = el("p", "note");
+  note.setAttribute("role", "status");
+  note.textContent = `Editing ${filename}: this message goes to the report as its change request, and the new version appears under Generated reports.`;
+  article.append(q, note);
+  $("opening")?.remove();
+  turnsEl.append(article);
+  article.scrollIntoView({ block: "start" });
+  return note;
+}
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = question.value.trim();
   if (!text || ws?.readyState !== WebSocket.OPEN) return;
+  const target = reports?.editTarget(text);
+  if (target) {
+    const note = startEditNote(text, target);
+    if (reports.requestEdit(target, text, note)) question.value = "";
+    return;
+  }
   const turn = startTurn(text);
   current = turn;
   newest = turn;
@@ -613,6 +642,24 @@ if (config) {
     opener.disabled = true;
     opener.textContent = "Conversations unavailable";
     opener.title = err.message;
+  }
+  try {
+    reports = mountReports(config, {
+      token,
+      send: (frame) => {
+        if (ws?.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify(frame));
+        return true;
+      },
+      thread: () => thread,
+      open,
+      suggestions: suggestionsFor(config.corpus.id, "reports"),
+    });
+    reports.syncDocuments([...documents.keys()]);
+    await reports.refresh();
+  } catch (err) {
+    console.error(err);
+    $("reports-message").textContent = `Reports are unavailable (${err.message}).`;
   }
   try {
     exporter = mountExport(config, { token });

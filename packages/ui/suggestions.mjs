@@ -3,9 +3,9 @@
 
 /**
  * Suggested questions by corpus id. `panel` names the page panel a pill belongs to
- * ("documents" or "evidence", shown while that panel is empty), or null for the pills above the
+ * ("documents", "evidence" or "reports", shown while that panel is empty), or null for the pills above the
  * prompt box.
- * @type {Record<string, { text: string, panel: string | null }[]>}
+ * @type {Record<string, { text: string, panel: string | null, filename?: string }[]>}
  */
 export const SUGGESTIONS = {
   grenfell: [
