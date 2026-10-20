@@ -4,7 +4,9 @@
 // A dozen assertions from three witnesses with a known timing dispute: two witnesses saw smoke
 // in the lobby at about 1.00 am, the third at 1.30 am, and the first witness's later statement
 // moves to 1.30 am. The third witness is cipher-only, and their document reveals an identity
-// when it is paired with the second witness's document.
+// when it is paired with the second witness's document. disputeSeed adds the claims that tell a
+// shared event from two people doing the same thing: three witnesses who each went to bed at a
+// different time, two who time the fire brigade's arrival differently, and one whom nobody told.
 
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 
@@ -27,21 +29,137 @@ const SENTENCES = [
   ["112", "IWS-A2", 2, 2, 4, "A firefighter told us to stay in the flat."],
 ];
 
+const I = ["I", "witness"];
 const ASSERTIONS = [
-  // id, chunk, witness, event, predicate, object, time, place, polarity
-  ["1", "101", "IWS-A", "7", "first saw", "smoke", "about 1.00 am", "the lobby", "positive"],
-  ["2", "102", "IWS-B", "7", "saw", "smoke", "about 1.00 am", "the lobby", "positive"],
-  ["3", "103", "C123", "7", "saw", "smoke", "1.30 am", "the lobby", "positive"],
-  ["4", "104", "IWS-A", "8", "did not sound", "The fire alarm", null, null, "negative"],
-  ["5", "105", "IWS-B", "8", "sounded", "The fire alarm", null, "the corridor", "positive"],
-  ["6", "106", "IWS-A", "7", "first saw", "smoke", "1.30 am", "the lobby", "positive"],
-  ["7", "107", "IWS-B", "9", "left", "the flat", null, null, "positive"],
-  ["8", "108", "C123", "9", "left", "the flat", "2.10 am", null, "positive"],
-  ["9", "109", "IWS-A", null, "were dark", "The stairs", null, null, "positive"],
-  ["10", "110", "C123", null, "were full of smoke", "The stairs", null, null, "positive"],
-  ["11", "111", "IWS-B", null, "told", "us", null, null, "positive"],
-  ["12", "112", "IWS-A", null, "told", "us", null, null, "positive"],
+  // id, chunk, witness, event, predicate, object, time, place, polarity, [subject, kind]
+  ["1", "101", "IWS-A", "7", "first saw", "smoke", "about 1.00 am", "the lobby", "positive", I],
+  ["2", "102", "IWS-B", "7", "saw", "smoke", "about 1.00 am", "the lobby", "positive", I],
+  ["3", "103", "C123", "7", "saw", "smoke", "1.30 am", "the lobby", "positive", I],
+  [
+    "4",
+    "104",
+    "IWS-A",
+    "8",
+    "did not sound",
+    null,
+    null,
+    null,
+    "negative",
+    ["The fire alarm", "thing"],
+  ],
+  [
+    "5",
+    "105",
+    "IWS-B",
+    "8",
+    "sounded",
+    null,
+    null,
+    "the corridor",
+    "positive",
+    ["The fire alarm", "thing"],
+  ],
+  ["6", "106", "IWS-A", "7", "first saw", "smoke", "1.30 am", "the lobby", "positive", I],
+  ["7", "107", "IWS-B", "9", "left", "the flat", null, null, "positive", I],
+  ["8", "108", "C123", "9", "left", "the flat", "2.10 am", null, "positive", ["We", "witness"]],
+  ["9", "109", "IWS-A", null, "were dark", null, null, null, "positive", ["The stairs", "thing"]],
+  [
+    "10",
+    "110",
+    "C123",
+    null,
+    "were full of smoke",
+    null,
+    null,
+    null,
+    "positive",
+    ["The stairs", "thing"],
+  ],
+  ["11", "111", "IWS-B", null, "told", "us", null, null, "positive", ["A firefighter", "person"]],
+  ["12", "112", "IWS-A", null, "told", "us", null, null, "positive", ["A firefighter", "person"]],
 ];
+
+const DISPUTE_SENTENCES = [
+  ["113", "IWS-A1", 4, 3, 10, "I went to bed at about 10pm."],
+  ["114", "IWS-B1", 5, 5, 3, "I went to bed around 11pm."],
+  ["115", "C123-1", 4, 2, 9, "I went to bed at around 1 to 1.15 am."],
+  ["116", "IWS-A1", 5, 3, 11, "The fire brigade arrived at about 1.10 am."],
+  ["117", "IWS-B1", 6, 5, 4, "The fire brigade arrived at 1.40 am."],
+  ["118", "C123-1", 5, 2, 10, "Nobody told me that."],
+];
+
+const DISPUTE_ASSERTIONS = [
+  ["13", "113", "IWS-A", null, "went to bed", null, "about 10pm", null, "positive", I],
+  ["14", "114", "IWS-B", null, "went to bed", null, "around 11pm", null, "positive", I],
+  ["15", "115", "C123", null, "went to bed", null, "around 1 to 1.15 am", null, "positive", I],
+  [
+    "16",
+    "116",
+    "IWS-A",
+    "10",
+    "arrived",
+    null,
+    "about 1.10 am",
+    null,
+    "positive",
+    ["The fire brigade", "group"],
+  ],
+  [
+    "17",
+    "117",
+    "IWS-B",
+    "10",
+    "arrived",
+    null,
+    "1.40 am",
+    null,
+    "positive",
+    ["The fire brigade", "group"],
+  ],
+  ["18", "118", "C123", null, "told", "me", null, null, "negative", ["Nobody", "person"]],
+];
+
+const chunkRow = ([id, document_id, ordinal, page, paragraph, text]) => ({
+  id,
+  document_id,
+  level: "sentence",
+  ordinal,
+  text,
+  locator: { page, paragraph },
+});
+
+const assertionRow = ([
+  id,
+  chunk,
+  witness,
+  event,
+  predicate,
+  object,
+  time,
+  place,
+  polarity,
+  [subject, kind],
+]) => ({
+  id,
+  witness_id: witness,
+  source_chunk_id: chunk,
+  event_id: event,
+  subject_text: subject,
+  subject_kind: kind,
+  predicate,
+  object_text: object,
+  object_entity_id: null,
+  time_text: time,
+  time_start: null,
+  time_end: null,
+  place_text: place,
+  place_entity_id: null,
+  polarity,
+  modality: /^(about|around)/.test(time ?? "") ? time.split(" ")[0] : null,
+  confidence: 0.9,
+  extractor: "fake-extract",
+  pipeline_version: "facts-v1",
+});
 
 /** Fresh seed rows for createCompareStore. */
 export function compareSeed() {
@@ -57,35 +175,8 @@ export function compareSeed() {
       { id: "IWS-B1", corpus: "grenfell", witness_id: "IWS-B", statement_date: "2017-11-20" },
       { id: "C123-1", corpus: "grenfell", witness_id: "C123", statement_date: "2018-01-15" },
     ],
-    chunks: SENTENCES.map(([id, document_id, ordinal, page, paragraph, text]) => ({
-      id,
-      document_id,
-      level: "sentence",
-      ordinal,
-      text,
-      locator: { page, paragraph },
-    })),
-    assertions: ASSERTIONS.map(
-      ([id, chunk, witness, event, predicate, object, time, place, polarity]) => ({
-        id,
-        witness_id: witness,
-        source_chunk_id: chunk,
-        event_id: event,
-        predicate,
-        object_text: object,
-        object_entity_id: null,
-        time_text: time,
-        time_start: null,
-        time_end: null,
-        place_text: place,
-        place_entity_id: null,
-        polarity,
-        modality: time?.startsWith("about") ? "about" : null,
-        confidence: 0.9,
-        extractor: "fake-extract",
-        pipeline_version: "facts-v1",
-      }),
-    ),
+    chunks: SENTENCES.map(chunkRow),
+    assertions: ASSERTIONS.map(assertionRow),
     events: [
       { id: "7", name: "smoke in the lobby" },
       { id: "8", name: "the fire alarm" },
@@ -102,15 +193,29 @@ export function compareSeed() {
   };
 }
 
-/** One direction per topic, so similar claims share a vector and the rest are orthogonal. */
+/** compareSeed with the claims of three more matters: bed times, the brigade, and nobody told. */
+export function disputeSeed() {
+  const seed = compareSeed();
+  seed.chunks.push(...DISPUTE_SENTENCES.map(chunkRow));
+  seed.assertions.push(...DISPUTE_ASSERTIONS.map(assertionRow));
+  seed.events.push({ id: "10", name: "the fire brigade arriving" });
+  return seed;
+}
+
+/**
+ * One direction per topic, so similar claims share a vector and the rest are orthogonal. The bed
+ * times share one vector, so only the anchors keep them apart.
+ */
 export function embedFor(text) {
   const t = text.toLowerCase();
-  if (t.includes("stairs")) return [0, 0, 0, 1];
-  if (t.includes("told")) return [0, 0, 0.6, 0.8];
-  if (t.includes("smoke")) return [1, 0, 0, 0];
-  if (t.includes("alarm")) return [0, 1, 0, 0];
-  if (t.includes("flat")) return [0, 0, 1, 0];
-  return [0.5, 0.5, 0.5, 0.5];
+  if (t.includes("stairs")) return [0, 0, 0, 1, 0, 0];
+  if (t.includes("told")) return [0, 0, 0.6, 0.8, 0, 0];
+  if (t.includes("smoke")) return [1, 0, 0, 0, 0, 0];
+  if (t.includes("alarm")) return [0, 1, 0, 0, 0, 0];
+  if (t.includes("flat")) return [0, 0, 1, 0, 0, 0];
+  if (t.includes("bed")) return [0, 0, 0, 0, 1, 0];
+  if (t.includes("brigade")) return [0, 0, 0, 0, 0, 1];
+  return [0.5, 0.5, 0.5, 0.5, 0, 0];
 }
 
 /** The model's labels by the A sentence of a pair: label and the two verbatim spans. */
