@@ -1,0 +1,258 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright 2026 Polycode Limited
+//
+// Alignment: the candidate pairs of assertions that may be about the same matter. A pair needs a
+// claim similar enough by embedding and, below a stronger similarity, an anchor it shares (the
+// event, the object or place entity, or the normalised predicate). The same witness across two
+// documents is a self pair, ordered by statement date; two witnesses make a cross pair; a witness
+// assertion against an accepted fact makes an accepted pair. Every bound is a constant here.
+
+import { normaliseSpan } from "./registers.mjs";
+
+/** Cosine at or above which an anchored pair is a candidate. */
+export const ALIGN_SIMILARITY = 0.6;
+/** Cosine at or above which a pair with no shared anchor is a candidate. */
+export const ALIGN_SIMILARITY_ALONE = 0.85;
+/** Assertions below this confidence are stored but not compared; a null confidence is compared. */
+export const MIN_CONFIDENCE = 0.5;
+/** The most pairs one assertion takes part in, over self and cross. */
+export const MAX_PARTNERS = 8;
+/** The most pairs in one group (an event, or a predicate where no event is named). */
+export const MAX_PAIRS_PER_GROUP = 120;
+/** The most witness assertions compared against one accepted fact. */
+export const MAX_PAIRS_PER_FACT = 40;
+
+const LEADING_WORDS = new Set([
+  "i",
+  "we",
+  "he",
+  "she",
+  "they",
+  "you",
+  "it",
+  "then",
+  "also",
+  "had",
+  "have",
+  "has",
+  "was",
+  "were",
+  "did",
+  "do",
+  "would",
+  "could",
+  "must",
+  "then",
+  "just",
+  "first",
+]);
+
+/** The predicate in lower case without punctuation, a leading pronoun or auxiliary. */
+export function normalisePredicate(predicate) {
+  const words = normaliseSpan(predicate ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
+    .split(" ")
+    .filter(Boolean);
+  while (words.length > 1 && LEADING_WORDS.has(words[0])) words.shift();
+  return words.join(" ");
+}
+
+const normaliseObject = (text) =>
+  normaliseSpan(text ?? "")
+    .toLowerCase()
+    .replace(/^(the|a|an|my|our|his|her|their) /, "");
+
+/** The text a claim is embedded by: the predicate and its object. */
+export const claimText = (a) => [a.predicate, a.objectText].filter(Boolean).join(" ");
+
+/** True when two assertions are about the same object: the same entity, or the same words. */
+export function sameObject(a, b) {
+  if (a.objectEntityId && b.objectEntityId) return a.objectEntityId === b.objectEntityId;
+  return normaliseObject(a.objectText) === normaliseObject(b.objectText);
+}
+
+/** True when two assertions state the same place, or neither states one. */
+export function samePlace(a, b) {
+  if (a.placeEntityId && b.placeEntityId) return a.placeEntityId === b.placeEntityId;
+  return normaliseObject(a.placeText) === normaliseObject(b.placeText);
+}
+
+/** The anchors two assertions share, by name. */
+export function sharedAnchors(a, b) {
+  const out = [];
+  if (a.eventId && a.eventId === b.eventId) out.push("event");
+  if (a.objectEntityId && a.objectEntityId === b.objectEntityId) out.push("object");
+  if (a.placeEntityId && a.placeEntityId === b.placeEntityId) out.push("place");
+  if (normalisePredicate(a.predicate) === normalisePredicate(b.predicate)) out.push("predicate");
+  return out;
+}
+
+export const eligible = (a) =>
+  Boolean(a.witnessId) &&
+  (a.confidence === null || a.confidence === undefined || a.confidence >= MIN_CONFIDENCE);
+
+function unit(vector) {
+  const v = Float32Array.from(vector);
+  let norm = 0;
+  for (let i = 0; i < v.length; i++) norm += v[i] * v[i];
+  norm = Math.sqrt(norm);
+  if (!(norm > 0)) throw new Error("an embedding has no length");
+  for (let i = 0; i < v.length; i++) v[i] /= norm;
+  return v;
+}
+
+function dot(x, y) {
+  let s = 0;
+  for (let i = 0; i < x.length; i++) s += x[i] * y[i];
+  return s;
+}
+
+const byStatement = (x, y) =>
+  (x.statementDate ?? "9999").localeCompare(y.statementDate ?? "9999") ||
+  String(x.documentId).localeCompare(String(y.documentId)) ||
+  Number(x.id) - Number(y.id);
+
+/** The group a pair is shown in: its event, or the earlier assertion's predicate. */
+export function groupOf(a, b) {
+  const eventId = a.eventId ?? b?.eventId ?? null;
+  return { eventId, topic: normalisePredicate(a.predicate) };
+}
+
+export const groupKey = ({ eventId, topic }) => (eventId ? `event:${eventId}` : `topic:${topic}`);
+
+/** The identity of a pair, the same in memory and in the store. */
+export const pairKey = ({ kind, a, b, fact }) => `${kind}:${a.id}:${b?.id ?? 0}:${fact?.id ?? 0}`;
+
+/**
+ * Embeds the distinct texts once and returns a lookup of unit vectors.
+ * @param {{ embed: (texts: string[]) => Promise<number[][]> }} provider
+ * @param {string[]} texts
+ * @param {number} [batch]
+ */
+export async function embedTexts(provider, texts, batch = 256) {
+  const distinct = [...new Set(texts)];
+  const vectors = new Map();
+  for (let i = 0; i < distinct.length; i += batch) {
+    const slice = distinct.slice(i, i + batch);
+    const out = await provider.embed(slice);
+    if (out.length !== slice.length)
+      throw new Error(`embed returned ${out.length} vectors for ${slice.length} texts`);
+    slice.forEach((text, j) => vectors.set(text, unit(out[j])));
+  }
+  return vectors;
+}
+
+/**
+ * The self and cross candidate pairs over eligible assertions. Candidates are taken most similar
+ * first; a pair is dropped when either assertion already has MAX_PARTNERS pairs or its group
+ * already has MAX_PAIRS_PER_GROUP.
+ * @param {object[]} assertions eligible assertions
+ * @param {Map<string, Float32Array>} vectors by claimText
+ * @param {object} [bounds]
+ */
+export function alignAssertions(
+  assertions,
+  vectors,
+  {
+    similarity = ALIGN_SIMILARITY,
+    alone = ALIGN_SIMILARITY_ALONE,
+    maxPartners = MAX_PARTNERS,
+    maxPerGroup = MAX_PAIRS_PER_GROUP,
+  } = {},
+) {
+  const items = assertions.map((a) => ({ a, v: vectors.get(claimText(a)) }));
+  for (const { a, v } of items) if (!v) throw new Error(`assertion ${a.id} has no claim vector`);
+  const candidates = [];
+  for (let i = 0; i < items.length; i++) {
+    const x = items[i];
+    for (let j = i + 1; j < items.length; j++) {
+      const y = items[j];
+      if (x.a.witnessId === y.a.witnessId && x.a.documentId === y.a.documentId) continue;
+      const s = dot(x.v, y.v);
+      if (s < similarity) continue;
+      const anchors = sharedAnchors(x.a, y.a);
+      if (!anchors.length && s < alone) continue;
+      const [a, b] = [x.a, y.a].sort(byStatement);
+      const kind = a.witnessId === b.witnessId ? "self" : "cross";
+      candidates.push({ kind, a, b, fact: null, similarity: s, anchors, ...groupOf(a, b) });
+    }
+  }
+  candidates.sort(
+    (p, q) =>
+      q.similarity - p.similarity ||
+      Number(p.a.id) - Number(q.a.id) ||
+      Number(p.b.id) - Number(q.b.id),
+  );
+  const degree = new Map();
+  const perGroup = new Map();
+  const pairs = [];
+  let dropped = 0;
+  for (const p of candidates) {
+    const g = groupKey(p);
+    if (
+      (degree.get(p.a.id) ?? 0) >= maxPartners ||
+      (degree.get(p.b.id) ?? 0) >= maxPartners ||
+      (perGroup.get(g) ?? 0) >= maxPerGroup
+    ) {
+      dropped++;
+      continue;
+    }
+    degree.set(p.a.id, (degree.get(p.a.id) ?? 0) + 1);
+    degree.set(p.b.id, (degree.get(p.b.id) ?? 0) + 1);
+    perGroup.set(g, (perGroup.get(g) ?? 0) + 1);
+    pairs.push(p);
+  }
+  return { pairs, candidates: candidates.length, dropped };
+}
+
+/** The text an accepted fact is embedded by: its source assertion's claim, else its own text. */
+export const factText = (fact, source) => (source ? claimText(source) : fact.text);
+
+/**
+ * The accepted pairs: each witness assertion similar to an accepted fact, at most
+ * MAX_PAIRS_PER_FACT a fact, most similar first. A fact made from an assertion is not compared
+ * with that assertion.
+ * @param {{ id: string, assertionId: string | null, text: string }[]} facts
+ * @param {object[]} assertions eligible assertions
+ * @param {Map<string, object>} byId every loaded assertion by id
+ * @param {Map<string, Float32Array>} vectors by claimText and factText
+ */
+export function alignFacts(
+  facts,
+  assertions,
+  byId,
+  vectors,
+  {
+    similarity = ALIGN_SIMILARITY,
+    alone = ALIGN_SIMILARITY_ALONE,
+    maxPerFact = MAX_PAIRS_PER_FACT,
+  } = {},
+) {
+  const pairs = [];
+  for (const fact of facts) {
+    const source = fact.assertionId ? (byId.get(fact.assertionId) ?? null) : null;
+    const fv = vectors.get(factText(fact, source));
+    if (!fv) throw new Error(`accepted fact ${fact.id} has no vector`);
+    const found = [];
+    for (const a of assertions) {
+      if (a.id === fact.assertionId) continue;
+      const s = dot(fv, vectors.get(claimText(a)));
+      if (s < similarity) continue;
+      const anchors = source ? sharedAnchors(a, source) : [];
+      if (source && !anchors.length && s < alone) continue;
+      found.push({
+        kind: "accepted",
+        a,
+        b: source,
+        fact,
+        similarity: s,
+        anchors,
+        ...groupOf(a, source),
+      });
+    }
+    found.sort((p, q) => q.similarity - p.similarity || Number(p.a.id) - Number(q.a.id));
+    pairs.push(...found.slice(0, maxPerFact));
+  }
+  return { pairs };
+}
