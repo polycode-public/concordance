@@ -5,6 +5,8 @@
 // Converse for extraction. The SDK loads on the first model call so the laptop path and the
 // offline suite never import it.
 
+import { parseJsonReply } from "./jsonReply.mjs";
+
 const EMBED_CONCURRENCY = 4;
 const MAX_EMBED_CHARS = 45000;
 const MAX_EMBED_TOKENS = 8000;
@@ -186,15 +188,7 @@ export function createBedrockProvider(
         return runtime.send(command, { abortSignal: signal });
       }, signal);
       const content = response.output?.message?.content?.[0]?.text ?? "";
-      const json = content
-        .trim()
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/, "");
-      try {
-        return JSON.parse(json);
-      } catch {
-        throw new Error(`${extractModel} returned invalid JSON: ${content.slice(0, 200)}`);
-      }
+      return parseJsonReply(content, extractModel);
     },
   };
 }

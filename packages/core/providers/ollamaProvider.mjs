@@ -3,6 +3,8 @@
 //
 // The laptop model provider over the Ollama HTTP API.
 
+import { parseJsonReply } from "./jsonReply.mjs";
+
 /**
  * @param {object} [options]
  * @param {string} [options.baseUrl]
@@ -93,11 +95,7 @@ export function createOllamaProvider({
       );
       const body = await res.json();
       const content = body.message?.content ?? "";
-      try {
-        return JSON.parse(content);
-      } catch {
-        throw new Error(`extraction model returned invalid JSON: ${content.slice(0, 200)}`);
-      }
+      return parseJsonReply(content, "extraction model");
     },
   };
 }
