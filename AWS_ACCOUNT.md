@@ -48,12 +48,12 @@ certificate, the `SiteUrl` output and `config.json`'s `siteUrl` are the domain, 
 allowed origins and the Cognito client's callback and logout URLs list the domain beside the
 CloudFront name. The output `DistributionDomainName` keeps the CloudFront name.
 
-| Piece         | Value                                                                                                |
-| ------------- | ---------------------------------------------------------------------------------------------------- |
-| Zone          | `polycode.co.uk`, `Z2981ZT3I1K2HT`, in the management account `541134664601` (`polycode-management`) |
-| Certificate   | ACM in `us-east-1` of the sandbox account, DNS validation; CloudFront reads certificates from there  |
-| Alias target  | the distribution `d1j45li8u6vyol.cloudfront.net`; CloudFront's alias zone id is `Z2FDTNDATAQYW2`     |
-| Repo variable | `CONCORDANCE_DOMAIN_NAME` = `concordance.polycode.co.uk`; `CONCORDANCE_CERTIFICATE_ARN` = the ARN    |
+| Piece         | Value                                                                                                                                                                                                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Zone          | `polycode.co.uk`, `Z2981ZT3I1K2HT`, in the management account `541134664601` (`polycode-management`)                                                                                                                                                                       |
+| Certificate   | ACM in `us-east-1` of the sandbox account, DNS validation; CloudFront reads certificates from there                                                                                                                                                                        |
+| Alias target  | the distribution `d1j45li8u6vyol.cloudfront.net`; CloudFront's alias zone id is `Z2FDTNDATAQYW2`                                                                                                                                                                           |
+| Repo variable | `CONCORDANCE_DOMAIN_NAME` = `concordance.polycode.co.uk`; `CONCORDANCE_CERTIFICATE_ARN` = `arn:aws:acm:us-east-1:687443513271:certificate/13b123f5-b422-41c0-a920-2c97cbc2ac80` (issued 2026-10-20; the validation CNAME and the alias A and AAAA records are in the zone) |
 
 The operator runs these once. Each AWS command is a write. The alias record goes in before the
 variables, because the deploy that follows them smokes the `SiteUrl` output, which is then the
