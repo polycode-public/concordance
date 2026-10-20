@@ -45,13 +45,14 @@ export function halfvecLiteral(vector) {
  * Chunk ids at one level, best lexical match first.
  * @param {{ query: Function }} db
  */
-export async function lexicalRanking(db, question, level, limit) {
+export async function lexicalRanking(db, question, level, limit, documentIds = null) {
+  const scoped = documentIds?.length > 0;
   const { rows } = await db.query(
     `SELECT id FROM chunks
-      WHERE level = $2::chunk_level AND tsv @@ plainto_tsquery('english', $1)
+      WHERE level = $2::chunk_level AND tsv @@ plainto_tsquery('english', $1)${scoped ? " AND document_id = ANY($4::text[])" : ""}
       ORDER BY ts_rank(tsv, plainto_tsquery('english', $1)) DESC, id
       LIMIT $3`,
-    [question, level, limit],
+    scoped ? [question, level, limit, documentIds] : [question, level, limit],
   );
   return rows.map((r) => String(r.id));
 }
@@ -61,7 +62,20 @@ export async function lexicalRanking(db, question, level, limit) {
  * same model take part.
  * @param {{ query: Function }} db
  */
-export async function vectorRanking(db, literal, embedModel, level, limit) {
+export async function vectorRanking(db, literal, embedModel, level, limit, documentIds = null) {
+  if (documentIds?.length > 0) {
+    // The HNSW index filters after its candidate list, so a few documents' rows would mostly
+    // fall outside it; "+ 0" keeps the planner off the index and the scan exact.
+    const { rows } = await db.query(
+      `SELECT id FROM chunks
+        WHERE level = $2::chunk_level AND embedding IS NOT NULL AND embedding_model = $3
+          AND document_id = ANY($5::text[])
+        ORDER BY (embedding <=> $1::halfvec) + 0
+        LIMIT $4`,
+      [literal, level, embedModel, limit, documentIds],
+    );
+    return rows.map((r) => String(r.id));
+  }
   const { rows } = await db.query(
     `SELECT id FROM chunks
       WHERE level = $2::chunk_level AND embedding IS NOT NULL AND embedding_model = $3
@@ -73,11 +87,13 @@ export async function vectorRanking(db, literal, embedModel, level, limit) {
 }
 
 /**
- * Embeds the question and runs the four rankings, then fuses them.
- * @param {{ question: string, provider: object, db: { query: Function }, signal?: AbortSignal }} args
+ * Embeds the question and runs the four rankings, then fuses them. A non-empty `documentIds`
+ * limits every ranking to those documents.
+ * @param {{ question: string, provider: object, db: { query: Function }, signal?: AbortSignal,
+ *   documentIds?: string[] | null }} args
  * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]> }>}
  */
-export async function retrieve({ question, provider, db, signal }) {
+export async function retrieve({ question, provider, db, signal, documentIds = null }) {
   if (typeof provider.embedModel !== "string" || !provider.embedModel) {
     throw new Error("provider has no embedModel");
   }
@@ -87,8 +103,8 @@ export async function retrieve({ question, provider, db, signal }) {
     );
   }
   const [lexicalPassage, lexicalSection, vectors] = await Promise.all([
-    lexicalRanking(db, question, "passage", RANK_LIMITS.passage),
-    lexicalRanking(db, question, "section", RANK_LIMITS.section),
+    lexicalRanking(db, question, "passage", RANK_LIMITS.passage, documentIds),
+    lexicalRanking(db, question, "section", RANK_LIMITS.section, documentIds),
     provider.embed([question]),
   ]);
   signal?.throwIfAborted();
@@ -97,8 +113,8 @@ export async function retrieve({ question, provider, db, signal }) {
   }
   const literal = halfvecLiteral(vectors[0]);
   const [vectorPassage, vectorSection] = await Promise.all([
-    vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage),
-    vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section),
+    vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, documentIds),
+    vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, documentIds),
   ]);
   signal?.throwIfAborted();
   const rankings = { lexicalPassage, lexicalSection, vectorPassage, vectorSection };

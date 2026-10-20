@@ -67,6 +67,34 @@ describe("splitStatements", () => {
     expect(sql).not.toMatch(/accepted_facts\s+(DROP|ADD)/);
   });
 
+  it("splits 0004_reports.sql into the reports table, unique per user, filename and version", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0004_reports.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    const [reports] = statements;
+    expect(reports).toMatch(/^CREATE TABLE reports \(/);
+    for (const column of [
+      "id              bigserial PRIMARY KEY",
+      "session_id      uuid NOT NULL REFERENCES sessions (id) ON DELETE CASCADE",
+      "user_id         text NOT NULL",
+      "filename        text NOT NULL",
+      "version         int NOT NULL",
+      "title           text NOT NULL",
+      "topic           text NOT NULL",
+      "document_ids    text[] NOT NULL DEFAULT '{}'",
+      "body_markdown   text NOT NULL",
+      "citations       jsonb NOT NULL DEFAULT '[]'",
+      "checks          jsonb NOT NULL DEFAULT '{}'",
+      "prompt_version  text NOT NULL",
+      "model_id        text",
+      "created_at      timestamptz NOT NULL DEFAULT now()",
+    ])
+      expect(reports).toContain(column);
+    expect(reports).toContain("UNIQUE (user_id, filename, version)");
+    expect(reports).toContain("UNIQUE (session_id, filename, version)");
+    expect(reports).toContain("CHECK (filename ~ '^[a-z0-9][a-z0-9-]*\\.md$')");
+  });
+
   it("does not split on a ; inside a string literal or an identifier", () => {
     expect(splitStatements(`SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"; SELECT 2`)).toEqual([
       `SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"`,

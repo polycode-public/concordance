@@ -41,9 +41,16 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([
       "0001_initial.sql",
       "0002_session_frames.sql",
+      "0003_fact_registers.sql",
+      "0004_reports.sql",
     ]);
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([]);
-    expect(log.slice(-2)).toEqual(["skip    0001_initial.sql", "skip    0002_session_frames.sql"]);
+    expect(log.slice(-4)).toEqual([
+      "skip    0001_initial.sql",
+      "skip    0002_session_frames.sql",
+      "skip    0003_fact_registers.sql",
+      "skip    0004_reports.sql",
+    ]);
   });
 
   it("creates the tables, the triples view and the search indexes", async () => {
@@ -64,6 +71,7 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
         "provenance",
         "sessions",
         "session_turns",
+        "reports",
         "triples",
         "schema_migrations",
       ]),
