@@ -43,6 +43,27 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-20, bedrock, `answer-closed-world-v3`, `ingest-v2`, `assertions-v4`
+
+Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
+store polycode-sandbox Aurora, 11 statements re-chunked by numbered paragraph (922 sections) with
+the store tools offered. 25 rows (23 answer, 2 abstain), 34 gold locators: the first 20 rows and
+five that need a tool. A gold locator now matches by document and paragraph, or by page when it
+has none.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.230 |
+| citation recall           | 0.412 |
+| unsupported-sentence rate | 0.294 |
+| abstention correctness    | 0.960 |
+
+The figures are not comparable with the run below: that run matched whole-page locators and this
+one matches paragraphs, and 15 of the 34 gold locators still name a page only, so a citation of
+the right paragraph on a page the gold row does not name counts as a miss. The same run with the
+whole-object key scored precision 0.028 and recall 0.059 (two runs, about $0.35 each by the day's
+Sonnet rate; Cost Explorer lags by hours).
+
 ### 2026-10-20, bedrock, `answer-closed-world-v2`, `ingest-v1`
 
 Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
