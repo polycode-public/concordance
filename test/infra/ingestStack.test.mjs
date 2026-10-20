@@ -23,6 +23,7 @@ beforeAll(() => {
     dbSecretArn: SECRET,
     dbName: "concordance",
     budgetName: "concordance-sandbox-monthly",
+    corpora: ["grenfell", "ucpi"],
   });
   template = Template.fromStack(stack);
   const [machine] = Object.values(template.findResources("AWS::StepFunctions::StateMachine"));
@@ -133,6 +134,19 @@ describe("IngestStack", () => {
         Resource: "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
       }),
     );
+  });
+
+  it("lets the manifest and ingest functions read every corpus's objects in the bucket", () => {
+    const resources = statements()
+      .filter((st) => [st.Action].flat().includes("s3:GetObject"))
+      .flatMap((st) => [st.Resource].flat())
+      .map((r) => JSON.stringify(r));
+    for (const corpus of ["grenfell", "ucpi"]) {
+      expect(
+        resources.some((r) => r.includes(`/${corpus}/*`)),
+        corpus,
+      ).toBe(true);
+    }
   });
 
   it("grants the Data API, the secret and Bedrock to the ingest and extraction functions", () => {
