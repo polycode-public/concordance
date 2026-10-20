@@ -123,7 +123,7 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
       page_count: 2,
       locator_scheme: "page-paragraph",
       abstract: "fake abstract",
-      pipeline_version: "ingest-v1",
+      pipeline_version: "ingest-v2",
     });
     const witnesses = await db.query("SELECT id, role FROM witnesses");
     expect(witnesses.rows).toEqual([{ id: META.witnessId, role: META.role }]);
@@ -171,7 +171,7 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
         embedding_model: "fake-embed",
         embedding_dim: 1024,
         embedded: true,
-        pipeline_version: "ingest-v1",
+        pipeline_version: "ingest-v2",
       });
       if (row.level !== "document") {
         expect(row.context_line).toBe("fake context");

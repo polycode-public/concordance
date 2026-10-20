@@ -31,7 +31,7 @@ import { splitSentences } from "../chunking/sentences.mjs";
 import { sha256File } from "./hash.mjs";
 import { pdfToPages } from "./pdfText.mjs";
 
-export const PIPELINE_VERSION = "ingest-v1";
+export const PIPELINE_VERSION = "ingest-v2";
 export const CONTEXT_PROMPT_VERSION = "context-v1";
 export const ABSTRACT_PROMPT_VERSION = "abstract-v1";
 export const EMBED_BATCH_SIZE = 32;

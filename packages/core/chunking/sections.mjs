@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 
-const NUMBERED = /^\s*(\d{1,3})\.\s/;
+// A paragraph number ends in a dot, or in the comma that OCR reads in its place ("3, I was").
+// The dot is followed by a space, by the end of the line, or by the character that OCR reads in
+// place of the capital I that opens the sentence ("12.1 opened", "19.} had").
+const NUMBERED = /^\s*(\d{1,3})(?:\.(?:\s|$|1\s|[^\s\d.])|,\s+[^\s\d])/;
+const NUMBER_PREFIX = /^\s*\d{1,3}[.,]/;
+// OCR drops or misreads some paragraph numbers, so the next number may skip ahead by this much.
+export const MAX_NUMBER_SKIP = 4;
 export const MAX_SECTION_CHARS = 6000;
 const SENTENCE_END = /[.!?]["')\]]?\s/g;
 
@@ -91,11 +97,13 @@ export function splitNumberedParagraphs(pageTexts) {
     for (const line of text.split("\n")) {
       const match = NUMBERED.exec(line);
       const number = match ? Number(match[1]) : null;
-      const startsParagraph = number !== null && (lastNumber === null || number === lastNumber + 1);
+      const startsParagraph =
+        number !== null &&
+        (lastNumber === null || (number > lastNumber && number <= lastNumber + MAX_NUMBER_SKIP));
       if (startsParagraph) {
         flush();
         lastNumber = number;
-        const first = line.replace(NUMBERED, "");
+        const first = line.replace(NUMBER_PREFIX, "");
         current = { paragraph: number, page, lastPage: page, lines: [first], chars: first.length };
       } else {
         current ??= { paragraph: null, page, lastPage: page, lines: [], chars: 0 };
