@@ -3,7 +3,7 @@
 //
 // The query pipeline: hybrid retrieval, fusion, expansion, a closed-world answer,
 // the citation check, and the map from [En] to the locator stored at ingest.
-import { markUnsupported } from "./checks/citations.mjs";
+import { citationTags, markUnsupported } from "./checks/citations.mjs";
 import { ABSTAIN_PHRASE, PROMPT_VERSION, answerMessages } from "./prompt.mjs";
 import {
   buildEvidence,
@@ -69,9 +69,14 @@ export function checkAnswer(answer, blocks) {
   };
 }
 
-/** True when the answer abstains or no evidence was retrieved. */
+/**
+ * True when no evidence was retrieved, or the answer carries the closed-world phrase and cites
+ * nothing. An answer that cites evidence and abstains for part of the question keeps its
+ * citations and its checks.
+ */
 export const isAbstention = (answer, blocks) =>
-  blocks.length === 0 || answer.toLowerCase().includes(ABSTAIN_PHRASE);
+  blocks.length === 0 ||
+  (answer.toLowerCase().includes(ABSTAIN_PHRASE) && citationTags(answer).length === 0);
 
 /**
  * Runs one question through the pipeline.

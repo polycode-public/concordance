@@ -241,6 +241,10 @@ describe("checkAnswer", () => {
 describe("abstention and prompt", () => {
   it("abstains on the closed-world phrase or on no evidence", () => {
     expect(isAbstention("The corpus does not say.", [{}])).toBe(true);
+    expect(
+      isAbstention("The corpus does not say about floor 17. One resident saw smoke [E1].", [{}]),
+    ).toBe(false);
+    expect(isAbstention("The corpus does not say about floor 17.", [{}])).toBe(true);
     expect(isAbstention("It was dark [E1].", [])).toBe(true);
     expect(isAbstention("It was dark [E1].", [{}])).toBe(false);
   });
