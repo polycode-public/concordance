@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseArgs, parseGold, run, score } from "../../evals/run.mjs";
+import { locatorMatches, parseArgs, parseGold, run, score } from "../../evals/run.mjs";
 
 let dir;
 beforeEach(async () => {
@@ -85,6 +85,17 @@ describe("evals runner", () => {
 
   it("rejects a gold row with an unknown expected value", () => {
     expect(() => parseGold(row("g1", "maybe"), "gold.jsonl")).toThrow(/gold.jsonl:1/);
+  });
+
+  it("matches a gold paragraph on any page and a gold page when the paragraph is unknown", () => {
+    const gold = { document: "IWS1", page: 2, paragraph: 11 };
+    expect(locatorMatches(gold, { document: "IWS1", page: 3, paragraph: 11 })).toBe(true);
+    expect(locatorMatches(gold, { document: "IWS1", page: 2, paragraph: 12 })).toBe(false);
+    expect(locatorMatches(gold, { document: "IWS2", page: 2, paragraph: 11 })).toBe(false);
+    const pageOnly = { document: "IWS1", page: 2, paragraph: null };
+    expect(locatorMatches(pageOnly, { document: "IWS1", page: 2, paragraph: 7 })).toBe(true);
+    expect(locatorMatches(pageOnly, { document: "IWS1", page: 3, paragraph: 7 })).toBe(false);
+    expect(locatorMatches("p.3 para 11", "p.3 para 11")).toBe(true);
   });
 
   it("scores citation precision, recall, unsupported rate and abstention", () => {
