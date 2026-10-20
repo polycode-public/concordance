@@ -39,6 +39,10 @@ body {
   transform: translateY(calc(-100% - var(--unit) * 2));
 }
 
+.signed-out .skip-link {
+  display: none;
+}
+
 .skip-link:focus {
   transform: none;
 }
