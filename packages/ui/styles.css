@@ -522,6 +522,15 @@ body[data-viewer="open"] .desk {
   color: var(--ink-soft);
 }
 
+.bundle .suggestions {
+  margin: var(--unit) 0 0;
+}
+
+.bundle .suggestions li {
+  padding: 0;
+  border-top: 0;
+}
+
 .reference {
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-label);

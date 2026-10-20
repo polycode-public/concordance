@@ -321,6 +321,33 @@ describe.skipIf(!enabled)(
       expect(await evaluate(`document.getElementById("suggestions").hidden`)).toBe(true);
     });
 
+    for (const [panel, text] of [
+      ["documents", "List the statements in the corpus"],
+      ["evidence", "Show the evidence about smoke in the stairwell"],
+    ]) {
+      it(`shows a pill in the empty ${panel} panel that submits and hides once the panel fills`, async () => {
+        await open({ width: 1280, height: 800 });
+        const list = `document.getElementById("${panel}-suggestions")`;
+        expect(await evaluate(`${list}.hidden`)).toBe(false);
+        expect(await evaluate(`!document.getElementById("${panel}-empty").hidden`)).toBe(true);
+        expect(
+          await evaluate(`[...${list}.querySelectorAll("button.pill")].map((b) => b.textContent)`),
+        ).toEqual([text]);
+        await evaluate(`${list}.querySelector("button.pill").click(); true`);
+        await until(`document.querySelector(".score")?.textContent.length > 0`);
+        expect(await evaluate(`document.querySelector(".turn .question p").textContent`)).toBe(
+          text,
+        );
+        expect(
+          await evaluate(`document.getElementById("${panel}").children.length`),
+        ).toBeGreaterThan(0);
+        expect(await evaluate(`${list}.hidden`)).toBe(true);
+        await evaluate(`document.getElementById("conversations-new").click(); true`);
+        expect(await evaluate(`document.getElementById("${panel}").children.length`)).toBe(0);
+        expect(await evaluate(`${list}.hidden`)).toBe(false);
+      });
+    }
+
     it("folds each evidence block, toggles it from the keyboard and opens the block a chip names", async () => {
       await open({ width: 1280, height: 800 });
       await ask();

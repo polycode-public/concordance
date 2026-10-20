@@ -21,6 +21,8 @@ const documentsEmpty = $("documents-empty");
 const evidenceEl = $("evidence");
 const evidenceCount = $("evidence-count");
 const evidenceEmpty = $("evidence-empty");
+const documentsSuggestions = $("documents-suggestions");
+const evidenceSuggestions = $("evidence-suggestions");
 
 const STAGES = ["rewriting", "retrieving", "answering", "checking"];
 /** The conversation: a thread on this connection's session. */
@@ -266,6 +268,7 @@ function renderEvidence(turn, cited) {
   const blocks = [...turn.blocks.values()];
   evidenceCount.textContent = blocks.length ? ` ${blocks.length}` : "";
   evidenceEmpty.hidden = blocks.length > 0;
+  showPanelPills(evidenceSuggestions, blocks.length === 0);
   evidenceEl.replaceChildren(
     ...blocks.map((block) => {
       const item = el("li", "block");
@@ -420,6 +423,7 @@ function renderDocuments() {
   const entries = [...documents.values()];
   documentsCount.textContent = entries.length ? ` ${entries.length}` : "";
   documentsEmpty.hidden = entries.length > 0;
+  showPanelPills(documentsSuggestions, entries.length === 0);
   documentsEl.replaceChildren(
     ...entries.map((entry) => {
       const item = el("li", "document");
@@ -445,9 +449,9 @@ function finish(turn, message) {
   cancelButton.disabled = true;
 }
 
-/** Fills the pills for a corpus; they show until the first turn of a thread. */
-function mountSuggestions(corpusId) {
-  const pills = suggestionsFor(corpusId).map(({ text }) => {
+/** The pill buttons for a list of suggestions; a click asks the pill's text. */
+function pills(suggestions) {
+  return suggestions.map(({ text }) => {
     const button = el("button", "pill", text);
     button.type = "button";
     button.addEventListener("click", () => {
@@ -458,8 +462,24 @@ function mountSuggestions(corpusId) {
     item.append(button);
     return item;
   });
-  suggestionsEl.replaceChildren(...pills);
-  suggestionsEl.hidden = pills.length === 0;
+}
+
+/** A panel's pills show while the panel is empty. */
+function showPanelPills(list, empty) {
+  list.hidden = !empty || list.children.length === 0;
+}
+
+/**
+ * Fills the pills for a corpus. The prompt-box pills show until the first turn of a thread; the
+ * panel pills show while their panel is empty.
+ */
+function mountSuggestions(corpusId) {
+  suggestionsEl.replaceChildren(...pills(suggestionsFor(corpusId)));
+  suggestionsEl.hidden = suggestionsEl.children.length === 0;
+  documentsSuggestions.replaceChildren(...pills(suggestionsFor(corpusId, "documents")));
+  showPanelPills(documentsSuggestions, documents.size === 0);
+  evidenceSuggestions.replaceChildren(...pills(suggestionsFor(corpusId, "evidence")));
+  showPanelPills(evidenceSuggestions, evidenceEl.children.length === 0);
 }
 
 /** Empties the page for another conversation on a new thread. */
@@ -476,6 +496,7 @@ function startNew() {
   evidenceCount.textContent = "";
   evidenceEmpty.hidden = false;
   evidenceEl.replaceChildren();
+  showPanelPills(evidenceSuggestions, true);
   cancelButton.disabled = true;
   exporter?.reset();
 }
