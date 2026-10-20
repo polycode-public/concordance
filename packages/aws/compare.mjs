@@ -4,7 +4,8 @@
 // One comparison run over a corpus: alignment and labelling of its assertions, started by hand
 // or by a state machine with { corpus }. A run that reaches its deadline returns "partial"; the
 // next invocation with the same input resumes it, and one over a complete run returns "skipped"
-// and writes nothing.
+// and writes nothing; one over a run in progress returns "running" and writes nothing. Invoke it
+// with `--invocation-type Event`: a synchronous call that drops its connection is retried by the CLI.
 
 import { runComparison } from "../core/facts/compare.mjs";
 import { corpusInfo } from "../core/ingest/run.mjs";
@@ -30,7 +31,7 @@ export function createHandler({ providerFor, openDb, now = Date.now, log = conso
     const provider = await providerFor();
     const db = await openDb();
     try {
-      const { status, runId, counts } = await runComparison({
+      const { status, runId, counts, startedAt } = await runComparison({
         corpus,
         db,
         provider,
@@ -40,7 +41,7 @@ export function createHandler({ providerFor, openDb, now = Date.now, log = conso
         now,
       });
       log(JSON.stringify({ corpus, status, runId, ...counts, ms: now() - started }));
-      return { corpus, status, runId, counts };
+      return { corpus, status, runId, counts, ...(startedAt && { startedAt }) };
     } finally {
       await db.close();
     }

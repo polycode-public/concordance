@@ -81,7 +81,12 @@ export function createCompareStore(seed = {}) {
               r.input_sha256 === hash &&
               r.model === model,
           )
-          .map(({ id, status, counts }) => ({ id, status, counts: structuredClone(counts) })),
+          .map(({ id, status, counts, started_at }) => ({
+            id,
+            status,
+            counts: structuredClone(counts),
+            started_at,
+          })),
     ],
     [
       RUN_SQL.insertRun,
@@ -94,8 +99,9 @@ export function createCompareStore(seed = {}) {
             r.model === model,
         );
         if (!exists) {
+          const id = newId();
           t.comparison_runs.push({
-            id: newId(),
+            id,
             corpus,
             pipeline_version: version,
             prompt_version: prompt,
@@ -103,9 +109,21 @@ export function createCompareStore(seed = {}) {
             model,
             status: "running",
             counts: {},
+            started_at: new Date(clock).toISOString(),
           });
+          return [{ id }];
         }
         return [];
+      },
+    ],
+    [
+      RUN_SQL.claimRun,
+      ([runId, minutes]) => {
+        const run = t.comparison_runs.find((r) => r.id === String(runId));
+        const stale = clock - Date.parse(run.started_at) > minutes * 60_000;
+        if (run.status === "running" && !stale) return [];
+        Object.assign(run, { status: "running", started_at: new Date(clock).toISOString() });
+        return [{ id: run.id }];
       },
     ],
     [
@@ -339,6 +357,10 @@ export function createCompareStore(seed = {}) {
     tables: t,
     query,
     closed: 0,
+    /** Moves the store's clock, which stamps started_at and judges the lease. */
+    advance(ms) {
+      clock += ms;
+    },
     async close() {
       this.closed++;
     },

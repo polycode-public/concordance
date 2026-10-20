@@ -95,7 +95,15 @@ export class AppStack extends Stack {
       CANCEL_TABLE: cancelTable.tableName,
       CORPUS_BUCKET: corpusBucket.bucketName,
     };
-    const fn = (name, { timeout = Duration.seconds(30), memorySize = 256, environment }) =>
+    const fn = (
+      name,
+      {
+        timeout = Duration.seconds(30),
+        memorySize = 256,
+        reservedConcurrentExecutions,
+        environment,
+      },
+    ) =>
       new NodejsFunction(this, `${name[0].toUpperCase()}${name.slice(1)}Function`, {
         entry: path.join(AWS_DIR, `${name}.mjs`),
         handler: "handler",
@@ -105,6 +113,7 @@ export class AppStack extends Stack {
         architecture: lambda.Architecture.ARM_64,
         timeout,
         memorySize,
+        reservedConcurrentExecutions,
         environment,
         logGroup: new logs.LogGroup(this, `${name}Logs`, {
           retention: logs.RetentionDays.ONE_WEEK,
@@ -154,7 +163,10 @@ export class AppStack extends Stack {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
     // Alignment compares every pair of claim vectors in memory; 1769 MB is one full vCPU.
+    // One at a time: a second invoke is refused with a 429 before it reads anything, so a retried
+    // invoke cannot share the Bedrock quota with a run in progress.
     const compareFn = fn("compare", {
+      reservedConcurrentExecutions: 1,
       timeout: Duration.minutes(15),
       memorySize: 1769,
       environment: {
