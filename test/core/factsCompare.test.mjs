@@ -9,6 +9,7 @@ import {
   eligible,
   embedTexts,
   normalisePredicate,
+  sharedAnchors,
 } from "../../packages/core/facts/align.mjs";
 import {
   COMPARE_PIPELINE_VERSION,
@@ -22,16 +23,17 @@ import {
   PAIRS_PER_CALL,
   RULES_MODEL,
   checkLabel,
+  contentWords,
+  negationSpan,
   nliPrompt,
   rulesLabel,
 } from "../../packages/core/facts/nli.mjs";
 import { createCompareStore } from "./compareFakeStore.mjs";
-import { compareProvider, compareSeed } from "./compareFixture.mjs";
+import { compareProvider, compareSeed, disputeSeed } from "./compareFixture.mjs";
 
 const quiet = () => {};
 
-function fixtureAssertions() {
-  const seed = compareSeed();
+function fixtureAssertions(seed = compareSeed()) {
   return seed.assertions.map((a) => {
     const chunk = seed.chunks.find((c) => c.id === a.source_chunk_id);
     const doc = seed.documents.find((d) => d.id === chunk.document_id);
@@ -44,8 +46,8 @@ function fixtureAssertions() {
   });
 }
 
-async function aligned(bounds) {
-  const assertions = fixtureAssertions().filter(eligible);
+async function aligned(bounds, seed) {
+  const assertions = fixtureAssertions(seed).filter(eligible);
   const { provider } = compareProvider();
   const vectors = await embedTexts(provider, assertions.map(claimText));
   return alignAssertions(assertions, vectors, bounds);
@@ -86,8 +88,7 @@ describe("alignment", () => {
     expect([self.a.documentId, self.b.documentId]).toEqual(["IWS-A1", "IWS-A2"]);
     expect(self.eventId).toBe("7");
     const stairs = pairs.find((p) => p.a.id === "9");
-    expect(stairs).toMatchObject({ eventId: null, topic: "dark", anchors: [] });
-    expect(stairs.similarity).toBeGreaterThanOrEqual(ALIGN_SIMILARITY_ALONE);
+    expect(stairs).toMatchObject({ eventId: null, topic: "dark", anchors: ["subject"] });
   });
 
   it("needs a shared anchor below the stronger threshold", async () => {
@@ -95,6 +96,51 @@ describe("alignment", () => {
     const { pairs } = await aligned();
     expect(pairs.some((p) => p.a.id === "7" && p.b.id === "12")).toBe(false);
     expect(ALIGN_SIMILARITY).toBeLessThan(ALIGN_SIMILARITY_ALONE);
+  });
+
+  it("anchors a cross pair on the event, a shared subject or a place, vehicle or unit object", async () => {
+    const { pairs } = await aligned();
+    const anchorsOf = (a, b) => pairs.find((p) => p.a.id === a && p.b.id === b).anchors;
+    expect(anchorsOf("1", "3")).toEqual(["event"]);
+    expect(anchorsOf("4", "5")).toEqual(["event", "subject"]);
+    expect(anchorsOf("11", "12")).toEqual(["subject"]);
+    const [a] = fixtureAssertions();
+    const car = { objectText: "the car", objectEntityId: "70", witnessId: "IWS-B", id: "90" };
+    const thing = { ...a, subjectText: "It", subjectKind: "thing", eventId: null };
+    expect(
+      sharedAnchors(
+        { ...thing, ...car, objectEntityKind: "vehicle" },
+        { ...thing, objectEntityId: "70", objectEntityKind: "vehicle" },
+      ),
+    ).toEqual(["subject", "object"]);
+    expect(
+      sharedAnchors(
+        { ...thing, subjectText: "A man", ...car, objectEntityKind: "person" },
+        { ...thing, objectEntityId: "70", objectEntityKind: "person" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("pairs two first-person claims of two witnesses only on a shared event", async () => {
+    const [a, b] = fixtureAssertions();
+    const car = { objectEntityId: "70", objectEntityKind: "vehicle" };
+    expect(sharedAnchors({ ...a, ...car, eventId: null }, { ...b, ...car, eventId: null })).toEqual(
+      [],
+    );
+    expect(sharedAnchors(a, b)).toEqual(["event"]);
+  });
+
+  it("leaves the bed times and the witness nobody told unpaired, and pairs the brigade's arrival", async () => {
+    const { pairs } = await aligned(undefined, disputeSeed());
+    const added = pairs.filter((p) => Number(p.a.id) > 12 || Number(p.b.id) > 12);
+    expect(added.map(ids)).toEqual(["cross 16-17"]);
+    expect(added[0]).toMatchObject({ eventId: "10", anchors: ["event", "subject"], similarity: 1 });
+  });
+
+  it("pairs a self pair on its predicate, or above the stronger threshold with no anchor", async () => {
+    const [a] = fixtureAssertions();
+    const later = { ...a, id: "91", documentId: "IWS-A2", eventId: null };
+    expect(sharedAnchors({ ...a, eventId: null }, later)).toEqual(["subject", "predicate"]);
   });
 
   it("bounds the pairs per group and per assertion, most similar first", async () => {
@@ -142,22 +188,97 @@ describe("the rules pass", () => {
       expect(rulesLabel(find(a, b))).toBeNull();
   });
 
-  it("labels opposite polarity on the same claim contradict", () => {
-    const [a, , , , , , , , , , b] = fixtureAssertions();
-    const negative = {
-      ...b,
-      id: "99",
-      witnessId: "C123",
-      polarity: "negative",
-      sentence: "A firefighter never told us anything.",
+  const alarm = () => {
+    const [, , , , sounded] = fixtureAssertions();
+    return {
+      a: sounded,
+      b: {
+        ...sounded,
+        id: "99",
+        witnessId: "C123",
+        polarity: "negative",
+        sentence: "The fire alarm never sounded in the corridor.",
+      },
     };
-    expect(rulesLabel({ kind: "cross", a: b, b: negative })).toMatchObject({
+  };
+
+  it("labels opposite polarity on the same claim contradict, on the negation it reads", () => {
+    const { a, b } = alarm();
+    expect(rulesLabel({ kind: "cross", a, b })).toMatchObject({
       label: "contradict",
       reason: expect.stringMatching(/^polarity: positive against negative/),
-      spanA: "told",
-      spanB: "told",
+      spanA: "sounded",
+      spanB: "never sounded",
     });
-    expect(a).toBeTruthy();
+  });
+
+  it("leaves opposite polarity to the model on a function-word predicate or object", () => {
+    const { a, b } = alarm();
+    const it_ = { subjectText: "It", subjectKind: "thing", predicate: "was", objectText: "It" };
+    expect(
+      rulesLabel({
+        kind: "cross",
+        a: { ...a, ...it_, sentence: "It was it." },
+        b: { ...b, ...it_, sentence: "It was not it." },
+      }),
+    ).toBeNull();
+    const told = { predicate: "told", objectText: "us", subjectText: "A firefighter" };
+    expect(
+      rulesLabel({
+        kind: "cross",
+        a: { ...a, ...told, subjectKind: "person", sentence: "A firefighter told us." },
+        b: { ...b, ...told, subjectKind: "person", sentence: "A firefighter never told us." },
+      }),
+    ).toBeNull();
+  });
+
+  it("never labels two identical spans contradict", () => {
+    const { a, b } = alarm();
+    const forget = {
+      subjectText: null,
+      subjectKind: null,
+      predicate: "must never forget",
+      objectText: "the people of Grenfell",
+    };
+    expect(
+      rulesLabel({
+        kind: "cross",
+        a: { ...a, ...forget, sentence: "We must never forget the people of Grenfell." },
+        b: { ...b, ...forget, sentence: "I must never forget the people of Grenfell." },
+      }),
+    ).toBeNull();
+  });
+
+  it("reads a negation in the predicate or just before it", () => {
+    expect(negationSpan("The fire alarm did not sound.", "did not sound")).toBe("did not sound");
+    expect(negationSpan("Nobody at all told me that.", "told")).toBe("Nobody at all told");
+    expect(negationSpan("The alarm sounded.", "sounded")).toBeNull();
+    expect(contentWords("was")).toEqual([]);
+    expect(contentWords("went to bed")).toEqual(["bed"]);
+  });
+
+  it("applies the time rule only to a pair that shares an event or a subject", async () => {
+    const seed = disputeSeed();
+    const all = fixtureAssertions(seed);
+    const byId = (n) => all.find((x) => x.id === n);
+    const brigade = rulesLabel({ kind: "cross", a: byId("16"), b: byId("17") });
+    expect(brigade).toMatchObject({
+      label: "contradict",
+      reason: expect.stringMatching(/^time: "about 1.10 am" .* and "1.40 am" /),
+      spanA: "about 1.10 am",
+      spanB: "1.40 am",
+    });
+    expect(rulesLabel({ kind: "cross", a: byId("13"), b: byId("15") })).toBeNull();
+    const smoke = (await aligned(undefined, seed)).pairs.filter(
+      (p) => p.eventId === "7" && p.kind === "cross",
+    );
+    expect(smoke.map((p) => [ids(p), rulesLabel(p).label]).sort()).toEqual([
+      ["cross 1-2", "agree"],
+      ["cross 1-3", "contradict"],
+      ["cross 2-3", "contradict"],
+      ["cross 2-6", "contradict"],
+      ["cross 3-6", "agree"],
+    ]);
   });
 });
 
@@ -247,7 +368,7 @@ describe("runComparison", () => {
       expect.objectContaining({
         corpus: "grenfell",
         pipeline_version: COMPARE_PIPELINE_VERSION,
-        prompt_version: "nli-v1",
+        prompt_version: "nli-v2",
         model: "fake-extract",
         status: "complete",
       }),
@@ -405,6 +526,22 @@ describe("runComparison", () => {
     await expect(
       runComparison({ corpus: "grenfell", db: store, provider, log: quiet }),
     ).rejects.toThrow(/no labels array/);
+  });
+
+  it("labels the brigade's arrival contradict by rules and pairs no bed time", async () => {
+    const store = createCompareStore(disputeSeed());
+    const { provider } = compareProvider();
+    const result = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+    expect(result.counts).toMatchObject({ assertions: 18, pairs: 11, rules: 8, modelLabelled: 3 });
+    expect(labelOf(store, "16", "17")).toMatchObject({
+      label: "contradict",
+      model: RULES_MODEL,
+      event_id: "10",
+    });
+    const touched = store.tables.assertion_comparisons.filter((c) =>
+      ["13", "14", "15", "18"].some((n) => c.assertion_a === n || c.assertion_b === n),
+    );
+    expect(touched).toEqual([]);
   });
 
   it("compares witness assertions against an accepted fact, and only the new pairs on a rerun", async () => {
