@@ -61,8 +61,8 @@ async function ask(page, question) {
       },
     )
     .toMatch(/^done(,done)*$/);
-  const answer = (await turn.locator("p.answer").innerText()).trim();
-  const score = (await turn.locator("p.score").innerText()).trim();
+  const answer = (await turn.locator(".answer").innerText()).trim();
+  const score = (await turn.locator(".score").innerText()).trim();
   return { turn, answer, score };
 }
 
