@@ -110,6 +110,32 @@ describe("splitStatements", () => {
       expect(progress).toContain(column);
   });
 
+  it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(9);
+    const [runs, alter, unique] = statements;
+    expect(runs).toMatch(/^CREATE TABLE comparison_runs \(/);
+    expect(runs).toContain("UNIQUE (corpus, pipeline_version, input_sha256, model)");
+    expect(runs).toContain("CHECK (status IN ('running', 'partial', 'complete'))");
+    expect(alter).toMatch(/^ALTER TABLE assertion_comparisons/);
+    for (const column of [
+      "run_id            bigint REFERENCES comparison_runs (id) ON DELETE CASCADE",
+      "accepted_fact_id  bigint REFERENCES accepted_facts (id) ON DELETE CASCADE",
+      "event_id          bigint REFERENCES events (id) ON DELETE SET NULL",
+      "decided_by        text",
+      "overrides         bigint REFERENCES assertion_comparisons (id) ON DELETE CASCADE",
+    ])
+      expect(alter).toContain(column);
+    expect(alter).toContain(
+      "CHECK ((model = 'operator') = (decided_by IS NOT NULL AND run_id IS NULL))",
+    );
+    expect(alter).toContain("CHECK ((kind = 'accepted') = (accepted_fact_id IS NOT NULL))");
+    expect(unique).toMatch(/^CREATE UNIQUE INDEX assertion_comparisons_run_pair_idx/);
+    expect(unique).toMatch(/WHERE run_id IS NOT NULL$/);
+    expect(statements.slice(3).every((s) => s.startsWith("CREATE INDEX "))).toBe(true);
+  });
+
   it("does not split on a ; inside a string literal or an identifier", () => {
     expect(splitStatements(`SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"; SELECT 2`)).toEqual([
       `SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"`,
