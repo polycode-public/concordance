@@ -110,6 +110,20 @@ describe("splitStatements", () => {
       expect(progress).toContain(column);
   });
 
+  it("splits 0007_assertion_subjects.sql into one change that adds the subject columns", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0007_assertion_subjects.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    const [alter] = statements;
+    expect(alter).toMatch(/^ALTER TABLE assertions/);
+    for (const part of [
+      "ADD COLUMN subject_text  text,",
+      "ADD COLUMN subject_kind  text CHECK (subject_kind IN ('witness', 'person', 'group', 'thing'))",
+      "CHECK ((subject_text IS NULL) = (subject_kind IS NULL))",
+    ])
+      expect(alter).toContain(part);
+  });
+
   it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
     const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
     const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));

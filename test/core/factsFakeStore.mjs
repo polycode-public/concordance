@@ -156,6 +156,8 @@ export function createFactsStore(seed = {}) {
         polarity: cols[8][i],
         modality: cols[9][i],
         confidence: cols[10][i],
+        subject_text: cols[11][i],
+        subject_kind: cols[12][i],
         extractor,
         pipeline_version: version,
       }));

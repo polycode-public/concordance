@@ -8,25 +8,51 @@
 // One model call covers a window of consecutive sentences, with the sentence before and the
 // sentence after the window as context, so a document of 700 sentences fits one Lambda run.
 // Every text value the model returns must be a span of the target sentence it names; a value
-// that is not is rejected in code, and the row is dropped, counted and logged. The model never
-// names a chunk: source_chunk_id comes from the sentence the code numbered.
+// that is not is rejected in code, and the row is dropped, counted and logged. The one exception
+// is event_text, a label: it is either a name from the corpus's shared events or a span of the
+// sentence. The model never names a chunk: source_chunk_id comes from the sentence the code
+// numbered.
 
 import { sha256Text } from "../ingest/run.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
 
-export const EXTRACT_PROMPT_VERSION = "assertions-v1";
+export const EXTRACT_PROMPT_VERSION = "assertions-v2";
 export const EXTRACT_PIPELINE_VERSION = "facts-v1";
 export const EXTRACT_STEP = "extract-assertions";
 export const EXTRACT_WINDOW = 10;
 export const ENTITY_KINDS = Object.freeze(["person", "place", "vehicle", "unit"]);
+export const SUBJECT_KINDS = Object.freeze(["witness", "person", "group", "thing"]);
 export const SPAN_FIELDS = Object.freeze([
   "predicate",
   "object_text",
-  "event_text",
   "time_text",
   "place_text",
   "modality",
 ]);
+/** The words that make the witness the subject of a claim. */
+export const FIRST_PERSON = Object.freeze(["i", "we", "me"]);
+export const EVENT_TEXT_MAX = 80;
+
+/**
+ * The events of one night that many statements describe, by corpus. The extractor names an event
+ * by one of these when the claim is about it, so two witnesses' claims about the same moment share
+ * an event id.
+ */
+export const SHARED_EVENTS = Object.freeze({
+  grenfell: Object.freeze([
+    "the fire starting in Flat 16",
+    "the first 999 calls",
+    "the fire brigade arriving",
+    "smoke in the lobby",
+    "smoke in the stairs",
+    "the advice to stay put",
+    "the advice changing to leave",
+    "leaving the building",
+  ]),
+});
+
+/** The shared events of a corpus, or none. */
+export const sharedEventsFor = (corpus) => SHARED_EVENTS[corpus] ?? [];
 export const WRITE_BATCH_BYTES = 48 * 1024;
 const SENTENCE_PAGE = 500;
 const EXTRACT_TOOL = "concordance-facts";
@@ -42,10 +68,15 @@ export const ASSERTION_SCHEMA = Object.freeze({
         type: "object",
         properties: {
           sentence: { type: "integer" },
+          subject_text: nullableString,
+          subject_kind: { enum: [...SUBJECT_KINDS, null] },
           predicate: { type: "string" },
           object_text: nullableString,
           object_kind: { enum: [...ENTITY_KINDS, null] },
-          event_text: nullableString,
+          event_text: {
+            type: ["string", "null"],
+            description: "A label: a shared event name, else words of the sentence.",
+          },
           time_text: nullableString,
           place_text: nullableString,
           modality: nullableString,
@@ -85,13 +116,19 @@ export function sentenceWindows(sentences, size = EXTRACT_WINDOW) {
  * time they change, so the model reads where in the statement each sentence sits.
  * @param {{ before: object | null, targets: { ordinal: number, text: string,
  *   header?: string | null, context_line?: string | null }[], after: object | null }} window
+ * @param {readonly string[]} [events] the corpus's shared event names
  */
-export function extractPrompt({ before, targets, after }) {
+export function extractPrompt({ before, targets, after }, events = []) {
   const lines = [
     "You extract the assertions a witness makes in a statement. An assertion is one claim the witness makes: what happened, or what the witness did, saw, heard or knew.",
     "Extract assertions only from the target sentences, which are numbered [Sn]. The context sentences help you read the targets; extract nothing from them.",
     "Copy every text value exactly as it appears in its own target sentence, with the same words, spelling and case. Do not paraphrase, resolve pronouns or add words. Use null when the sentence does not state the value.",
-    "Fields: sentence is the number n of the target sentence. predicate is the verb phrase of the claim. object_text is what the claim is about; object_kind is person, place, vehicle or unit when object_text names one, else null. event_text names the event the claim is about. time_text is the time or date stated. place_text is the place stated. modality is the words that hedge the claim, such as 'I think' or 'about'. polarity is negative when the witness denies the claim, else positive. confidence is from 0 to 1.",
+    "Fields: sentence is the number n of the target sentence. subject_text is who or what does or undergoes the action of the claim. subject_kind is witness when subject_text is I, we or me (the witness); person for a named or ciphered person or one person such as 'a firefighter'; group for a group such as 'the fire brigade', 'the 999 operator' or 'residents'; thing for a thing such as 'the fire', 'the smoke' or 'the lift'. predicate is the verb phrase of the claim. object_text is what the claim is about; object_kind is person, place, vehicle or unit when object_text names one, else null. event_text names the event the claim is about. time_text is the time or date stated. place_text is the place stated. modality is the words that hedge the claim, such as 'I think' or 'about'. polarity is negative when the witness denies the claim, else positive. confidence is from 0 to 1.",
+    ...(events.length
+      ? [
+          `event_text is a label. When the claim is about one of these events, copy its name exactly: ${events.map((e) => `'${e}'`).join("; ")}. Use the sentence's own words only when none of them fits, and null when the claim is about no event.`,
+        ]
+      : []),
     "Do not judge or interpret the witness.",
     'Reply as JSON: {"assertions": [...]}, with an empty array when the targets make no assertion.',
     "",
@@ -116,13 +153,64 @@ export function extractPrompt({ before, targets, after }) {
 
 const reject = (field, reason, value) => ({ ok: false, field, reason, value });
 
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** True when a span stands as whole words in a text; a short span such as "I" needs this. */
+function wordsIn(span, text, flags = "u") {
+  const edge = "[^\\p{L}\\p{N}]";
+  return new RegExp(`(?:^|${edge})${escapeRegExp(span)}(?:${edge}|$)`, flags).test(text);
+}
+
+/**
+ * The subject span and kind. I, we and me are the witness, whatever kind the model gave; a
+ * witness subject in any other words is rejected, because the row would then claim the witness
+ * did what someone else did.
+ */
+function checkSubject(raw, text) {
+  const value = raw.subject_text ?? null;
+  const kind = raw.subject_kind ?? null;
+  if (kind !== null && !SUBJECT_KINDS.includes(kind)) {
+    return reject("subject_kind", "not-a-subject-kind", kind);
+  }
+  if (value === null || value === "") {
+    if (kind !== null) return reject("subject_kind", "kind-without-subject", kind);
+    return { ok: true, text: null, kind: null };
+  }
+  if (typeof value !== "string") return reject("subject_text", "not-a-string", value);
+  const span = normaliseSpan(value);
+  if (!span) return reject("subject_text", "missing", value);
+  const haystack = normaliseSpan(text);
+  if (FIRST_PERSON.includes(span.toLowerCase())) {
+    if (!wordsIn(span, haystack, "iu")) return reject("subject_text", "not-in-sentence", value);
+    return { ok: true, text: span, kind: "witness" };
+  }
+  if (!wordsIn(span, haystack)) return reject("subject_text", "not-in-sentence", value);
+  if (kind === null) return reject("subject_kind", "subject-without-kind", value);
+  if (kind === "witness") return reject("subject_kind", "witness-not-first-person", value);
+  return { ok: true, text: span, kind };
+}
+
+/** The event label: a shared event name in its own spelling, or a span of the sentence. */
+function checkEvent(value, haystack, events) {
+  if (value === null || value === undefined || value === "") return { ok: true, text: null };
+  if (typeof value !== "string") return reject("event_text", "not-a-string", value);
+  const label = normaliseSpan(value);
+  if (!label) return { ok: true, text: null };
+  if (label.length > EVENT_TEXT_MAX) return reject("event_text", "too-long", value);
+  const shared = events.find((e) => e.toLowerCase() === label.toLowerCase());
+  if (shared) return { ok: true, text: shared };
+  if (!haystack.includes(label)) return reject("event_text", "not-shared-or-in-sentence", value);
+  return { ok: true, text: label };
+}
+
 /**
  * Checks one assertion the model returned against the target sentences of its window.
  * Returns the row with its sentence chunk id, or the first rule it breaks.
  * @param {unknown} raw
  * @param {Map<number, { id: string, ordinal: number, text: string }>} targets by ordinal
+ * @param {readonly string[]} [events] the corpus's shared event names
  */
-export function checkAssertion(raw, targets) {
+export function checkAssertion(raw, targets, events = []) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return reject(null, "not-an-object", raw);
   }
@@ -159,6 +247,13 @@ export function checkAssertion(raw, targets) {
     return reject("object_kind", "kind-without-object", kind);
   }
   row.objectKind = kind;
+  const subject = checkSubject(raw, sentence.text);
+  if (!subject.ok) return subject;
+  row.subject_text = subject.text;
+  row.subjectKind = subject.kind;
+  const event = checkEvent(raw.event_text, haystack, events);
+  if (!event.ok) return event;
+  row.event_text = event.text;
   const confidence = raw.confidence ?? null;
   if (
     confidence !== null &&
@@ -173,6 +268,8 @@ export function checkAssertion(raw, targets) {
 const assertionKey = (r) =>
   JSON.stringify([
     r.sourceChunkId,
+    r.subject_text,
+    r.subjectKind,
     r.predicate,
     r.object_text,
     r.event_text,
@@ -260,13 +357,16 @@ const SELECT_EVENTS = `
 const INSERT_ASSERTIONS = `
   INSERT INTO assertions (witness_id, source_chunk_id, event_id, predicate, object_text,
                           object_entity_id, time_text, place_text, place_entity_id, polarity,
-                          modality, confidence, extractor, pipeline_version)
+                          modality, confidence, extractor, pipeline_version, subject_text,
+                          subject_kind)
   SELECT $1, u.chunk, u.event, u.predicate, u.object_text, u.object_entity, u.time_text,
-         u.place_text, u.place_entity, u.polarity, u.modality, u.confidence, $2, $3
+         u.place_text, u.place_entity, u.polarity, u.modality, u.confidence, $2, $3,
+         u.subject_text, u.subject_kind
     FROM unnest($4::bigint[], $5::bigint[], $6::text[], $7::text[], $8::bigint[], $9::text[],
-                $10::text[], $11::bigint[], $12::text[], $13::text[], $14::real[])
+                $10::text[], $11::bigint[], $12::text[], $13::text[], $14::real[], $15::text[],
+                $16::text[])
       AS u(chunk, event, predicate, object_text, object_entity, time_text, place_text,
-           place_entity, polarity, modality, confidence)`;
+           place_entity, polarity, modality, confidence, subject_text, subject_kind)`;
 
 const DELETE_ASSERTIONS = `
   DELETE FROM assertions a USING chunks c
@@ -300,6 +400,8 @@ const ASSERTION_COLUMNS = [
   "polarity",
   "modality",
   "confidence",
+  "subject_text",
+  "subject_kind",
 ];
 
 /**
@@ -342,10 +444,11 @@ export async function extractAssertions({
 
   const {
     rows: [document],
-  } = await db.query("SELECT id, witness_id FROM documents WHERE id = $1", [documentId]);
+  } = await db.query("SELECT id, witness_id, corpus FROM documents WHERE id = $1", [documentId]);
   if (!document) throw new Error(`${documentId} is not ingested`);
   const sentences = await loadSentences(db, documentId);
   if (!sentences.length) throw new Error(`${documentId} has no sentence chunks`);
+  const events = sharedEventsFor(document.corpus);
   stage("sentences-loaded", sentences.length);
 
   const windows = sentenceWindows(sentences, window);
@@ -451,6 +554,8 @@ export async function extractAssertions({
         polarity: r.polarity,
         modality: r.modality,
         confidence: r.confidence,
+        subject_text: r.subject_text,
+        subject_kind: r.subjectKind,
       }));
       for (const row of rows) {
         if (row.event === undefined) throw new Error(`${documentId}: an event was not stored`);
@@ -513,7 +618,7 @@ export async function extractAssertions({
     let result;
     try {
       result = await provider.extractJson({
-        prompt: extractPrompt(w),
+        prompt: extractPrompt(w, events),
         schema: ASSERTION_SCHEMA,
         signal,
       });
@@ -532,7 +637,7 @@ export async function extractAssertions({
     const kept = [];
     const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
     for (const raw of result.assertions) {
-      const checked = checkAssertion(raw, targets);
+      const checked = checkAssertion(raw, targets, events);
       let reason = checked.ok ? null : checked.reason;
       if (checked.ok) {
         const k = assertionKey(checked.row);
