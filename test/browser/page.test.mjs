@@ -897,7 +897,7 @@ describe.skipIf(!enabled)(
       await open({ width: 1280, height: 800 });
       await until(`document.querySelector("#facts-matrix table") !== null`);
       expect(await evaluate(`document.getElementById("facts-title").textContent.trim()`)).toBe(
-        "Contradictions 5",
+        "Contradictions 2",
       );
       expect(
         await evaluate(
@@ -906,9 +906,8 @@ describe.skipIf(!enabled)(
       ).toEqual([
         ["event:7", "smoke in the lobby: 4 contradict of 6"],
         ["event:8", "the fire alarm: 1 contradict of 1"],
-        ["topic:dark", "dark (no event named): 0 contradict of 1"],
-        ["topic:told", "told (no event named): 0 contradict of 1"],
       ]);
+      expect(await evaluate(`document.getElementById("facts-empty").hidden`)).toBe(true);
       expect(
         await evaluate(
           `[...document.querySelectorAll("#facts-matrix thead th")].map((t) => t.textContent)`,

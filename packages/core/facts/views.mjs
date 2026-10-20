@@ -190,16 +190,21 @@ export function latestPerPair(rows) {
   }));
 }
 
-/** The groups of one corpus that have pairs, most contradictions first. */
-export async function factsGroups(db, { corpus }) {
+/**
+ * The groups of one corpus with at least one contradiction, most contradictions first; `all`
+ * keeps the groups without one.
+ */
+export async function factsGroups(db, { corpus, all = false }) {
   const { rows } = await db.query(VIEW_SQL.groups, [corpus]);
-  const groups = rows.map((r) => ({
-    eventId: str(r.event_id),
-    name: r.name ?? null,
-    topic: r.topic ?? null,
-    pairs: Number(r.pairs),
-    contradictions: Number(r.contradictions),
-  }));
+  const groups = rows
+    .filter((r) => all || Number(r.contradictions) > 0)
+    .map((r) => ({
+      eventId: str(r.event_id),
+      name: r.name ?? null,
+      topic: r.topic ?? null,
+      pairs: Number(r.pairs),
+      contradictions: Number(r.contradictions),
+    }));
   groups.sort(
     (x, y) =>
       y.contradictions - x.contradictions ||
@@ -622,7 +627,10 @@ export async function factsResponse(db, { method, path, query, body, userId }) {
   }
   try {
     if (route === "/facts/groups") {
-      return { status: 200, body: { groups: await factsGroups(db, { corpus }) } };
+      return {
+        status: 200,
+        body: { groups: await factsGroups(db, { corpus, all: get(query, "all") === "1" }) },
+      };
     }
     if (route === "/facts/matrix") {
       const eventId = numericId(get(query, "event"), "event", false);

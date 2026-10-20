@@ -26,9 +26,14 @@ export const REFUSAL =
   "These two documents together can reveal a protected witness's identity, so they are not shown side by side. Each source opens on its own.";
 
 const groupValue = (g) => (g.eventId ? `event:${g.eventId}` : `topic:${g.topic}`);
-const groupName = (g) => {
+const OPTION_LIMIT = 60;
+export const groupName = (g) => {
   const name = g.eventId ? g.name : `${g.topic} (no event named)`;
   return `${name}: ${g.contradictions} contradict of ${g.pairs}`;
+};
+export const groupOptionText = (g) => {
+  const full = groupName(g);
+  return full.length > OPTION_LIMIT ? `${full.slice(0, OPTION_LIMIT - 1)}…` : full;
 };
 
 const reference = (side) => {
@@ -468,13 +473,13 @@ export function mountFacts(config, { token, corpus, open }) {
       message.textContent = `The contradictions could not be read (${err.message}); try again.`;
       return null;
     }
-    const contradictions = groups.reduce((n, g) => n + g.contradictions, 0);
-    count.textContent = groups.length ? ` ${contradictions}` : "";
+    count.textContent = groups.length ? ` ${groups.length}` : "";
     empty.hidden = groups.length > 0;
     const chosen = select.value;
     select.replaceChildren(
       ...groups.map((g) => {
-        const option = el("option", null, groupName(g));
+        const option = el("option", null, groupOptionText(g));
+        option.title = groupName(g);
         option.value = groupValue(g);
         return option;
       }),
