@@ -100,9 +100,14 @@ export function createHandler({
         provider,
         db,
         signal,
-        onStage: (stageName) => {
+        onStage: (stageName, tool) => {
           poll();
-          if (live()) send(serverFrame.status(thread, turnId, stageName));
+          if (!live()) return;
+          send(
+            stageName === "tool"
+              ? serverFrame.tool(thread, turnId, tool)
+              : serverFrame.status(thread, turnId, stageName),
+          );
         },
         onEvidence: (blocks) => {
           if (live()) send(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));

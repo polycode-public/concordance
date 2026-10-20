@@ -644,8 +644,13 @@ export async function createServer({
           provider,
           db,
           signal,
-          onStage: (stage) => {
-            if (live()) emit(serverFrame.status(thread, turnId, stage));
+          onStage: (stage, tool) => {
+            if (!live()) return;
+            emit(
+              stage === "tool"
+                ? serverFrame.tool(thread, turnId, tool)
+                : serverFrame.status(thread, turnId, stage),
+            );
           },
           onEvidence: (blocks) => {
             if (live()) emit(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));

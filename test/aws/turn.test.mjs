@@ -100,7 +100,7 @@ function fakeCancels(item) {
   return cancels;
 }
 
-function setup({ tokens = TOKENS, delayMs = 5, item, post } = {}) {
+function setup({ tokens = TOKENS, delayMs = 5, item, post, runQuery = stubQuery } = {}) {
   const provider = createFakeProvider({ tokens, delayMs });
   const db = fakeDb();
   const cancels = fakeCancels(item ?? { turnId: "u1", cancelled: false });
@@ -116,7 +116,7 @@ function setup({ tokens = TOKENS, delayMs = 5, item, post } = {}) {
         targets.push(target);
         frames.push(frame);
       }),
-    runQuery: stubQuery,
+    runQuery,
     pollMs: 0,
   });
   return { handler, provider, db, cancels, frames, targets };
@@ -191,6 +191,28 @@ describe("turn function", () => {
     });
     expect(db.closed).toBe(true);
     expect(cancels.finished).toEqual([["c1#t1", "u1"]]);
+  });
+
+  it("posts a tool frame for each tool call of the answer", async () => {
+    const withTool = (args) =>
+      stubQuery({
+        ...args,
+        onStage: (stage) => {
+          args.onStage(stage);
+          if (stage === "answering") args.onStage("tool", { name: "count_assertions", rows: 3 });
+        },
+      });
+    const { handler, frames } = setup({ runQuery: withTool });
+    await handler(EVENT);
+    const at = frames.findIndex((f) => f.type === "tool");
+    expect(frames[at]).toEqual({
+      type: "tool",
+      thread: "t1",
+      turnId: "u1",
+      name: "count_assertions",
+      rows: 3,
+    });
+    expect(frames[at - 1]).toMatchObject({ type: "status", stage: "answering" });
   });
 
   it("writes the session and the turn with every frame it posted at done", async () => {

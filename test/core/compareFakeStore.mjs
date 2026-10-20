@@ -256,6 +256,23 @@ export function createCompareStore(seed = {}) {
         ),
     ],
     [
+      VIEW_SQL.crossContradictions,
+      ([corpus, eventId]) => {
+        const rows = t.assertion_comparisons.filter(
+          (c) => c.kind === "cross" && inCorpus(corpus)(c),
+        );
+        const shown = new Set(
+          latestPerPair(rows.map(comparisonFromRow)).map(({ shown: c }) => c.id),
+        );
+        return rows.filter(
+          (c) =>
+            shown.has(c.id) &&
+            c.label === "contradict" &&
+            (eventId === null || c.event_id === String(eventId)),
+        );
+      },
+    ],
+    [
       VIEW_SQL.comparison,
       ([id, corpus]) =>
         t.assertion_comparisons.filter((c) => c.id === String(id) && inCorpus(corpus)(c)),

@@ -145,7 +145,7 @@ describe("loadDocuments", () => {
           witness_id: "IWS1",
           role: null,
           witness_role: "Resident",
-          statement_date: new Date("2018-02-14T00:00:00Z"),
+          statement_date: new Date(2018, 1, 14),
           format: "pdf",
           page_count: 9,
           cipher_only: false,

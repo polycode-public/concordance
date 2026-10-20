@@ -8,6 +8,7 @@ import { isCorpusId } from "./corpora.mjs";
 export const CLIENT_FRAME_TYPES = Object.freeze(["turn", "cancel", "open", "report"]);
 export const SERVER_FRAME_TYPES = Object.freeze([
   "status",
+  "tool",
   "token",
   "evidence",
   "done",
@@ -142,6 +143,13 @@ export const serverFrame = {
   status: (thread, turnId, stage) => {
     if (!STAGES.includes(stage)) throw new ProtocolError(`unknown stage ${stage}`);
     return { type: "status", thread, turnId, stage };
+  },
+  tool: (thread, turnId, { name, rows }) => {
+    if (typeof name !== "string" || !name) throw new ProtocolError("a tool frame needs a name");
+    if (!Number.isInteger(rows) || rows < 0) {
+      throw new ProtocolError(`tool ${name} needs a row count`);
+    }
+    return { type: "tool", thread, turnId, name, rows };
   },
   token: (thread, turnId, text) => ({ type: "token", thread, turnId, text }),
   evidence: (thread, turnId, blocks) => {

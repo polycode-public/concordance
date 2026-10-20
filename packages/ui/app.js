@@ -167,6 +167,9 @@ function onFrame(frame) {
       turn.startedAt ??= performance.now();
       renderStages(turn, frame.stage);
       break;
+    case "tool":
+      renderTool(turn, frame);
+      break;
     case "evidence":
       turn.blocks = new Map(frame.blocks.map((b) => [b.evidence, b]));
       renderEvidence(turn, new Set());
@@ -265,6 +268,7 @@ function startTurn(text, id = crypto.randomUUID()) {
   stages.setAttribute("aria-label", "Stages");
   for (const stage of STAGES) {
     const li = el("li", null, stage);
+    li.dataset.stage = stage;
     li.dataset.state = "pending";
     stages.append(li);
   }
@@ -290,19 +294,26 @@ function startTurn(text, id = crypto.randomUUID()) {
   };
 }
 
+const stageItems = (turn) => [...turn.stages.querySelectorAll("li[data-stage]")];
+
 function renderStages(turn, stage) {
   const index = STAGES.indexOf(stage);
-  [...turn.stages.children].forEach((li, i) => {
-    if (li.classList.contains("elapsed")) return;
+  stageItems(turn).forEach((li, i) => {
     li.dataset.state = i < index ? "done" : i === index ? "current" : "pending";
     if (i === index) li.setAttribute("aria-current", "step");
     else li.removeAttribute("aria-current");
   });
 }
 
+/** A tool call of the answer, as a line before the checking stage: its name and row count. */
+function renderTool(turn, { name, rows }) {
+  const li = el("li", "tool", `${name} · ${rows} ${rows === 1 ? "row" : "rows"}`);
+  turn.stages.insertBefore(li, turn.stages.querySelector('li[data-stage="checking"]'));
+}
+
 function finishStages(turn, timings) {
-  STAGES.forEach((stage, i) => {
-    const li = turn.stages.children[i];
+  STAGES.forEach((stage) => {
+    const li = turn.stages.querySelector(`li[data-stage="${stage}"]`);
     li.dataset.state = "done";
     li.removeAttribute("aria-current");
     if (Number.isFinite(timings?.[stage])) {

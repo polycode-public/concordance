@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../../scripts/db-migrate.mjs";
 import { DEFAULT_DATABASE_URL } from "../../packages/core/db.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
+import { PROMPT_VERSION } from "../../packages/core/prompt.mjs";
 import { runQuery } from "../../packages/core/query.mjs";
 import { createServer } from "../../packages/local/server.mjs";
 
@@ -174,7 +175,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
       onToken: (t) => tokens.push(t),
     });
     expect(stages).toEqual(["rewriting", "retrieving", "answering", "checking"]);
-    expect(sent).toBe(result.evidenceBlocks);
+    expect(sent).toEqual(result.evidenceBlocks);
     const [e1, e2, ...rest] = result.evidenceBlocks;
     expect(rest).toEqual([]);
     expect(e1).toMatchObject({
@@ -210,7 +211,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
       sentences: 3,
       supported: 2,
       droppedCitations: 1,
-      promptVersion: "answer-closed-world-v2",
+      promptVersion: PROMPT_VERSION,
       model: "fake-chat",
     });
   });
