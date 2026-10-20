@@ -39,3 +39,24 @@ One JSON object per line in `evals/<corpus>/gold.jsonl`:
 Every gold row comes from the inquiry report's own findings: the Phase 1 report states what each
 witness said and cites the statement paragraph. Each row records that locator. A gold row is never
 invented, paraphrased from memory or written from model output.
+
+## Results
+
+### 2026-10-20, bedrock, `answer-closed-world-v2`, `ingest-v1`
+
+Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
+store polycode-sandbox Aurora, 11 statements. 20 rows (18 answer, 2 abstain), 23 gold locators.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.350 |
+| citation recall           | 0.609 |
+| unsupported-sentence rate | 0.262 |
+| abstention correctness    | 0.950 |
+
+Wall time 117 s. 40 Bedrock calls: 20 embeddings and 20 chat (76,341 input and 3,663 output
+tokens). Cost Explorer shows $0.34 for Sonnet 4.5 and $0.04 for Haiku 4.5 on the day, which also
+holds other runs and lags by hours.
+
+Run through `evals/run.mjs` with `openDb: openDbFromEnv`; the runner's own default opens the
+`pg` pool, which ignores `DB_RESOURCE_ARN`.
