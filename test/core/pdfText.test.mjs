@@ -77,12 +77,12 @@ describe("pdfToPagesFromBuffer", () => {
   it("gives text the paragraph splitter numbers", async () => {
     const sections = splitNumberedParagraphs(await pdfToPagesFromBuffer(STATEMENT));
     expect(sections.map((s) => [s.paragraph, s.page])).toEqual([
-      [null, 1],
       [1, 1],
       [2, 1],
       [3, 2],
     ]);
-    expect(sections[2].text).toBe("I woke at 01:10. I smelt smoke.");
+    expect(sections[0].heading).toBe("WITNESS STATEMENT");
+    expect(sections[1].text).toBe("I woke at 01:10. I smelt smoke.");
   });
 
   it("throws on bytes that are not a PDF", async () => {
