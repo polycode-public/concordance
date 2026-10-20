@@ -19,6 +19,17 @@ describe("buildHeader", () => {
     );
   });
 
+  it("places the section heading before the locator", () => {
+    expect(
+      buildHeader({
+        corpus: "Grenfell Inquiry",
+        witnessId: "IWS1",
+        heading: "Ethiopia",
+        locator: { page: 1, paragraph: 3 },
+      }),
+    ).toBe("[Grenfell Inquiry | Witness IWS1 | Ethiopia | p.1 para 3]");
+  });
+
   it("leaves out missing fields", () => {
     expect(buildHeader({ corpus: "Grenfell Inquiry", witnessId: "IWS1", locator: "p.2" })).toBe(
       "[Grenfell Inquiry | Witness IWS1 | p.2]",

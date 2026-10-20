@@ -128,6 +128,8 @@ const DISPUTE_SENTENCES = [
     "The fire safety notice said that residents should stay in their flat.",
   ],
   ["125", "C123-1", 6, 3, 1, "The fire safety notice said to call 999 and to use the stairs."],
+  ["126", "IWS-A1", 10, 4, 4, "I have lived in Grenfell Tower for fifteen years."],
+  ["127", "IWS-B1", 8, 6, 3, "I have lived in the tower for over twenty years."],
 ];
 
 const DISPUTE_ASSERTIONS = [
@@ -188,6 +190,23 @@ const DISPUTE_ASSERTIONS = [
     ["The fire safety notice", "thing"],
   ],
 ];
+
+const RESIDENCE = [
+  ["25", "126", "IWS-A", "11", "have lived", "in Grenfell Tower for fifteen years", I],
+  ["26", "127", "IWS-B", "11", "have lived", "in the tower for over twenty years", I],
+].map(([id, chunk, witness, event, predicate, object, subject]) => [
+  id,
+  chunk,
+  witness,
+  event,
+  predicate,
+  object,
+  null,
+  null,
+  "positive",
+  subject,
+  "attribute",
+]);
 
 const chunkRow = ([id, document_id, ordinal, page, paragraph, text]) => ({
   id,
@@ -273,7 +292,7 @@ export function compareSeed() {
 export function disputeSeed() {
   const seed = compareSeed();
   seed.chunks.push(...DISPUTE_SENTENCES.map(chunkRow));
-  seed.assertions.push(...DISPUTE_ASSERTIONS.map(assertionRow));
+  seed.assertions.push(...[...DISPUTE_ASSERTIONS, ...RESIDENCE].map(assertionRow));
   seed.events.push(
     { id: "10", name: "the fire brigade arriving" },
     { id: "11", name: "the time of the fire" },

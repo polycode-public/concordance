@@ -6,11 +6,14 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppStack } from "../../infra/lib/appStack.mjs";
+import { AppStack, pageCorpora, siteDomain } from "../../infra/lib/appStack.mjs";
 
 const env = { account: "111111111111", region: "eu-west-2" };
 const CLUSTER = "arn:aws:rds:eu-west-2:111111111111:cluster:concordance";
 const SECRET = "arn:aws:secretsmanager:eu-west-2:111111111111:secret:concordance-db-AbCdEf";
+const DOMAIN = "concordance.polycode.co.uk";
+const CERTIFICATE =
+  "arn:aws:acm:us-east-1:111111111111:certificate/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d";
 
 let template;
 let dataTemplate;
@@ -64,6 +67,7 @@ describe("AppStack", () => {
       "GET /reports",
       "GET /reports/{filename}",
       "GET /spend",
+      "GET /spend/history",
       "POST /export",
       "POST /facts/accept",
       "POST /facts/hypothesis",
@@ -73,6 +77,7 @@ describe("AppStack", () => {
     expect(routes.find((r) => r.RouteKey === "GET /doc/{id}").AuthorizationType).toBe("JWT");
     for (const key of [
       "GET /spend",
+      "GET /spend/history",
       "GET /conversations",
       "GET /conversations/{id}",
       "GET /reports",
@@ -133,11 +138,14 @@ describe("AppStack", () => {
     });
   });
 
-  it("reads the project budget for the spend route and nothing else", () => {
+  it("reads the project budget and the store's usage for the spend routes and nothing else", () => {
     const spend = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .find((p) => p.Environment?.Variables?.BUDGET_NAME);
     expect(spend.Environment.Variables).toEqual({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
       BUDGET_ACCOUNT_ID: "111111111111",
       BUDGET_NAME: "concordance-sandbox-monthly",
     });
@@ -338,12 +346,12 @@ describe("AppStack", () => {
     template.resourceCountIs("Custom::CDKBucketDeployment", 1);
   });
 
-  it("writes the corpus into config.json", () => {
+  it("writes the corpora of the drop list into config.json", () => {
     const configs = assetFiles("config.json").map((file) => readFileSync(file, "utf8"));
     expect(configs).toHaveLength(1);
-    expect(configs[0]).toContain('"corpus":{"id":"grenfell"');
-    expect(configs[0]).toContain('"title":"Grenfell Tower Inquiry"');
-    expect(configs[0]).toContain('"subtitle":"witness statements"');
+    expect(configs[0]).toContain(
+      '"corpora":[{"id":"grenfell","name":"Grenfell Tower Inquiry"},{"id":"ucpi","name":"Undercover Policing Inquiry"}]',
+    );
     const marker = /"spendUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
     const deployment = Object.values(template.findResources("Custom::CDKBucketDeployment"))[0];
     const markers = deployment.Properties.SourceMarkers.find((m) => Object.keys(m).length);
@@ -368,8 +376,10 @@ describe("AppStack", () => {
       DB_RESOURCE_ARN: CLUSTER,
       DB_SECRET_ARN: SECRET,
       DB_NAME: "concordance",
-      CORPUS_ID: "grenfell",
-      CORPUS_TITLE: "Grenfell Tower Inquiry",
+      CORPORA: JSON.stringify([
+        { id: "grenfell", name: "Grenfell Tower Inquiry" },
+        { id: "ucpi", name: "Undercover Policing Inquiry" },
+      ]),
     });
     const role = fn.Role["Fn::GetAtt"][0];
     const statements = Object.values(template.findResources("AWS::IAM::Policy"))
@@ -472,5 +482,144 @@ describe("AppStack", () => {
           dbName: "concordance",
         }),
     ).toThrow(/budgetName/);
+  });
+
+  it("gives the document route the store, to read a document's corpus", () => {
+    const fn = functionNamed("DocFunction")[1].Properties;
+    expect(fn.Environment.Variables).toMatchObject({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+    });
+    const actions = roleStatements(fn).flatMap((s) => [s.Action].flat());
+    expect(actions).toEqual(expect.arrayContaining(["rds-data:ExecuteStatement", "s3:GetObject*"]));
+  });
+
+  it("serves on the CloudFront name alone when no domain is given", () => {
+    const config = template.findResources("AWS::CloudFront::Distribution");
+    const distribution = Object.values(config)[0].Properties.DistributionConfig;
+    expect(distribution.Aliases).toBeUndefined();
+    expect(distribution.ViewerCertificate).toBeUndefined();
+    expect(template.findOutputs("SiteUrl").SiteUrl.Value).toEqual({
+      "Fn::Join": ["", ["https://", { "Fn::GetAtt": [expect.any(String), "DomainName"] }]],
+    });
+    template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      CallbackURLs: ["https://example.com"],
+    });
+  });
+});
+
+describe("AppStack with a domain", () => {
+  let domainTemplate;
+  let domainAssembly;
+
+  beforeAll(() => {
+    const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+    const data = new Stack(app, "Data", { env });
+    const stack = new AppStack(app, "App", {
+      env,
+      corpusBucket: new s3.Bucket(data, "CorpusBucket"),
+      dbResourceArn: CLUSTER,
+      dbSecretArn: SECRET,
+      dbName: "concordance",
+      budgetName: "concordance-sandbox-monthly",
+      domainName: DOMAIN,
+      certificateArn: CERTIFICATE,
+    });
+    domainTemplate = Template.fromStack(stack);
+    domainAssembly = app.synth();
+  }, 120000);
+
+  const origins = (t) =>
+    Object.values(t.findResources("AWS::ApiGatewayV2::Api")).find(
+      (r) => r.Properties.ProtocolType === "HTTP",
+    ).Properties.CorsConfiguration.AllowOrigins;
+
+  it("answers on the domain with the us-east-1 certificate over SNI", () => {
+    domainTemplate.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: Match.objectLike({
+        Aliases: [DOMAIN],
+        ViewerCertificate: Match.objectLike({
+          AcmCertificateArn: CERTIFICATE,
+          SslSupportMethod: "sni-only",
+        }),
+      }),
+    });
+  });
+
+  it("names the domain as the site URL and keeps the CloudFront name as an output", () => {
+    expect(domainTemplate.findOutputs("SiteUrl").SiteUrl.Value).toBe(`https://${DOMAIN}`);
+    expect(
+      domainTemplate.findOutputs("DistributionDomainName").DistributionDomainName.Value,
+    ).toEqual({ "Fn::GetAtt": [expect.any(String), "DomainName"] });
+  });
+
+  it("lets the page call the HTTP API from the domain and from the CloudFront name", () => {
+    const allowed = origins(domainTemplate);
+    expect(allowed).toHaveLength(2);
+    expect(allowed[0]).toBe(`https://${DOMAIN}`);
+    expect(JSON.stringify(allowed[1])).toContain("DomainName");
+  });
+
+  it("adds the domain's origin to the client's callback and logout URLs", () => {
+    const client = Object.values(domainTemplate.findResources("AWS::Cognito::UserPoolClient"))[0]
+      .Properties;
+    for (const urls of [client.CallbackURLs, client.LogoutURLs]) {
+      expect(urls).toHaveLength(2);
+      expect(urls[0]).toBe(`https://${DOMAIN}`);
+      expect(JSON.stringify(urls[1])).toContain("DomainName");
+    }
+    expect(client.ExplicitAuthFlows).toContain("ALLOW_USER_PASSWORD_AUTH");
+  });
+
+  it("writes the domain into config.json as the site URL", () => {
+    const configs = readdirSync(domainAssembly.directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("asset."))
+      .map((entry) => path.join(domainAssembly.directory, entry.name, "config.json"))
+      .filter((file) => existsSync(file))
+      .map((file) => readFileSync(file, "utf8"));
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toContain(`"siteUrl":"https://${DOMAIN}"`);
+  });
+});
+
+describe("siteDomain", () => {
+  it("is null without either value", () => {
+    expect(siteDomain({})).toBeNull();
+    expect(siteDomain({ domainName: "", certificateArn: undefined })).toBeNull();
+  });
+
+  it("refuses one value without the other", () => {
+    expect(() => siteDomain({ domainName: DOMAIN })).toThrow(/both/);
+    expect(() => siteDomain({ certificateArn: CERTIFICATE })).toThrow(/both/);
+  });
+
+  it("refuses a certificate outside us-east-1 and a name that is not a host", () => {
+    expect(() =>
+      siteDomain({
+        domainName: DOMAIN,
+        certificateArn: CERTIFICATE.replace("us-east-1", "eu-west-2"),
+      }),
+    ).toThrow(/us-east-1/);
+    expect(() =>
+      siteDomain({ domainName: "https://x.example", certificateArn: CERTIFICATE }),
+    ).toThrow(/host name/);
+  });
+});
+
+describe("pageCorpora", () => {
+  it("keeps the drop list in order and refuses a malformed one", () => {
+    expect(pageCorpora([{ id: "ucpi", name: " Undercover Policing Inquiry " }])).toEqual([
+      { id: "ucpi", name: "Undercover Policing Inquiry" },
+    ]);
+    expect(() => pageCorpora([])).toThrow(/at least one/);
+    expect(() => pageCorpora([{ id: "Bad/x", name: "x" }])).toThrow(/invalid/);
+    expect(() => pageCorpora([{ id: "ucpi", name: "" }])).toThrow(/no name/);
+    expect(() =>
+      pageCorpora([
+        { id: "ucpi", name: "a" },
+        { id: "ucpi", name: "b" },
+      ]),
+    ).toThrow(/twice/);
   });
 });

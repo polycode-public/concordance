@@ -45,7 +45,10 @@ function connect(port) {
         waiters.push({ match, resolve: (f) => (clearTimeout(timer), res(f)) });
       });
     };
-    ws.on("open", () => resolve({ ws, frames, until, send: (f) => ws.send(JSON.stringify(f)) }));
+    // Every frame but a cancel names a corpus; the tests read Grenfell unless they say otherwise.
+    const send = (f) =>
+      ws.send(JSON.stringify(f.type === "cancel" ? f : { corpus: "grenfell", ...f }));
+    ws.on("open", () => resolve({ ws, frames, until, send }));
     ws.on("error", reject);
   });
 }
@@ -108,6 +111,7 @@ function stubQuery(blocks = BLOCKS) {
 /** A db whose documents table holds the given rows by id. */
 const fakeDb = (documents = {}) => ({
   query: async (text, params) => {
+    if (/DISTINCT corpus FROM documents/.test(text)) return { rows: [{ corpus: "grenfell" }] };
     if (/FROM documents/.test(text)) {
       const doc = documents[params[0]];
       return { rows: doc ? [doc] : [] };
@@ -153,7 +157,10 @@ describe("local server", () => {
       wsUrl: `ws://127.0.0.1:${app.port}/ws`,
       httpUrl: "",
       auth: null,
-      corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
+      corpora: [
+        { id: "grenfell", name: "Grenfell Tower Inquiry" },
+        { id: "ucpi", name: "Undercover Policing Inquiry" },
+      ],
       spendUrl: "/spend",
       conversationsUrl: "/conversations",
       reportsUrl: "/reports",
@@ -318,8 +325,11 @@ describe("local server", () => {
         sessions,
         turns,
         query: async (text, params) => {
+          if (/DISTINCT corpus FROM documents/.test(text)) {
+            return { rows: [{ corpus: "grenfell" }, { corpus: "ucpi" }] };
+          }
           if (/^INSERT INTO sessions/.test(text)) {
-            sessions.push({ id: params[0], user_id: params[1] });
+            sessions.push({ id: params[0], user_id: params[1], corpus: params[2] });
             return { rows: [] };
           }
           if (/^INSERT INTO session_turns/.test(text)) {
@@ -341,7 +351,7 @@ describe("local server", () => {
           if (/FROM conversations/.test(text)) {
             return {
               rows: sessions
-                .filter((s) => s.user_id === params[0])
+                .filter((s) => s.user_id === params[0] && s.corpus === params[1])
                 .flatMap((s) => {
                   const own = turns.filter((t) => t.session_id === s.id);
                   return own.length
@@ -359,7 +369,11 @@ describe("local server", () => {
             };
           }
           if (/FROM sessions WHERE/.test(text)) {
-            return { rows: sessions.filter((s) => s.id === params[0] && s.user_id === params[1]) };
+            return {
+              rows: sessions.filter(
+                (s) => s.id === params[0] && s.user_id === params[1] && s.corpus === params[2],
+              ),
+            };
           }
           if (/FROM session_turns/.test(text)) {
             return {
@@ -378,7 +392,7 @@ describe("local server", () => {
       expect(check()).toBe(true);
     };
 
-    it("writes a sessions row on connect and a session_turns row with the turn's frames", async () => {
+    it("writes a sessions row for the turn's corpus and a session_turns row with its frames", async () => {
       const db = storeDb();
       app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }), { db });
       const client = await connect(app.port);
@@ -389,6 +403,7 @@ describe("local server", () => {
 
       expect(db.sessions).toHaveLength(1);
       expect(db.sessions[0].user_id).toBe("laptop");
+      expect(db.sessions[0].corpus).toBe("grenfell");
       expect(db.sessions[0].id).toMatch(/^[0-9a-f-]{36}$/);
       const [turn] = db.turns;
       expect(turn).toMatchObject({
@@ -469,7 +484,9 @@ describe("local server", () => {
       client.ws.close();
       const base = `http://127.0.0.1:${app.port}/conversations`;
 
-      const list = await fetch(base);
+      expect((await fetch(base)).status).toBe(400);
+      expect(await (await fetch(`${base}?corpus=ucpi`)).json()).toEqual({ conversations: [] });
+      const list = await fetch(`${base}?corpus=grenfell`);
       expect(list.headers.get("content-type")).toMatch(/^application\/json/);
       const sessionId = db.sessions[0].id;
       expect(await list.json()).toEqual({
@@ -484,7 +501,7 @@ describe("local server", () => {
         ],
       });
 
-      const one = await (await fetch(`${base}/${sessionId}?thread=t1`)).json();
+      const one = await (await fetch(`${base}/${sessionId}?thread=t1&corpus=grenfell`)).json();
       expect(one.sessionId).toBe(sessionId);
       expect(one.turns).toHaveLength(1);
       expect(one.turns[0]).toMatchObject({
@@ -496,8 +513,11 @@ describe("local server", () => {
       });
       expect(one.turns[0].frames).toEqual(db.turns[0].frames);
 
-      expect((await fetch(`${base}/not-a-uuid`)).status).toBe(400);
-      expect((await fetch(`${base}/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+      expect((await fetch(`${base}/not-a-uuid?corpus=grenfell`)).status).toBe(400);
+      expect(
+        (await fetch(`${base}/00000000-0000-4000-8000-000000000000?corpus=grenfell`)).status,
+      ).toBe(404);
+      expect((await fetch(`${base}/${sessionId}?corpus=ucpi`)).status).toBe(404);
     });
 
     it("writes the thread as Markdown under the corpus notes, refuses an overwrite and serves it", async () => {
@@ -519,14 +539,15 @@ describe("local server", () => {
         const post = (body) =>
           fetch(`http://127.0.0.1:${app.port}/export`, {
             method: "POST",
-            body: JSON.stringify(body),
+            body: JSON.stringify({ corpus: "grenfell", ...body }),
           });
 
+        expect((await post({ sessionId, thread: "t1", corpus: "nope" })).status).toBe(400);
         const res = await post({ sessionId, thread: "t1" });
         expect(res.status).toBe(200);
         const { key, bytes, url } = await res.json();
         expect(key).toMatch(new RegExp(`^notes/${sessionId}/t1-2026-10-19t10-00-00\\.000z\\.md$`));
-        expect(url).toBe(`/${key}`);
+        expect(url).toBe(`/${key}?corpus=grenfell`);
         const file = path.join(corpora, "grenfell", key);
         const text = await readFile(file, "utf8");
         expect(Buffer.byteLength(text)).toBe(bytes);
@@ -538,6 +559,7 @@ describe("local server", () => {
         expect(served.status).toBe(200);
         expect(await served.text()).toBe(text);
         expect((await fetch(`http://127.0.0.1:${app.port}/notes/..%2Fx`)).status).toBe(400);
+        expect((await fetch(`http://127.0.0.1:${app.port}/${key}`)).status).toBe(400);
 
         expect((await post({ sessionId, thread: "nothread" })).status).toBe(404);
         expect((await post({ sessionId: "nope", thread: "t1" })).status).toBe(400);
@@ -553,8 +575,10 @@ describe("local server", () => {
     it("answers 503 for the conversations when no database is configured", async () => {
       app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
       const base = `http://127.0.0.1:${app.port}/conversations`;
-      expect((await fetch(base)).status).toBe(503);
-      expect((await fetch(`${base}/00000000-0000-4000-8000-000000000000`)).status).toBe(503);
+      expect((await fetch(`${base}?corpus=grenfell`)).status).toBe(503);
+      expect(
+        (await fetch(`${base}/00000000-0000-4000-8000-000000000000?corpus=grenfell`)).status,
+      ).toBe(503);
     });
   });
 
@@ -610,6 +634,11 @@ describe("local server", () => {
       const opened = await client.until((f) => f.type === "opened");
       client.send({ type: "open", docId: "IWS2", locator: null });
       const error = await client.until((f) => f.type === "error");
+      client.send({ type: "open", docId: "IWS1", locator: null, corpus: "ucpi" });
+      const across = await client.until(
+        (f) => f.type === "error" && /not a document of ucpi/.test(f.message),
+      );
+      expect(across.message).toBe("IWS1 is not a document of ucpi");
       client.ws.close();
       expect(opened).toEqual({
         type: "opened",
@@ -694,7 +723,10 @@ describe("generated reports on the laptop", () => {
     client.ws.close();
 
     const base = `http://127.0.0.1:${app.port}/reports`;
-    const list = await fetch(base);
+    const c = "?corpus=grenfell";
+    expect((await fetch(base)).status).toBe(400);
+    expect(await (await fetch(`${base}?corpus=ucpi`)).json()).toEqual({ reports: [] });
+    const list = await fetch(`${base}${c}`);
     expect(list.headers.get("cache-control")).toBe("no-store");
     expect(await list.json()).toEqual({
       reports: [
@@ -706,7 +738,7 @@ describe("generated reports on the laptop", () => {
         },
       ],
     });
-    const { versions } = await (await fetch(`${base}/stairs.md`)).json();
+    const { versions } = await (await fetch(`${base}/stairs.md${c}`)).json();
     expect(versions.map((v) => [v.version, v.changePrompt])).toEqual([
       [1, null],
       [2, "Say more about the lift."],
@@ -714,11 +746,11 @@ describe("generated reports on the laptop", () => {
     expect(versions[1].documentIds).toEqual(["IWS1", "IWS2"]);
     expect(versions[1].bodyMarkdown).toMatch(/^# Smoke on the stairs\n\n## The stairs\n\n/);
 
-    expect((await fetch(`${base}/Stairs.md`)).status).toBe(400);
-    expect((await fetch(`${base}/stairs.md`, { method: "POST" })).status).toBe(405);
-    const deleted = await fetch(`${base}/stairs.md`, { method: "DELETE" });
+    expect((await fetch(`${base}/Stairs.md${c}`)).status).toBe(400);
+    expect((await fetch(`${base}/stairs.md${c}`, { method: "POST" })).status).toBe(405);
+    const deleted = await fetch(`${base}/stairs.md${c}`, { method: "DELETE" });
     expect(await deleted.json()).toEqual({ filename: "stairs.md", deleted: 2 });
-    expect((await fetch(`${base}/stairs.md`)).status).toBe(404);
+    expect((await fetch(`${base}/stairs.md${c}`)).status).toBe(404);
   });
 
   it("answers a report with an error frame when no database is configured", async () => {
@@ -766,29 +798,34 @@ describe("the facts routes on the laptop", () => {
 
   it("answers the groups, the matrix, the timeline and a witness", async () => {
     const { base } = await factsServer();
-    const groups = await fetch(`${base}/facts/groups`);
+    const groups = await fetch(`${base}/facts/groups?corpus=grenfell`);
     expect(groups.headers.get("cache-control")).toBe("no-store");
     expect((await groups.json()).groups[0]).toMatchObject({ eventId: "7", contradictions: 4 });
-    const matrix = await (await fetch(`${base}/facts/matrix?event=7`)).json();
+    const matrix = await (await fetch(`${base}/facts/matrix?event=7&corpus=grenfell`)).json();
     expect(matrix.witnesses.map((w) => w.id)).toEqual(["C123", "IWS-A", "IWS-B"]);
-    const topic = await (await fetch(`${base}/facts/matrix?topic=dark`)).json();
+    const topic = await (await fetch(`${base}/facts/matrix?topic=dark&corpus=grenfell`)).json();
     expect(topic.pairs).toHaveLength(1);
-    expect((await (await fetch(`${base}/facts/timeline?event=7`)).json()).points).toHaveLength(4);
-    expect((await (await fetch(`${base}/facts/witness/IWS-A`)).json()).self).toHaveLength(1);
-    expect((await fetch(`${base}/facts/witness/NOBODY`)).status).toBe(404);
+    expect(
+      (await (await fetch(`${base}/facts/timeline?event=7&corpus=grenfell`)).json()).points,
+    ).toHaveLength(4);
+    expect(
+      (await (await fetch(`${base}/facts/witness/IWS-A?corpus=grenfell`)).json()).self,
+    ).toHaveLength(1);
+    expect((await fetch(`${base}/facts/witness/NOBODY?corpus=grenfell`)).status).toBe(404);
+    expect((await fetch(`${base}/facts/groups`)).status).toBe(400);
   });
 
   it("stores a relabel and a promotion as the laptop user", async () => {
     const { db, base } = await factsServer();
     const id = db.tables.assertion_comparisons.find((c) => c.assertion_a === "4").id;
-    const override = await post(`${base}/facts/override`, {
+    const override = await post(`${base}/facts/override?corpus=grenfell`, {
       comparisonId: id,
       label: "agree",
       reason: "The same alarm.",
     });
     expect(override.status).toBe(201);
     expect((await override.json()).comparison).toMatchObject({ decidedBy: "laptop" });
-    const accept = await post(`${base}/facts/accept`, {
+    const accept = await post(`${base}/facts/accept?corpus=grenfell`, {
       assertionId: "1",
       sourceCitation: "fixture paragraph",
     });
@@ -798,13 +835,73 @@ describe("the facts routes on the laptop", () => {
 
   it("refuses a body that is not JSON, one over the limit, and the wrong method", async () => {
     const { base } = await factsServer();
-    expect((await post(`${base}/facts/accept`, "{")).status).toBe(400);
-    expect((await post(`${base}/facts/accept`, { text: "x".repeat(9000) })).status).toBe(413);
-    expect((await fetch(`${base}/facts/accept`)).status).toBe(405);
+    expect((await post(`${base}/facts/accept?corpus=grenfell`, "{")).status).toBe(400);
+    expect(
+      (await post(`${base}/facts/accept?corpus=grenfell`, { text: "x".repeat(9000) })).status,
+    ).toBe(413);
+    expect((await fetch(`${base}/facts/accept?corpus=grenfell`)).status).toBe(405);
   });
 
   it("answers 503 when no database is configured", async () => {
     app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
-    expect((await fetch(`http://127.0.0.1:${app.port}/facts/groups`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${app.port}/facts/groups?corpus=grenfell`)).status).toBe(
+      503,
+    );
+  });
+});
+
+describe("the spend history on the laptop", () => {
+  it("answers the store's use by corpus and day, and 400 to a bad day count", async () => {
+    const db = {
+      query: async (text, params) => {
+        expect(text).toMatch(/FROM usage_daily/);
+        expect(params).toEqual([2]);
+        return {
+          rows: [
+            {
+              corpus: "ucpi",
+              day: "2026-10-20",
+              model: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+              source: "turn",
+              requests: 1,
+              input_tokens: 1_000_000,
+              output_tokens: 0,
+            },
+          ],
+        };
+      },
+    };
+    app = await createServer({
+      provider: createFakeProvider({ tokens: [] }),
+      db,
+      now: () => new Date("2026-10-20T12:00:00Z"),
+    });
+    const base = `http://127.0.0.1:${app.port}/spend/history`;
+    const body = await (await fetch(`${base}?days=2`)).json();
+    expect(body.days).toEqual(["2026-10-19", "2026-10-20"]);
+    expect(body.series).toEqual([
+      {
+        corpus: "ucpi",
+        points: [
+          { day: "2026-10-19", cost: 0, inputTokens: 0, outputTokens: 0, requests: 0 },
+          { day: "2026-10-20", cost: 1, inputTokens: 1_000_000, outputTokens: 0, requests: 1 },
+        ],
+      },
+    ]);
+    expect((await fetch(`${base}?days=0`)).status).toBe(400);
+  });
+
+  it("refuses a turn in a corpus with no documents", async () => {
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 2 }));
+    const client = await connect(app.port);
+    client.send({ type: "turn", thread: "t1", turnId: "u1", text: "Who?", corpus: "ucpi" });
+    const error = await client.until((f) => f.type === "error");
+    client.ws.close();
+    expect(error).toEqual({
+      type: "error",
+      thread: "t1",
+      turnId: "u1",
+      message: "The corpus ucpi has no documents yet.",
+    });
   });
 });

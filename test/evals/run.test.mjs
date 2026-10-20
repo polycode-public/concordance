@@ -20,7 +20,13 @@ const row = (id, expected, gold_locators = []) =>
 
 describe("evals runner", () => {
   it("defaults to the laptop provider and the Grenfell gold set", () => {
-    expect(parseArgs([])).toEqual({ provider: "laptop", gold: "evals/grenfell/gold.jsonl" });
+    expect(parseArgs([])).toEqual({
+      provider: "laptop",
+      gold: "evals/grenfell/gold.jsonl",
+      corpus: "grenfell",
+    });
+    expect(parseArgs(["--gold=evals/ucpi/gold.jsonl"]).corpus).toBe("ucpi");
+    expect(parseArgs(["--corpus=other"]).corpus).toBe("other");
     expect(parseArgs(["--provider=bedrock"]).provider).toBe("bedrock");
     expect(() => parseArgs(["--provider=gpu"])).toThrow(/laptop or bedrock/);
   });
@@ -48,7 +54,12 @@ describe("evals runner", () => {
       providerFor: async () => ({ name: "stub" }),
       openDb: () => db,
     });
-    expect(runQuery).toHaveBeenCalledWith({ question: "q g1?", provider: { name: "stub" }, db });
+    expect(runQuery).toHaveBeenCalledWith({
+      question: "q g1?",
+      corpus: path.basename(dir),
+      provider: { name: "stub" },
+      db,
+    });
     expect(db.close).toHaveBeenCalledOnce();
     expect(metrics.abstentionCorrectness).toBe(1);
   });

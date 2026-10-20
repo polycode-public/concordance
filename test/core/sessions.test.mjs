@@ -27,11 +27,13 @@ function recordingDb(answer = () => ({ rows: [] })) {
 }
 
 describe("the session log", () => {
-  it("names one UUID per connection id", () => {
-    const id = sessionIdFor("Zx9abcDEF=");
+  it("names one UUID per connection id and corpus", () => {
+    const id = sessionIdFor("Zx9abcDEF=", "grenfell");
     expect(isUuid(id)).toBe(true);
-    expect(sessionIdFor("Zx9abcDEF=")).toBe(id);
-    expect(sessionIdFor("other")).not.toBe(id);
+    expect(sessionIdFor("Zx9abcDEF=", "grenfell")).toBe(id);
+    expect(sessionIdFor("other", "grenfell")).not.toBe(id);
+    expect(sessionIdFor("Zx9abcDEF=", "ucpi")).not.toBe(id);
+    expect(() => sessionIdFor("Zx9abcDEF=")).toThrow(/corpus/);
   });
 
   it("joins consecutive token frames of a turn and keeps every other frame in order", () => {
@@ -52,11 +54,18 @@ describe("the session log", () => {
 
   it("writes a session once and refuses an id that is not a UUID", async () => {
     const db = recordingDb();
-    await recordSession(db, { id: SESSION, userId: "laptop" });
-    expect(db.calls[0].text).toMatch(/INSERT INTO sessions .* ON CONFLICT \(id\) DO NOTHING/);
-    expect(db.calls[0].params).toEqual([SESSION, "laptop"]);
-    await expect(recordSession(db, { id: "c1", userId: "laptop" })).rejects.toThrow(/UUID/);
-    await expect(recordSession(db, { id: SESSION, userId: undefined })).rejects.toThrow(/user/);
+    await recordSession(db, { id: SESSION, userId: "laptop", corpus: "ucpi" });
+    expect(db.calls[0].text).toMatch(
+      /INSERT INTO sessions \(id, user_id, corpus\)[\s\S]*ON CONFLICT \(id\) DO NOTHING/,
+    );
+    expect(db.calls[0].params).toEqual([SESSION, "laptop", "ucpi"]);
+    await expect(recordSession(db, { id: "c1", userId: "laptop", corpus: "ucpi" })).rejects.toThrow(
+      /UUID/,
+    );
+    await expect(
+      recordSession(db, { id: SESSION, userId: undefined, corpus: "ucpi" }),
+    ).rejects.toThrow(/user/);
+    await expect(recordSession(db, { id: SESSION, userId: "laptop" })).rejects.toThrow(/corpus/);
   });
 
   it("writes a finished turn with its result, and a cancelled one without", async () => {
@@ -103,7 +112,7 @@ describe("the session log", () => {
     ]);
   });
 
-  it("lists a user's conversations newest first, at most 100", async () => {
+  it("lists a user's conversations in one corpus newest first, at most 100", async () => {
     const db = recordingDb(() => ({
       rows: [
         {
@@ -115,7 +124,7 @@ describe("the session log", () => {
         },
       ],
     }));
-    expect(await listConversations(db, "sub-1")).toEqual([
+    expect(await listConversations(db, { userId: "sub-1", corpus: "grenfell" })).toEqual([
       {
         sessionId: SESSION,
         thread: "t",
@@ -124,15 +133,18 @@ describe("the session log", () => {
         turnCount: 2,
       },
     ]);
-    expect(db.calls[0].text).toMatch(/FROM conversations\s+WHERE user_id = \$1/);
+    expect(db.calls[0].text).toMatch(/FROM conversations\s+WHERE user_id = \$1 AND corpus = \$2/);
     expect(db.calls[0].text).toMatch(/ORDER BY last_turn_at DESC\s+LIMIT 100/);
-    expect(db.calls[0].params).toEqual(["sub-1"]);
+    expect(db.calls[0].params).toEqual(["sub-1", "grenfell"]);
+    await expect(listConversations(db, { userId: "sub-1" })).rejects.toThrow(/corpus/);
   });
 
-  it("reads a session's turns only for its owner", async () => {
+  it("reads a session's turns only for its owner in its corpus", async () => {
     const frames = [{ type: "token", thread: "t", turnId: "u", text: "x" }];
     const db = recordingDb((text, params) => {
-      if (/FROM sessions/.test(text)) return { rows: params[1] === "sub-1" ? [{}] : [] };
+      if (/FROM sessions/.test(text)) {
+        return { rows: params[1] === "sub-1" && params[2] === "grenfell" ? [{}] : [] };
+      }
       return {
         rows: [
           {
@@ -147,9 +159,13 @@ describe("the session log", () => {
         ],
       };
     });
-    expect(await conversationTurns(db, { sessionId: SESSION, userId: "sub-2" })).toBeNull();
+    const corpus = "grenfell";
+    expect(await conversationTurns(db, { sessionId: SESSION, userId: "sub-2", corpus })).toBeNull();
     expect(
-      await conversationTurns(db, { sessionId: SESSION, userId: "sub-1", thread: "t" }),
+      await conversationTurns(db, { sessionId: SESSION, userId: "sub-1", corpus: "ucpi" }),
+    ).toBeNull();
+    expect(
+      await conversationTurns(db, { sessionId: SESSION, userId: "sub-1", corpus, thread: "t" }),
     ).toEqual({
       sessionId: SESSION,
       turns: [
@@ -165,9 +181,9 @@ describe("the session log", () => {
       ],
     });
     expect(db.calls.at(-1).params).toEqual([SESSION, "t", "0"]);
-    await expect(conversationTurns(db, { sessionId: "x", userId: "sub-1" })).rejects.toThrow(
-      /UUID/,
-    );
+    await expect(
+      conversationTurns(db, { sessionId: "x", userId: "sub-1", corpus }),
+    ).rejects.toThrow(/UUID/);
   });
 
   it("reads a long thread in pages of TURN_PAGE turns in row order", async () => {
@@ -187,7 +203,12 @@ describe("the session log", () => {
       const after = Number(params[2]);
       return { rows: all.filter((r) => Number(r.id) > after).slice(0, TURN_PAGE) };
     });
-    const { turns } = await conversationTurns(db, { sessionId: SESSION, userId: "u", thread: "t" });
+    const { turns } = await conversationTurns(db, {
+      sessionId: SESSION,
+      userId: "u",
+      corpus: "grenfell",
+      thread: "t",
+    });
     expect(turns.map((t) => t.turnId)).toEqual(all.map((r) => r.turn_id));
     const reads = db.calls.filter((c) => /FROM session_turns/.test(c.text));
     expect(reads).toHaveLength(3);

@@ -127,6 +127,9 @@ const FACT_DOCUMENTS = ["IWS-A1", "IWS-A2", "IWS-B1", "C123-1"];
 const reportsDb = {
   ...reportStore,
   query: async (text, params) => {
+    if (/DISTINCT corpus FROM documents/.test(text)) {
+      return { rows: [{ corpus: "grenfell" }, { corpus: "ucpi" }] };
+    }
     if (factsStore.answers(text)) return factsStore.query(text, params);
     if (/FROM documents WHERE id/.test(text)) return fakeDb.query(text, params);
     try {
@@ -248,6 +251,7 @@ describe.skipIf(!enabled)(
     let socket;
     let nextId = 0;
     const pending = new Map();
+    const events = new Set();
 
     const cdp = (method, params = {}) =>
       new Promise((resolve, reject) => {
@@ -355,6 +359,10 @@ describe.skipIf(!enabled)(
       });
       socket.addEventListener("message", (event) => {
         const message = JSON.parse(event.data);
+        if (message.method) {
+          for (const listen of events) listen(message);
+          return;
+        }
         const call = pending.get(message.id);
         if (!call) return;
         pending.delete(message.id);
@@ -1116,6 +1124,173 @@ describe.skipIf(!enabled)(
           `document.documentElement.scrollWidth <= document.documentElement.clientWidth`,
         ),
       ).toBe(true);
+    });
+
+    const chooseCorpus = (id) =>
+      evaluate(
+        `(() => { const s = document.getElementById("corpus-select"); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event("change")); return true; })()`,
+      );
+
+    it("labels the inquiry drop list, lists both corpora and shows a focus ring on it", async () => {
+      await open({ width: 1280, height: 800 });
+      expect(
+        await evaluate(`document.querySelector('label[for="corpus-select"]').textContent`),
+      ).toBe("Inquiry");
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#corpus-select option")].map((o) => [o.value, o.textContent])`,
+        ),
+      ).toEqual([
+        ["grenfell", "Grenfell Tower Inquiry"],
+        ["ucpi", "Undercover Policing Inquiry"],
+      ]);
+      expect(await evaluate(`document.getElementById("corpus-select").value`)).toBe("grenfell");
+      expect(await evaluate(`document.getElementById("corpus-select").disabled`)).toBe(false);
+      await evaluate(`document.getElementById("question").focus(); true`);
+      await cdp("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+        modifiers: 8,
+      });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", modifiers: 8 });
+      await evaluate(`document.getElementById("corpus-select").focus(); true`);
+      const ring = await evaluate(
+        `(() => { const s = getComputedStyle(document.getElementById("corpus-select")); return [document.activeElement.id, s.outlineStyle, parseFloat(s.outlineWidth)]; })()`,
+      );
+      expect(ring[0]).toBe("corpus-select");
+      expect(ring[1]).toBe("solid");
+      expect(ring[2]).toBeGreaterThanOrEqual(2);
+    });
+
+    it("starts a new conversation on a change of corpus and reads every list in the new one", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      await evaluate(`(() => {
+        window.__urls = [];
+        const fetched = window.fetch;
+        window.fetch = (url, init) => { window.__urls.push(String(url)); return fetched(url, init); };
+        window.__frames = [];
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) { window.__frames.push(JSON.parse(data)); return send.call(this, data); };
+        return true;
+      })()`);
+      await chooseCorpus("ucpi");
+      await until(`window.__urls.some((u) => u.includes("/facts/groups?corpus=ucpi"))`);
+      await until(`window.__urls.some((u) => u.includes("/reports?corpus=ucpi"))`);
+      expect(await evaluate(`document.getElementById("turns").children.length`)).toBe(0);
+      expect(await evaluate(`document.getElementById("evidence").children.length`)).toBe(0);
+      expect(await evaluate(`document.querySelector("header .inquiry").textContent`)).toContain(
+        "Undercover Policing Inquiry",
+      );
+      expect(await evaluate(`document.title`)).toContain("Undercover Policing Inquiry");
+      expect(await evaluate(`localStorage.getItem("concordance.corpus")`)).toBe("ucpi");
+
+      await evaluate(`document.getElementById("conversations-open").click(); true`);
+      await until(`window.__urls.some((u) => u.includes("/conversations?corpus=ucpi"))`);
+      await evaluate(`document.getElementById("conversations-close").click(); true`);
+
+      await ask();
+      const turn = await evaluate(`window.__frames.find((f) => f.type === "turn")`);
+      expect(turn.corpus).toBe("ucpi");
+      expect(await evaluate(`window.__urls.some((u) => /corpus=grenfell/.test(u))`)).toBe(false);
+
+      await open({ width: 1280, height: 800 });
+      expect(await evaluate(`document.getElementById("corpus-select").value`)).toBe("ucpi");
+      await chooseCorpus("grenfell");
+      await until(`localStorage.getItem("concordance.corpus") === "grenfell"`);
+    });
+
+    it("opens the spend history from the strip with a line and a table column per corpus", async () => {
+      const HISTORY = {
+        currency: "USD",
+        days: ["2026-10-18", "2026-10-19", "2026-10-20"],
+        series: [
+          {
+            corpus: "grenfell",
+            points: [0.5, 1.25, 0].map((cost, i) => ({
+              day: `2026-10-${18 + i}`,
+              cost,
+              inputTokens: 0,
+              outputTokens: 0,
+              requests: 1,
+            })),
+          },
+          {
+            corpus: "ucpi",
+            points: [0, 0.2, 0.4].map((cost, i) => ({
+              day: `2026-10-${18 + i}`,
+              cost,
+              inputTokens: 0,
+              outputTokens: 0,
+              requests: 1,
+            })),
+          },
+        ],
+        unpriced: [],
+      };
+      const answer = async (event) => {
+        if (event.method !== "Fetch.requestPaused") return;
+        const { pathname } = new URL(event.params.request.url);
+        if (pathname !== "/spend" && pathname !== "/spend/history") {
+          await cdp("Fetch.continueRequest", { requestId: event.params.requestId });
+          return;
+        }
+        const body =
+          pathname === "/spend/history"
+            ? HISTORY
+            : { actual: 3.42, limit: 25, unit: "USD", asOf: "2026-10-20T09:00:00.000Z" };
+        await cdp("Fetch.fulfillRequest", {
+          requestId: event.params.requestId,
+          responseCode: 200,
+          responseHeaders: [{ name: "content-type", value: "application/json" }],
+          body: Buffer.from(JSON.stringify(body)).toString("base64"),
+        });
+      };
+      events.add(answer);
+      await cdp("Fetch.enable", {
+        patterns: [{ urlPattern: "*/spend" }, { urlPattern: "*/spend/history*" }],
+      });
+      try {
+        await open({ width: 1280, height: 800 });
+        await until(`document.querySelector("#spend .spend-history-open") !== null`);
+        expect(await evaluate(`document.getElementById("spend").textContent`)).toContain(
+          "This month $3.42 of $25",
+        );
+        await evaluate(`document.querySelector("#spend .spend-history-open").click(); true`);
+        await until(
+          `document.querySelectorAll("#spend-history .history-line[data-corpus]").length === 2`,
+        );
+        expect(
+          await evaluate(
+            `document.querySelector(".spend-history-open").getAttribute("aria-expanded")`,
+          ),
+        ).toBe("true");
+        expect(
+          await evaluate(
+            `[...document.querySelectorAll("#spend-history .history-table thead th")].map((th) => th.textContent)`,
+          ),
+        ).toEqual(["Day", "Grenfell Tower Inquiry", "Undercover Policing Inquiry"]);
+        expect(
+          await evaluate(
+            `[...document.querySelectorAll("#spend-history .history-table tbody tr")].map((tr) => tr.textContent)`,
+          ),
+        ).toEqual(["2026-10-18$0.50$0", "2026-10-19$1.25$0.20", "2026-10-20$0$0.40"]);
+        expect(await evaluate(`document.getElementById("spend-history").textContent`)).toContain(
+          "estimates",
+        );
+        expect(
+          await evaluate(`document.querySelector("#spend-history svg title").textContent`),
+        ).toContain("Undercover Policing Inquiry $0.60");
+        await shot("spend-history");
+        await press("Escape");
+        await until(`document.getElementById("spend-history").hidden`);
+        expect(await evaluate(`document.activeElement.className`)).toContain("spend-history-open");
+      } finally {
+        await cdp("Fetch.disable");
+        events.delete(answer);
+      }
     });
   },
 );

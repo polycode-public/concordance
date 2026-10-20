@@ -16,11 +16,12 @@
 // sentence the code numbered.
 
 import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
+import { InvalidReplyError } from "../providers/jsonReply.mjs";
 import { sha256Text } from "../ingest/run.mjs";
 import { CLAIM_KINDS, PRONOUN_SUBJECTS, pronounSubject } from "./align.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
 
-export const EXTRACT_PROMPT_VERSION = "assertions-v3";
+export const EXTRACT_PROMPT_VERSION = "assertions-v4";
 export const EXTRACT_PIPELINE_VERSION = "facts-v1";
 export const EXTRACT_STEP = "extract-assertions";
 export const EXTRACT_WINDOW = 10;
@@ -36,6 +37,36 @@ export const SPAN_FIELDS = Object.freeze([
 /** The words that make the witness the subject of a claim. */
 export const FIRST_PERSON = Object.freeze(["i", "we", "me"]);
 export const EVENT_TEXT_MAX = 80;
+
+const STATE_PREDICATE = /^(?:am|is|are|was|were|been|have|has|had)\b/iu;
+const HAVE_PREDICATE = /^(?:have|has|had|own|owned|rent|rented)\b/iu;
+const AGE_WORDS = /\b(?:years? old|aged)\b/iu;
+const RESIDENCE_WORDS = /\b(?:lived?|living|resident|residents|resid(?:e|es|ed|ing))\b/iu;
+const HEALTH_JOB_WORDS =
+  /\b(?:health|ill|illness|asthma|diabetes|disabled|disability|job|work|worked|working|employed|employee)\b/iu;
+const FAMILY_WORDS =
+  /\b(?:wife|husband|son|sons|daughter|daughters|mother|father|children|child|family)\b/iu;
+const HOME_WORDS = /\b(?:flat|home|house)\b/iu;
+
+/**
+ * True when a claim by the witness states the witness's own age, years of residence, health, job,
+ * family or home. A family or home word counts only after a having verb, and a health or job word
+ * after a being or having verb or a working verb, so "I called my son" and "I left the flat" stay
+ * what the model said.
+ * @param {string} predicate
+ * @param {string | null} objectText
+ */
+export function statesOwnAttribute(predicate, objectText) {
+  const both = `${predicate} ${objectText ?? ""}`;
+  if (AGE_WORDS.test(both) || RESIDENCE_WORDS.test(both)) return true;
+  if (
+    HEALTH_JOB_WORDS.test(both) &&
+    (STATE_PREDICATE.test(predicate) || /^work/iu.test(predicate))
+  ) {
+    return true;
+  }
+  return HAVE_PREDICATE.test(predicate) && (FAMILY_WORDS.test(both) || HOME_WORDS.test(both));
+}
 
 /**
  * The events of one night that many statements describe, by corpus. The extractor names an event
@@ -130,6 +161,7 @@ export function extractPrompt({ before, targets, after }, events = []) {
     "Fields: sentence is the number n of the target sentence. subject_text is who or what does or undergoes the action of the claim. subject_kind is witness when subject_text is I, we or me (the witness); person for a named or ciphered person or one person such as 'a firefighter'; group for a group such as 'the fire brigade', 'the 999 operator' or 'residents'; thing for a thing such as 'the fire', 'the smoke' or 'the lift'. predicate is the verb phrase of the claim. object_text is what the claim is about; object_kind is person, place, vehicle or unit when object_text names one, else null. event_text names the event the claim is about. time_text is the time or date stated. place_text is the place stated. modality is the words that hedge the claim, such as 'I think' or 'about'. polarity is negative when the witness denies the claim, else positive. confidence is from 0 to 1.",
     "When the target sentence names the subject by a pronoun such as he, she, they, it or 'this man', subject_text is the name or description of that person or thing, copied exactly from the target sentence or another sentence shown here. Write the pronoun only when no sentence shown here names them.",
     "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
+    "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
     ...(events.length
       ? [
           `event_text is a label. When the claim is about one of these events, copy its name exactly: ${events.map((e) => `'${e}'`).join("; ")}. Use the sentence's own words only when none of them fits, and null when the claim is about no event.`,
@@ -274,6 +306,10 @@ export function checkAssertion(raw, targets, events = [], context = []) {
     return reject("claim_kind", "not-a-claim-kind", claimKind);
   }
   row.claimKind = claimKind;
+  if (row.subjectKind === "witness" && statesOwnAttribute(row.predicate, row.object_text)) {
+    row.kindOverridden = claimKind !== "attribute";
+    row.claimKind = "attribute";
+  }
   const event = checkEvent(raw.event_text, haystack, events);
   if (!event.ok) return event;
   row.event_text = event.text;
@@ -529,6 +565,7 @@ export async function extractAssertions({
 
   const seen = new Set();
   const rejected = {};
+  let overridden = 0;
   let calls = 0;
   let keptCount = 0;
   let written = 0;
@@ -675,6 +712,7 @@ export async function extractAssertions({
           else {
             seen.add(k);
             kept.push(checked.row);
+            if (checked.row.kindOverridden) overridden++;
           }
         }
         if (reason) {
@@ -692,7 +730,8 @@ export async function extractAssertions({
         }
       }
     };
-    // A reply cut off at the output limit is retried as two half windows, down to one sentence.
+    // A reply cut off at the output limit, or one that is not valid JSON, is retried as two half
+    // windows, down to one sentence.
     const extractWindow = async (w, depth) => {
       let result;
       try {
@@ -702,7 +741,13 @@ export async function extractAssertions({
           signal,
         });
       } catch (err) {
-        if (err instanceof ReplyTruncatedError && !signal?.aborted) {
+        const splitReason =
+          err instanceof ReplyTruncatedError
+            ? "truncated"
+            : err instanceof InvalidReplyError
+              ? "invalid"
+              : null;
+        if (splitReason && !signal?.aborted) {
           calls++;
           const sentencesIn = `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}`;
           if (w.targets.length === 1) {
@@ -718,6 +763,7 @@ export async function extractAssertions({
               window: next,
               depth,
               sentences: sentencesIn,
+              reason: splitReason,
             }),
           );
           const mid = Math.ceil(w.targets.length / 2);
@@ -749,6 +795,7 @@ export async function extractAssertions({
   const rejectedCount = Object.values(rejected).reduce((a, b) => a + b, 0);
   stage("calls-made", calls);
   stage("assertions-kept", keptCount);
+  if (overridden) stage("kind-overridden", overridden);
   stage("assertions-rejected", rejectedCount, { reasons: rejected });
   stage("rows-written", written, { entities: entityCount, events: eventCount });
   const counts = {

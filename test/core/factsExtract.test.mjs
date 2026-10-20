@@ -12,6 +12,7 @@ import {
   extractPrompt,
   sentenceWindows,
 } from "../../packages/core/facts/extract.mjs";
+import { InvalidReplyError } from "../../packages/core/providers/jsonReply.mjs";
 import { ReplyTruncatedError } from "../../packages/core/providers/modelProvider.mjs";
 import { CLAIM_KINDS } from "../../packages/core/facts/align.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
@@ -286,6 +287,69 @@ describe("checkAssertion claim kinds and pronoun subjects", () => {
     expect(checkAssertion(A1, one).row.claimKind).toBeNull();
   });
 
+  it("sets the kind to attribute when the witness states their own age, residence, job, family or home", () => {
+    const ask = (predicate, object_text, claim_kind = "action", sentenceText) => {
+      const text = sentenceText ?? `I ${predicate} ${object_text ?? ""}`.trim();
+      const one = new Map([[1, { id: "9", ordinal: 1, text }]]);
+      return checkAssertion(
+        {
+          sentence: 1,
+          subject_text: "I",
+          subject_kind: "witness",
+          predicate,
+          object_text,
+          claim_kind,
+          polarity: "positive",
+        },
+        one,
+      ).row;
+    };
+    const attributes = [
+      ["was", "40 years old"],
+      ["was", "aged 42"],
+      ["have lived", "in the tower for fifteen years"],
+      ["am", "a resident of the tower"],
+      ["was", "in poor health"],
+      ["worked", "as a nurse"],
+      ["have", "a wife and two sons"],
+      ["have", "a flat on the ninth floor"],
+    ];
+    for (const [predicate, object] of attributes) {
+      expect(ask(predicate, object, "report").claimKind, `${predicate} ${object}`).toBe(
+        "attribute",
+      );
+    }
+    const kept = [
+      ["saw", "smoke coming under the door"],
+      ["left", "the flat"],
+      ["called", "my son"],
+      ["was", "with my wife"],
+      ["was", "in my home"],
+    ];
+    for (const [predicate, object] of kept) {
+      expect(ask(predicate, object, "action").claimKind, `${predicate} ${object}`).toBe("action");
+      expect(ask(predicate, object, "action").kindOverridden).toBeUndefined();
+    }
+    expect(ask("was", "40 years old", "attribute").kindOverridden).toBe(false);
+    expect(ask("was", "40 years old", null).kindOverridden).toBe(true);
+    const other = new Map([[1, { id: "9", ordinal: 1, text: "He was 40 years old." }]]);
+    const row = checkAssertion(
+      {
+        sentence: 1,
+        subject_text: "He",
+        subject_kind: "person",
+        predicate: "was",
+        object_text: "40 years old",
+        claim_kind: "report",
+        polarity: "positive",
+      },
+      other,
+      [],
+      ["Mr Ash came in."],
+    );
+    expect(row.row.claimKind).toBe("report");
+  });
+
   it("asks for the name a pronoun stands for and for the claim kind", () => {
     const prompt = extractPrompt({
       before: null,
@@ -297,6 +361,9 @@ describe("checkAssertion claim kinds and pronoun subjects", () => {
     );
     expect(prompt).toContain(
       "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
+    );
+    expect(prompt).toContain(
+      "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
     );
     expect(prompt).not.toContain("resolve pronouns");
   });
@@ -366,6 +433,67 @@ describe("extractAssertions", () => {
       "assertions-rejected",
       "rows-written",
     ]);
+  });
+
+  it("counts the claim kinds it overrides as a stage figure", async () => {
+    const store = createFactsStore(seed());
+    const lines = [];
+    const p = createFakeProvider({
+      tokens: [],
+      extractJson: () => ({
+        assertions: [
+          { ...A0, claim_kind: "observation" },
+          { ...A1, claim_kind: "report" },
+        ],
+      }),
+    });
+    await extractAssertions({
+      documentId: "IWS1",
+      provider: p,
+      db: store,
+      log: (line) => lines.push(JSON.parse(line)),
+    });
+    expect(lines.some((l) => l.stage === "kind-overridden")).toBe(false);
+    const age = "I was 40 years old at the time of the fire.";
+    const aged = createFactsStore(
+      seed({
+        sentences: [
+          {
+            id: "11",
+            document_id: "IWS1",
+            ordinal: 0,
+            text: age,
+            header: HEADER,
+            context_line: null,
+          },
+        ],
+      }),
+    );
+    const agedLines = [];
+    const q = createFakeProvider({
+      tokens: [],
+      extractJson: () => ({
+        assertions: [
+          {
+            sentence: 0,
+            subject_text: "I",
+            subject_kind: "witness",
+            claim_kind: "action",
+            predicate: "was",
+            object_text: "40 years old",
+            polarity: "positive",
+          },
+        ],
+      }),
+    });
+    await extractAssertions({
+      documentId: "IWS1",
+      provider: q,
+      db: aged,
+      log: (line) => agedLines.push(JSON.parse(line)),
+    });
+    expect(agedLines.find((l) => l.stage === "kind-overridden")).toMatchObject({ count: 1 });
+    expect(aged.tables.assertions[0].claim_kind).toBe("attribute");
   });
 
   it("writes the assertions with their sentence chunk, reusing one entity and one event", async () => {
@@ -653,7 +781,14 @@ describe("extractAssertions", () => {
       expect(result.windows).toEqual({ done: 1, total: 1 });
       expect(db.tables.assertions).toHaveLength(10);
       expect(lines.filter((l) => l.stage === "window-split")).toEqual([
-        { evidenceId: "IWS1", stage: "window-split", window: 0, depth: 1, sentences: "0-9" },
+        {
+          evidenceId: "IWS1",
+          stage: "window-split",
+          window: 0,
+          depth: 1,
+          sentences: "0-9",
+          reason: "truncated",
+        },
       ]);
     });
 
@@ -694,6 +829,58 @@ describe("extractAssertions", () => {
       ).rejects.toThrow(/window 1, sentence 2-2: m stopped at its output limit/);
       expect(db.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["100", "101"]);
       expect(db.tables.provenance).toEqual([]);
+    });
+
+    it("splits a window whose reply is not valid JSON and logs the reason", async () => {
+      const db = store(10);
+      const lines = [];
+      const seen = [];
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          seen.push(ordinals.length);
+          if (ordinals.length === 10) throw new InvalidReplyError("m returned invalid JSON: {");
+          return answer(ordinals);
+        },
+      });
+      const result = await extractAssertions({
+        documentId: "IWS1",
+        provider: p,
+        db,
+        window: 10,
+        log: (line) => lines.push(JSON.parse(line)),
+      });
+      expect(seen).toEqual([10, 5, 5]);
+      expect(result.counts).toMatchObject({ calls: 3, kept: 10, written: 10 });
+      expect(lines.filter((l) => l.stage === "window-split")).toEqual([
+        {
+          evidenceId: "IWS1",
+          stage: "window-split",
+          window: 0,
+          depth: 1,
+          sentences: "0-9",
+          reason: "invalid",
+        },
+      ]);
+    });
+
+    it("fails the document naming the sentence and the reply when one sentence is still invalid", async () => {
+      const db = store(4);
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          if (ordinals.includes(2)) {
+            throw new InvalidReplyError('m returned invalid JSON: {"assertions": [ ... ]]');
+          }
+          return answer(ordinals);
+        },
+      });
+      await expect(
+        extractAssertions({ documentId: "IWS1", provider: p, db, window: 2, log: () => {} }),
+      ).rejects.toThrow(/window 1, sentence 2-2: m returned invalid JSON: \{"assertions"/);
+      expect(db.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["100", "101"]);
     });
   });
 

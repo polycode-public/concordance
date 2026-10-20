@@ -146,6 +146,60 @@ describe("splitStatements", () => {
       expect(alter).toContain(part);
   });
 
+  it("splits 0010_corpus_scope.sql into the corpus columns, the chunk trigger and the views", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0010_corpus_scope.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(18);
+    for (const table of ["sessions", "reports", "accepted_facts"]) {
+      const at = statements.indexOf(
+        `ALTER TABLE ${table} ADD COLUMN corpus text NOT NULL DEFAULT 'grenfell'`,
+      );
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(statements[at + 1]).toBe(`ALTER TABLE ${table} ALTER COLUMN corpus DROP DEFAULT`);
+    }
+    expect(statements).toContain(
+      "CREATE INDEX sessions_user_corpus_idx ON sessions (user_id, corpus)",
+    );
+    expect(statements).toContain(
+      "CREATE INDEX accepted_facts_corpus_idx ON accepted_facts (corpus)",
+    );
+    const unique = statements.find((s) =>
+      s.includes("reports_user_id_corpus_filename_version_key"),
+    );
+    expect(unique).toContain("DROP CONSTRAINT reports_user_id_filename_version_key");
+    expect(unique).toContain("UNIQUE (user_id, corpus, filename, version)");
+
+    const fill = statements.indexOf(
+      "UPDATE chunks c SET corpus = d.corpus FROM documents d WHERE d.id = c.document_id",
+    );
+    expect(statements[fill - 1]).toBe("ALTER TABLE chunks ADD COLUMN corpus text");
+    expect(statements[fill + 1]).toBe("ALTER TABLE chunks ALTER COLUMN corpus SET NOT NULL");
+    expect(statements.find((s) => s.startsWith("CREATE FUNCTION chunks_corpus()"))).toContain(
+      "INTO STRICT NEW.corpus FROM documents d WHERE d.id = NEW.document_id",
+    );
+    expect(statements).toContain(
+      "CREATE TRIGGER chunks_corpus BEFORE INSERT OR UPDATE OF document_id ON chunks\n  FOR EACH ROW EXECUTE FUNCTION chunks_corpus()",
+    );
+    expect(statements).toContain("CREATE INDEX chunks_corpus_level_idx ON chunks (corpus, level)");
+    expect(statements.find((s) => s.startsWith("DO $$"))).toContain(
+      "ALTER DATABASE %I SET hnsw.iterative_scan = %L', current_database(), 'strict_order'",
+    );
+
+    const conversations = statements.find((s) =>
+      s.startsWith("CREATE OR REPLACE VIEW conversations"),
+    );
+    expect(conversations).toMatch(/count\(\*\)::int AS turn_count,\n {2}s\.corpus\nFROM/);
+    const usage = statements.find((s) => s.startsWith("CREATE VIEW usage_daily"));
+    for (const part of [
+      "FROM session_turns t JOIN sessions s ON s.id = t.session_id",
+      "FROM reports r",
+      "FROM comparison_runs c",
+      "(c.counts ->> 'modelCalls')::bigint",
+      "GROUP BY u.corpus, u.day, u.model, u.source",
+    ])
+      expect(usage).toContain(part);
+  });
+
   it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
     const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
     const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));

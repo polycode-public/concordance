@@ -32,12 +32,17 @@ describe("protocol constants", () => {
 
 describe("parseClientFrame", () => {
   it("parses a turn and defaults attachments", () => {
-    expect(parseClientFrame('{"type":"turn","thread":"t1","turnId":"u1","text":"hi"}')).toEqual({
+    expect(
+      parseClientFrame(
+        '{"type":"turn","thread":"t1","turnId":"u1","text":"hi","corpus":"grenfell"}',
+      ),
+    ).toEqual({
       type: "turn",
       thread: "t1",
       turnId: "u1",
       text: "hi",
       attachments: [],
+      corpus: "grenfell",
     });
   });
 
@@ -50,10 +55,13 @@ describe("parseClientFrame", () => {
   });
 
   it("parses an open with a locator", () => {
-    expect(parseClientFrame('{"type":"open","docId":"IWS1","locator":{"page":3}}')).toEqual({
+    expect(
+      parseClientFrame('{"type":"open","docId":"IWS1","locator":{"page":3},"corpus":"ucpi"}'),
+    ).toEqual({
       type: "open",
       docId: "IWS1",
       locator: { page: 3 },
+      corpus: "ucpi",
     });
   });
 
@@ -68,7 +76,13 @@ describe("parseClientFrame", () => {
       '{"type":"turn","thread":"t","turnId":"u","text":"x","attachments":1}',
     ],
     ["a cancel without a turnId", '{"type":"cancel","thread":"t"}'],
-    ["an open without a docId", '{"type":"open"}'],
+    ["an open without a docId", '{"type":"open","corpus":"grenfell"}'],
+    ["a turn without a corpus", '{"type":"turn","thread":"t","turnId":"u","text":"x"}'],
+    [
+      "a turn with a corpus that is not an id",
+      '{"type":"turn","thread":"t","turnId":"u","text":"x","corpus":"../raw"}',
+    ],
+    ["an open without a corpus", '{"type":"open","docId":"IWS1"}'],
   ])("throws a ProtocolError for %s", (_label, json) => {
     expect(() => parseClientFrame(json)).toThrow(ProtocolError);
   });
@@ -104,6 +118,7 @@ describe("the report frames", () => {
       topic: "What the residents saw on the stairs",
       documentIds: ["IWS1", "IWS2", "IWS1"],
       filename: "stairs.md",
+      corpus: "grenfell",
       ...extra,
     });
 
@@ -115,8 +130,10 @@ describe("the report frames", () => {
       topic: "What the residents saw on the stairs",
       documentIds: ["IWS1", "IWS2"],
       filename: "stairs.md",
+      corpus: "grenfell",
     });
     expect(parseClientFrame(report({ documentIds: undefined })).documentIds).toEqual([]);
+    expect(() => parseClientFrame(report({ corpus: undefined }))).toThrow(/report needs a corpus/);
   });
 
   it("refuses a report without a topic, a request id or a lower-case .md filename", () => {

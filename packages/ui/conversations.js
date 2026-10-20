@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The conversations drawer: this user's conversations by last turn, and replay. A replay feeds
-// each stored frame through the page's own onFrame, so it renders as the live turn did.
+// The conversations drawer: this user's conversations in the chosen corpus by last turn, and
+// replay. A replay feeds each stored frame through the page's own onFrame, so it renders as the
+// live turn did.
+import { withCorpus } from "./corpus.mjs";
 
 /**
  * @typedef {{ thread: string, turnId: string, userText: string, frames: object[] }} StoredTurn
@@ -37,10 +39,11 @@ const turnsLabel = (n) => (n === 1 ? "1 turn" : `${n} turns`);
 /**
  * Wires the drawer to the header button.
  * @param {{ conversationsUrl?: string }} config
- * @param {{ token: () => string | null, replay: (turns: StoredTurn[], sessionId: string) => void,
- *   startNew: () => void }} page
+ * @param {{ token: () => string | null, corpus: () => string,
+ *   replay: (turns: StoredTurn[], sessionId: string) => void, startNew: () => void }} page
+ * @returns {{ reload: () => void }}
  */
-export function mountConversations(config, { token, replay, startNew }) {
+export function mountConversations(config, { token, corpus, replay, startNew }) {
   const base = config.conversationsUrl;
   if (typeof base !== "string") throw new Error("config.json has no conversationsUrl");
   const drawer = $("conversations");
@@ -50,7 +53,7 @@ export function mountConversations(config, { token, replay, startNew }) {
 
   const get = async (url) => {
     const bearer = token();
-    const res = await fetch(url, {
+    const res = await fetch(withCorpus(url, corpus()), {
       cache: "no-store",
       headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
     });
@@ -126,4 +129,10 @@ export function mountConversations(config, { token, replay, startNew }) {
       close();
     }
   });
+  return {
+    /** Lists the conversations again when the drawer is open, after a change of corpus. */
+    reload() {
+      if (!drawer.hidden) show();
+    },
+  };
 }

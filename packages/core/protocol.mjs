@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // JSON frames over the chat WebSocket. The same frames run on the local ws
-// server and on API Gateway.
+// server and on API Gateway. A turn, a report and an open each name the corpus they read.
+import { isCorpusId } from "./corpora.mjs";
 
 export const CLIENT_FRAME_TYPES = Object.freeze(["turn", "cancel", "open", "report"]);
 export const SERVER_FRAME_TYPES = Object.freeze([
@@ -35,15 +36,21 @@ export class ProtocolError extends Error {
 
 const isId = (v) => typeof v === "string" && v.length > 0 && v.length <= 128;
 
+const corpusOf = (frame) => {
+  if (!isCorpusId(frame.corpus)) throw new ProtocolError(`${frame.type} needs a corpus id`);
+  return frame.corpus;
+};
+
 /**
  * Parses and validates one client frame. Throws ProtocolError when the frame is
  * malformed.
  * @param {string | Buffer} json
- * @returns {{ type: 'turn', thread: string, turnId: string, text: string, attachments: unknown[] }
+ * @returns {{ type: 'turn', thread: string, turnId: string, text: string, attachments: unknown[],
+ *     corpus: string }
  *   | { type: 'cancel', thread: string, turnId: string }
- *   | { type: 'open', docId: string, locator: unknown }
+ *   | { type: 'open', docId: string, locator: unknown, corpus: string }
  *   | { type: 'report', thread: string, requestId: string, topic: string, documentIds: string[],
- *       filename: string }}
+ *       filename: string, corpus: string }}
  */
 export function parseClientFrame(json) {
   let frame;
@@ -71,6 +78,7 @@ export function parseClientFrame(json) {
         turnId: frame.turnId,
         text: frame.text,
         attachments,
+        corpus: corpusOf(frame),
       };
     }
     case "cancel":
@@ -79,7 +87,12 @@ export function parseClientFrame(json) {
       return { type: "cancel", thread: frame.thread, turnId: frame.turnId };
     case "open":
       if (!isId(frame.docId)) throw new ProtocolError("open needs a docId");
-      return { type: "open", docId: frame.docId, locator: frame.locator ?? null };
+      return {
+        type: "open",
+        docId: frame.docId,
+        locator: frame.locator ?? null,
+        corpus: corpusOf(frame),
+      };
     case "report": {
       if (!isId(frame.thread)) throw new ProtocolError("report needs a thread id");
       if (!isId(frame.requestId)) throw new ProtocolError("report needs a requestId");
@@ -107,6 +120,7 @@ export function parseClientFrame(json) {
         topic: frame.topic,
         documentIds: [...new Set(documentIds)],
         filename: frame.filename,
+        corpus: corpusOf(frame),
       };
     }
     default:

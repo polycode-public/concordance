@@ -7,6 +7,9 @@
 //   -c env=<name>       default sandbox; every stack is named concordance-<env>-<name>
 //   -c account=<id>     default CDK_DEFAULT_ACCOUNT (the credentials in use)
 //   -c region=<region>  default eu-west-2
+//   -c domainName=<host> -c certificateArn=<arn>
+//                       optional, together: the site's own name and its us-east-1 certificate
+//   -c corpora=<json>   optional: the page's drop list, [{"id":"grenfell","name":"..."}, ...]
 // The account record is AWS_ACCOUNT.md.
 
 import { App, Tags } from "aws-cdk-lib";
@@ -25,6 +28,10 @@ const envName = app.node.tryGetContext("env") ?? "sandbox";
 const account = app.node.tryGetContext("account") ?? process.env.CDK_DEFAULT_ACCOUNT;
 const region = app.node.tryGetContext("region") ?? WORKLOAD_REGION;
 const env = { account, region };
+// An empty value counts as absent, so the deploy can pass unset repository variables through.
+const optionalContext = (key) => app.node.tryGetContext(key) || undefined;
+// A value from the command line is a JSON string; one from cdk.json is already parsed.
+const corporaContext = (value) => (typeof value === "string" ? JSON.parse(value) : value);
 const stackName = (name) => `${PROJECT}-${envName}-${name}`;
 
 const dataStack = new DataStack(app, stackName("data"), {
@@ -44,6 +51,9 @@ new AppStack(app, stackName("app"), {
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
   budgetName: `${PROJECT}-${envName}-monthly`,
+  corpora: corporaContext(optionalContext("corpora")),
+  domainName: optionalContext("domainName"),
+  certificateArn: optionalContext("certificateArn"),
   description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
 });
 

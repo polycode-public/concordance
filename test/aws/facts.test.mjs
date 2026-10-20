@@ -27,7 +27,7 @@ beforeEach(async () => {
 const event = (method, path, { query, body, sub = "sub-1", base64 = false } = {}) => ({
   routeKey: `${method} ${path}`,
   rawPath: path,
-  queryStringParameters: query,
+  queryStringParameters: query === null ? undefined : { corpus: "grenfell", ...query },
   body:
     body === undefined
       ? undefined
@@ -59,6 +59,12 @@ describe("the facts routes", () => {
     expect(json(await handler(event("GET", "/facts/timeline"))).points).toHaveLength(5);
     const witness = await handler(event("GET", "/facts/witness/C123"));
     expect(json(witness).witness).toEqual({ id: "C123", cipherOnly: true, role: "Firefighter" });
+  });
+
+  it("reads the corpus from the query and answers 400 without one", async () => {
+    const other = await handler(event("GET", "/facts/groups", { query: { corpus: "ucpi" } }));
+    expect(json(other).groups).toEqual([]);
+    expect((await handler(event("GET", "/facts/groups", { query: null }))).statusCode).toBe(400);
   });
 
   it("records the signed-in user on a relabel and a promotion", async () => {

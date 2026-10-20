@@ -14,6 +14,7 @@ import {
   readOutline,
   reportScores,
   reportVersions,
+  reportsResponse,
   requestReport,
   runReport,
   storeReport,
@@ -21,7 +22,7 @@ import {
 } from "../../packages/core/reports.mjs";
 import { isReportFilename } from "../../packages/core/protocol.mjs";
 import { MAX_HITS } from "../../packages/core/retrieval/expand.mjs";
-import { createReportsStore } from "./reportsFakeStore.mjs";
+import { CHUNK_ROWS, DOCUMENT_ROWS, createReportsStore } from "./reportsFakeStore.mjs";
 
 const SESSION = "6f1c2b9e-3a4d-4e5f-8a6b-7c8d9e0f1a2b";
 
@@ -106,7 +107,13 @@ describe("runReport", () => {
     const db = createReportsStore();
     const provider = scripted(["The stairs were dark [E1].", "The lift stopped [E2]."]);
     const stages = [];
-    await runReport({ topic: "The stairs", provider, db, onStage: (s) => stages.push(s) });
+    await runReport({
+      corpus: "grenfell",
+      topic: "The stairs",
+      provider,
+      db,
+      onStage: (s) => stages.push(s),
+    });
     expect(stages).toEqual(["drafting", "writing", "reviewing"]);
     expect(REPORT_LIMITS.maxHits).toBeGreaterThan(MAX_HITS);
     expect(provider.outlines).toHaveLength(1);
@@ -123,7 +130,12 @@ describe("runReport", () => {
       "The stairs were dark [E1]. Smoke filled them [E1].",
       "The corpus does not say how the lift was called.",
     ]);
-    const report = await runReport({ topic: "The stairs and the lift", provider, db });
+    const report = await runReport({
+      corpus: "grenfell",
+      topic: "The stairs and the lift",
+      provider,
+      db,
+    });
     expect(report.body).toBe(
       [
         "# Smoke on the stairs",
@@ -169,7 +181,7 @@ describe("runReport", () => {
       ],
       { title: "T", sections: [{ heading: "The stairs", evidence: [1] }] },
     );
-    const report = await runReport({ topic: "The stairs", provider, db });
+    const report = await runReport({ corpus: "grenfell", topic: "The stairs", provider, db });
     expect(provider.chats).toHaveLength(2);
     const rewrite = provider.chats[1].messages;
     expect(rewrite.at(-2)).toEqual({
@@ -187,7 +199,7 @@ describe("runReport", () => {
       title: "T",
       sections: [{ heading: "The stairs", evidence: [1] }],
     });
-    const report = await runReport({ topic: "The stairs", provider, db });
+    const report = await runReport({ corpus: "grenfell", topic: "The stairs", provider, db });
     expect(provider.chats).toHaveLength(2);
     expect(report.body).toBe("# T\n\n## The stairs\n\nDark [E1].");
     expect(report.checks).toMatchObject({ flagged: 1, rewritten: 0, removed: 1, sentences: 1 });
@@ -202,7 +214,7 @@ describe("runReport", () => {
         sections: [{ heading: "The stairs", evidence: [1, 9] }],
       },
     );
-    const report = await runReport({ topic: "The stairs", provider, db });
+    const report = await runReport({ corpus: "grenfell", topic: "The stairs", provider, db });
     expect(report.body).not.toMatch(/\[E9\]|\[E2\]/);
     expect(report.citations.map((c) => c.evidence)).toEqual([1]);
     expect(report.checks).toMatchObject({ droppedEvidence: 1, droppedCitations: 2, flagged: 1 });
@@ -211,7 +223,7 @@ describe("runReport", () => {
   it("abstains without a model call when nothing is retrieved", async () => {
     const db = createReportsStore({ chunks: [] });
     const provider = scripted([]);
-    const report = await runReport({ topic: "The roof", provider, db });
+    const report = await runReport({ corpus: "grenfell", topic: "The roof", provider, db });
     expect(report.body).toBe("# The roof\n\n## Findings\n\nThe corpus does not say.");
     expect(provider.outlines).toEqual([]);
     expect(report.citations).toEqual([]);
@@ -224,7 +236,13 @@ describe("runReport", () => {
       title: "T",
       sections: [{ heading: "The lift", evidence: [1] }],
     });
-    const report = await runReport({ topic: "The lift", documentIds: ["IWS2"], provider, db });
+    const report = await runReport({
+      corpus: "grenfell",
+      topic: "The lift",
+      documentIds: ["IWS2"],
+      provider,
+      db,
+    });
     const ranked = db.calls.filter((c) => /^\s*SELECT id FROM chunks/.test(c.text));
     expect(ranked).toHaveLength(4);
     for (const c of ranked) {
@@ -243,6 +261,7 @@ describe("runReport", () => {
       sections: [{ heading: "The stairs", evidence: [1] }],
     });
     await runReport({
+      corpus: "grenfell",
       topic: "The stairs",
       previous: "# T\n\n## The stairs\n\nThe stairs were dark [E4].",
       changePrompt: "Say whether they were hot.",
@@ -258,7 +277,14 @@ describe("runReport", () => {
     expect(user).toContain("The previous version of this section follows");
     expect(user).toContain("The stairs were dark.");
     await expect(
-      runReport({ topic: "x", previous: "# T", changePrompt: " ", provider, db }),
+      runReport({
+        corpus: "grenfell",
+        topic: "x",
+        previous: "# T",
+        changePrompt: " ",
+        provider,
+        db,
+      }),
     ).rejects.toThrow(/change prompt/);
   });
 });
@@ -267,6 +293,7 @@ describe("the reports store", () => {
   const report = (filename, extra = {}) => ({
     sessionId: SESSION,
     userId: "sub-1",
+    corpus: "grenfell",
     filename,
     title: "T",
     topic: "The stairs",
@@ -279,22 +306,27 @@ describe("the reports store", () => {
     ...extra,
   });
 
-  it("numbers versions per user and filename, lists, reads and deletes every version", async () => {
+  it("numbers versions per user, corpus and filename, lists, reads and deletes every version", async () => {
     const db = createReportsStore();
     db.sessions.set(SESSION, "sub-1");
     expect((await storeReport(db, report("a.md"))).version).toBe(1);
     expect((await storeReport(db, report("a.md", { title: "T2" }))).version).toBe(2);
     expect((await storeReport(db, report("b.md"))).version).toBe(1);
     await storeReport(db, report("a.md", { userId: "sub-2" }));
+    expect((await storeReport(db, report("a.md", { corpus: "ucpi" }))).version).toBe(1);
     const insert = db.calls.find((c) => /INSERT INTO reports/.test(c.text));
     expect(insert.text).toMatch(/COALESCE\(max\(version\), 0\) \+ 1/);
     expect(insert.params[6]).toEqual(["IWS1"]);
 
-    expect(await listReports(db, { userId: "sub-1" })).toEqual([
+    expect(await listReports(db, { userId: "sub-1", corpus: "grenfell" })).toEqual([
       { filename: "b.md", title: "T", versions: [1], updatedAt: expect.any(String) },
       { filename: "a.md", title: "T2", versions: [1, 2], updatedAt: expect.any(String) },
     ]);
-    const versions = await reportVersions(db, { userId: "sub-1", filename: "a.md" });
+    const versions = await reportVersions(db, {
+      userId: "sub-1",
+      corpus: "grenfell",
+      filename: "a.md",
+    });
     expect(versions.map((v) => [v.version, v.title])).toEqual([
       [1, "T"],
       [2, "T2"],
@@ -307,18 +339,37 @@ describe("the reports store", () => {
       promptVersion: REPORT_PROMPT_VERSION,
       modelId: "m",
     });
-    expect((await latestReport(db, { userId: "sub-1", filename: "a.md" })).version).toBe(2);
-    expect(await latestReport(db, { userId: "sub-1", filename: "c.md" })).toBeNull();
+    expect(
+      (await latestReport(db, { userId: "sub-1", corpus: "grenfell", filename: "a.md" })).version,
+    ).toBe(2);
+    expect(
+      await latestReport(db, { userId: "sub-1", corpus: "grenfell", filename: "c.md" }),
+    ).toBeNull();
 
-    expect(await deleteReport(db, { userId: "sub-1", filename: "a.md" })).toBe(2);
-    expect(await reportVersions(db, { userId: "sub-1", filename: "a.md" })).toEqual([]);
-    expect(await reportVersions(db, { userId: "sub-2", filename: "a.md" })).toHaveLength(1);
+    expect(await deleteReport(db, { userId: "sub-1", corpus: "grenfell", filename: "a.md" })).toBe(
+      2,
+    );
+    expect(
+      await reportVersions(db, { userId: "sub-1", corpus: "grenfell", filename: "a.md" }),
+    ).toEqual([]);
+    expect(
+      await reportVersions(db, { userId: "sub-2", corpus: "grenfell", filename: "a.md" }),
+    ).toHaveLength(1);
+    expect(
+      await reportVersions(db, { userId: "sub-1", corpus: "ucpi", filename: "a.md" }),
+    ).toHaveLength(1);
+    expect(await listReports(db, { userId: "sub-1", corpus: "ucpi" })).toEqual([
+      { filename: "a.md", title: "T", versions: [1], updatedAt: expect.any(String) },
+    ]);
+    await expect(storeReport(db, report("c.md", { corpus: undefined }))).rejects.toThrow(/corpus/);
   });
 
   it("refuses a filename that is not a lower-case .md name before any query", async () => {
     const db = createReportsStore();
     await expect(storeReport(db, report("../x.md"))).rejects.toThrow(/filename/);
-    await expect(deleteReport(db, { userId: "u", filename: "X.md" })).rejects.toThrow(/filename/);
+    await expect(
+      deleteReport(db, { userId: "u", corpus: "grenfell", filename: "X.md" }),
+    ).rejects.toThrow(/filename/);
     expect(db.calls).toEqual([]);
   });
 });
@@ -345,7 +396,7 @@ describe("requestReport", () => {
         provider: {},
         userId: "sub-1",
         sessionId: SESSION,
-        request: { topic, documentIds, filename: "stairs.md" },
+        request: { topic, documentIds, filename: "stairs.md", corpus: "grenfell" },
         run,
       });
     const first = await ask("The stairs", ["IWS1", "IWS2"]);
@@ -355,6 +406,7 @@ describe("requestReport", () => {
       changePrompt: null,
       previous: null,
       documentIds: ["IWS1", "IWS2"],
+      corpus: "grenfell",
     });
     const second = await ask("Add the lift.");
     expect(second).toMatchObject({ version: 2, title: "T2" });
@@ -380,7 +432,7 @@ describe("requestReport", () => {
       provider,
       userId: "sub-1",
       sessionId: SESSION,
-      request: { topic: "The stairs", documentIds: [], filename: "stairs.md" },
+      request: { topic: "The stairs", documentIds: [], filename: "stairs.md", corpus: "grenfell" },
     });
     expect(stored).toMatchObject({ version: 1, title: "Smoke on the stairs" });
     expect(db.reports[0]).toMatchObject({
@@ -389,7 +441,44 @@ describe("requestReport", () => {
       prompt_version: REPORT_PROMPT_VERSION,
       model_id: "fake-chat",
       document_ids: [],
+      corpus: "grenfell",
     });
     expect(db.reports[0].citations.map((c) => c.evidence)).toEqual([1, 2]);
+  });
+});
+
+describe("the corpus of a report", () => {
+  it("retrieves from the request's corpus only", async () => {
+    const db = createReportsStore({
+      chunks: [
+        ...CHUNK_ROWS,
+        { ...CHUNK_ROWS[0], id: "9", document_id: "UCPI1", corpus: "ucpi", text: "HN1 met him." },
+      ],
+      documents: {
+        ...DOCUMENT_ROWS,
+        UCPI1: { id: "UCPI1", title: "Witness statement of HN1", witness_id: "HN1", format: "pdf" },
+      },
+    });
+    const provider = scripted(["Dark [E1]."], {
+      title: "T",
+      sections: [{ heading: "A", evidence: [1] }],
+    });
+    const report = await runReport({ corpus: "ucpi", topic: "The meeting", provider, db });
+    expect(report.evidenceBlocks.map((b) => b.documentId)).toEqual(["UCPI1"]);
+    await expect(runReport({ topic: "The meeting", provider, db })).rejects.toThrow(/corpus/);
+  });
+
+  it("answers 400 to a reports request without a corpus", async () => {
+    const db = createReportsStore();
+    for (const corpus of [undefined, "../x"]) {
+      expect(await reportsResponse(db, { method: "GET", userId: "u", corpus })).toMatchObject({
+        status: 400,
+      });
+    }
+    expect(db.calls).toEqual([]);
+    expect(await reportsResponse(db, { method: "GET", userId: "u", corpus: "ucpi" })).toEqual({
+      status: 200,
+      body: { reports: [] },
+    });
   });
 });

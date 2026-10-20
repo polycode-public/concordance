@@ -6,10 +6,13 @@
 // GET /spend, the conversation, report and fact-store routes and POST /export on an HTTP API,
 // the comparison function invoked with { corpus }, one Cognito user, and the page on CloudFront
 // with a generated config.json. Every resource is destroyable and nothing costs money at idle.
+// With a domain name and the ARN of its us-east-1 certificate, the distribution answers on that
+// name too, and the site URL, the API's allowed origins and the client's callback URLs use it.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CfnOutput, Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import {
   HttpUserPoolAuthorizer,
@@ -42,26 +45,106 @@ export const STAGE_NAME = "prod";
 const REQUIRE_BANNER =
   "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);";
 
+/** The corpora the page lists, in drop-list order; the first is the default. */
+export const DEFAULT_CORPORA = Object.freeze([
+  Object.freeze({ id: "grenfell", name: "Grenfell Tower Inquiry" }),
+  Object.freeze({ id: "ucpi", name: "Undercover Policing Inquiry" }),
+]);
+
+const CORPUS_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * Checks the corpora the page lists: at least one, each a corpus id and a display name, no id
+ * twice.
+ * @param {unknown} corpora
+ * @returns {{ id: string, name: string }[]}
+ */
+export function pageCorpora(corpora) {
+  if (!Array.isArray(corpora) || corpora.length === 0) {
+    throw new Error("AppStack needs at least one corpus");
+  }
+  const ids = new Set();
+  return corpora.map((c) => {
+    if (!CORPUS_ID.test(c?.id ?? ""))
+      throw new Error(`corpus id ${JSON.stringify(c?.id)} is invalid`);
+    if (typeof c.name !== "string" || !c.name.trim()) throw new Error(`corpus ${c.id} has no name`);
+    if (ids.has(c.id)) throw new Error(`corpus ${c.id} is listed twice`);
+    ids.add(c.id);
+    return { id: c.id, name: c.name.trim() };
+  });
+}
+
+const CERTIFICATE_ARN = /^arn:aws:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]+$/;
+const DOMAIN_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/**
+ * The custom domain of the distribution, or null. A CloudFront certificate lives in us-east-1
+ * whatever the stack's region, so it arrives as an ARN.
+ * @param {{ domainName?: string, certificateArn?: string }} props
+ * @returns {{ domainName: string, certificateArn: string } | null}
+ */
+export function siteDomain({ domainName, certificateArn }) {
+  if (!domainName && !certificateArn) return null;
+  if (!domainName || !certificateArn) {
+    throw new Error("AppStack needs both domainName and certificateArn, or neither");
+  }
+  if (!DOMAIN_NAME.test(domainName)) {
+    throw new Error(`domainName ${JSON.stringify(domainName)} is not a lower-case host name`);
+  }
+  if (!CERTIFICATE_ARN.test(certificateArn)) {
+    throw new Error(
+      `certificateArn ${JSON.stringify(certificateArn)} is not an ACM certificate in us-east-1`,
+    );
+  }
+  return { domainName, certificateArn };
+}
+
 export class AppStack extends Stack {
   /**
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string, budgetName: string, corpusId?: string,
-   *   corpusTitle?: string, corpusSubtitle?: string }} props
+   *   dbSecretArn: string, dbName: string, budgetName: string,
+   *   corpora?: { id: string, name: string }[], domainName?: string,
+   *   certificateArn?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
     const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetName } = props;
-    const {
-      corpusId = "grenfell",
-      corpusTitle = "Grenfell Tower Inquiry",
-      corpusSubtitle = "witness statements",
-    } = props;
+    const corpora = pageCorpora(props.corpora ?? DEFAULT_CORPORA);
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
     if (!budgetName) throw new Error("AppStack needs the budgetName the spend route reads");
+    const domain = siteDomain(props);
+
+    const siteBucket = new s3.Bucket(this, "SiteBucket", {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+    const distribution = new cloudfront.Distribution(this, "Site", {
+      defaultRootObject: "index.html",
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      },
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      ...(domain && {
+        domainNames: [domain.domainName],
+        certificate: acm.Certificate.fromCertificateArn(
+          this,
+          "SiteCertificate",
+          domain.certificateArn,
+        ),
+      }),
+    });
+    const distributionOrigin = `https://${distribution.distributionDomainName}`;
+    const siteUrl = domain ? `https://${domain.domainName}` : distributionOrigin;
+    const siteOrigins = domain ? [siteUrl, distributionOrigin] : [distributionOrigin];
 
     const userPool = new cognito.UserPool(this, "Users", {
       selfSignUpEnabled: false,
@@ -73,6 +156,7 @@ export class AppStack extends Stack {
       authFlows: { userPassword: true },
       generateSecret: false,
       preventUserExistenceErrors: true,
+      ...(domain && { oAuth: { callbackUrls: siteOrigins, logoutUrls: siteOrigins } }),
     });
     const demoUser = new cognito.CfnUserPoolUser(this, "DemoUser", {
       userPoolId: userPool.userPoolId,
@@ -152,7 +236,14 @@ export class AppStack extends Stack {
         REPORT_FUNCTION_NAME: reportFn.functionName,
       },
     });
-    const docFn = fn("doc", { environment: { CORPUS_BUCKET: corpusBucket.bucketName } });
+    const storeEnv = {
+      DB_RESOURCE_ARN: dbResourceArn,
+      DB_SECRET_ARN: dbSecretArn,
+      DB_NAME: dbName,
+    };
+    const docFn = fn("doc", {
+      environment: { ...storeEnv, CORPUS_BUCKET: corpusBucket.bucketName },
+    });
     const conversationsFn = fn("conversations", {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
@@ -182,12 +273,11 @@ export class AppStack extends Stack {
         DB_SECRET_ARN: dbSecretArn,
         DB_NAME: dbName,
         CORPUS_BUCKET: corpusBucket.bucketName,
-        CORPUS_ID: corpusId,
-        CORPUS_TITLE: corpusTitle,
+        CORPORA: JSON.stringify(corpora),
       },
     });
     const spendFn = fn("spend", {
-      environment: { BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
+      environment: { ...storeEnv, BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
     });
     spendFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -237,6 +327,8 @@ export class AppStack extends Stack {
       factsFn,
       compareFn,
       exportFn,
+      docFn,
+      spendFn,
     ]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
@@ -280,27 +372,10 @@ export class AppStack extends Stack {
       }),
     );
 
-    const siteBucket = new s3.Bucket(this, "SiteBucket", {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      removalPolicy: RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-    });
-    const distribution = new cloudfront.Distribution(this, "Site", {
-      defaultRootObject: "index.html",
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-      },
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-    });
-
     // The page fetches these routes with the id token from the distribution's origin.
     const httpApi = new apigwv2.HttpApi(this, "DocApi", {
       corsPreflight: {
-        allowOrigins: [`https://${distribution.distributionDomainName}`],
+        allowOrigins: siteOrigins,
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
@@ -319,12 +394,15 @@ export class AppStack extends Stack {
       integration: new HttpLambdaIntegration("DocIntegration", docFn),
       authorizer: userAuthorizer,
     });
-    httpApi.addRoutes({
-      path: "/spend",
-      methods: [apigwv2.HttpMethod.GET],
-      integration: new HttpLambdaIntegration("SpendIntegration", spendFn),
-      authorizer: userAuthorizer,
-    });
+    const spendIntegration = new HttpLambdaIntegration("SpendIntegration", spendFn);
+    for (const routePath of ["/spend", "/spend/history"]) {
+      httpApi.addRoutes({
+        path: routePath,
+        methods: [apigwv2.HttpMethod.GET],
+        integration: spendIntegration,
+        authorizer: userAuthorizer,
+      });
+    }
     httpApi.addRoutes({
       path: "/export",
       methods: [apigwv2.HttpMethod.POST],
@@ -400,19 +478,21 @@ export class AppStack extends Stack {
           reportsUrl: `${httpApi.apiEndpoint}/reports`,
           factsUrl: `${httpApi.apiEndpoint}/facts`,
           exportUrl: `${httpApi.apiEndpoint}/export`,
+          siteUrl,
           auth: {
             region: this.region,
             userPoolId: userPool.userPoolId,
             clientId: client.userPoolClientId,
           },
-          corpus: { id: corpusId, title: corpusTitle, subtitle: corpusSubtitle },
+          corpora,
         }),
       ],
       distribution,
       distributionPaths: ["/*"],
     });
 
-    new CfnOutput(this, "SiteUrl", { value: `https://${distribution.distributionDomainName}` });
+    new CfnOutput(this, "SiteUrl", { value: siteUrl });
+    new CfnOutput(this, "DistributionDomainName", { value: distribution.distributionDomainName });
     new CfnOutput(this, "WebSocketUrl", { value: stage.url });
     new CfnOutput(this, "HttpApiUrl", { value: httpApi.apiEndpoint });
     new CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });

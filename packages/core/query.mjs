@@ -82,6 +82,7 @@ export const isAbstention = (answer, blocks) =>
  * Runs one question through the pipeline.
  * @param {object} args
  * @param {string} args.question
+ * @param {string} args.corpus the corpus the evidence comes from
  * @param {import('./providers/modelProvider.mjs').ModelProvider} args.provider
  * @param {{ query: Function }} args.db
  * @param {AbortSignal} [args.signal]
@@ -96,8 +97,18 @@ export const isAbstention = (answer, blocks) =>
  *     timings: { rewriting: number, retrieving: number, answering: number, checking: number } },
  *   evidenceBlocks: object[], retrievedIds: string[] }>}
  */
-export async function runQuery({ question, provider, db, signal, onToken, onStage, onEvidence }) {
+export async function runQuery({
+  question,
+  corpus,
+  provider,
+  db,
+  signal,
+  onToken,
+  onStage,
+  onEvidence,
+}) {
   if (!db) throw new Error("runQuery needs a database");
+  if (!corpus) throw new Error("runQuery needs a corpus");
   const timings = {};
   let stageStart = performance.now();
   const endStage = (name) => {
@@ -108,7 +119,7 @@ export async function runQuery({ question, provider, db, signal, onToken, onStag
   onStage?.("rewriting");
   endStage("rewriting");
   onStage?.("retrieving");
-  const { fused } = await retrieve({ question, provider, db, signal });
+  const { fused } = await retrieve({ question, corpus, provider, db, signal });
   const hitIds = fused.slice(0, MAX_HITS).map((f) => f.id);
   const rows = await loadChunks(db, hitIds);
   for (const [id, r] of await loadChunks(db, neighbourIds([...rows.values()], rows))) {

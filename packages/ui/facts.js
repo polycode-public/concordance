@@ -6,6 +6,7 @@
 // relabel and promotion, the accepted-fact labels and the timeline. A pair whose two documents
 // reveal an identity together keeps its labels and spans, and the panel refuses to show its two
 // sentences side by side.
+import { withCorpus } from "./corpus.mjs";
 import { renderTimeline } from "./timeline.js";
 
 const $ = (id) => document.getElementById(id);
@@ -41,9 +42,10 @@ const reference = (side) => {
 /**
  * Wires the panel.
  * @param {{ factsUrl?: string }} config
- * @param {{ token: () => string | null, open: (documentId: string, locator: object) => void }} page
+ * @param {{ token: () => string | null, corpus: () => string,
+ *   open: (documentId: string, locator: object) => void }} page
  */
-export function mountFacts(config, { token, open }) {
+export function mountFacts(config, { token, corpus, open }) {
   const base = config.factsUrl;
   if (typeof base !== "string") throw new Error("config.json has no factsUrl");
 
@@ -74,7 +76,7 @@ export function mountFacts(config, { token, open }) {
   };
 
   async function call(path, body) {
-    const res = await fetch(`${base}${path}`, {
+    const res = await fetch(withCorpus(`${base}${path}`, corpus()), {
       method: body ? "POST" : "GET",
       cache: "no-store",
       headers: headers(Boolean(body)),
@@ -485,5 +487,27 @@ export function mountFacts(config, { token, open }) {
 
   select.addEventListener("change", () => loadMatrix(select.value));
 
-  return { refresh };
+  /** Empties the panel for another corpus and reads that corpus's groups. */
+  function reload() {
+    loads++;
+    groups = [];
+    matrix = null;
+    openCell = null;
+    select.replaceChildren();
+    select.disabled = true;
+    count.textContent = "";
+    empty.hidden = false;
+    for (const box of [matrixBox, detail, acceptedBox]) {
+      box.replaceChildren();
+      box.hidden = true;
+    }
+    timeline.figure.replaceChildren();
+    timeline.figure.hidden = true;
+    timeline.list.replaceChildren();
+    timeline.empty.hidden = true;
+    setStatus("");
+    return refresh();
+  }
+
+  return { refresh, reload };
 }

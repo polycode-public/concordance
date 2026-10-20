@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations,
-// /reports, /facts, /export, and the chat WebSocket at /ws.
+// The laptop server: static UI over HTTP, /health, /config.json, /spend, /spend/history,
+// /conversations, /reports, /facts, /export, and the chat WebSocket at /ws. Every route and
+// frame names the corpus it reads.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { createReadStream } from "node:fs";
@@ -10,6 +11,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { isCorpusId, requireKnownCorpus } from "../core/corpora.mjs";
 import { InvalidThread, NothingToExport, exportConversation, isNoteKey } from "../core/export.mjs";
 import { factsResponse } from "../core/facts/views.mjs";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
@@ -27,17 +29,18 @@ import {
   recordSession,
   recordTurn,
 } from "../core/sessions.mjs";
+import { SpendInputError, historyDays, readSpendHistory } from "../core/spend.mjs";
 import { PAGE_ASSETS } from "../../scripts/stage-page-assets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STATIC = path.resolve(here, "..", "ui");
 const DEFAULT_CORPORA = path.resolve(here, "..", "..", "corpora");
 
-export const DEFAULT_CORPUS = {
-  id: "grenfell",
-  title: "Grenfell Tower Inquiry",
-  subtitle: "witness statements",
-};
+/** The corpora the page lists, in drop-list order; the first is the default. */
+export const PAGE_CORPORA = Object.freeze([
+  Object.freeze({ id: "grenfell", name: "Grenfell Tower Inquiry" }),
+  Object.freeze({ id: "ucpi", name: "Undercover Policing Inquiry" }),
+]);
 
 export const NO_DATABASE = "the database is not configured";
 const FACTS_BODY_LIMIT = 8 * 1024;
@@ -108,7 +111,7 @@ export async function findOriginal(db, corporaDir, documentId) {
   try {
     const info = await stat(file);
     if (!info.isFile()) return null;
-    return { file, size: info.size, title: title ?? documentId };
+    return { file, size: info.size, title: title ?? documentId, corpus };
   } catch (err) {
     if (err.code === "ENOENT") return null;
     throw err;
@@ -135,6 +138,7 @@ const blockFrame = (b) => ({
  * @param {string} [options.corporaDir]
  * @param {typeof defaultRunQuery} [options.runQuery]
  * @param {typeof defaultRequestReport} [options.requestReport]
+ * @param {{ id: string, name: string }[]} [options.corpora]
  * @param {() => Date} [options.now]
  */
 export async function createServer({
@@ -147,6 +151,7 @@ export async function createServer({
   corporaDir = DEFAULT_CORPORA,
   runQuery = defaultRunQuery,
   requestReport = defaultRequestReport,
+  corpora = PAGE_CORPORA,
   now = () => new Date(),
 }) {
   const root = path.resolve(staticDir);
@@ -190,7 +195,7 @@ export async function createServer({
           wsUrl: `ws://${req.headers.host}/ws`,
           httpUrl: "",
           auth: null,
-          corpus: DEFAULT_CORPUS,
+          corpora,
           spendUrl: "/spend",
           conversationsUrl: "/conversations",
           reportsUrl: "/reports",
@@ -199,6 +204,10 @@ export async function createServer({
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
         res.end(req.method === "HEAD" ? undefined : body);
+        return;
+      }
+      if (pathname === "/spend/history") {
+        await serveSpendHistory(req, res, new URL(req.url, "http://localhost").searchParams);
         return;
       }
       if (pathname === "/spend") {
@@ -212,7 +221,8 @@ export async function createServer({
         return;
       }
       if (pathname.startsWith("/notes/")) {
-        await serveNote(req, res, decodeURIComponent(pathname.slice(1)));
+        const corpus = new URL(req.url, "http://localhost").searchParams.get("corpus");
+        await serveNote(req, res, corpus, decodeURIComponent(pathname.slice(1)));
         return;
       }
       if (pathname.startsWith("/doc/")) {
@@ -250,8 +260,13 @@ export async function createServer({
       res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
       return;
     }
+    const corpus = url.searchParams.get("corpus");
+    if (!isCorpusId(corpus)) {
+      json(400, { message: "The request needs a corpus." });
+      return;
+    }
     if (pathname === "/conversations") {
-      json(200, { conversations: await listConversations(db, LAPTOP_USER) });
+      json(200, { conversations: await listConversations(db, { userId: LAPTOP_USER, corpus }) });
       return;
     }
     const sessionId = decodeURIComponent(pathname.slice("/conversations/".length));
@@ -260,12 +275,39 @@ export async function createServer({
       return;
     }
     const thread = url.searchParams.get("thread");
-    const conversation = await conversationTurns(db, { sessionId, userId: LAPTOP_USER, thread });
+    const conversation = await conversationTurns(db, {
+      sessionId,
+      userId: LAPTOP_USER,
+      corpus,
+      thread,
+    });
     if (!conversation) {
       res.writeHead(404).end();
       return;
     }
     json(200, conversation);
+  }
+
+  async function serveSpendHistory(req, res, query) {
+    const json = (status, body) => {
+      res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
+    };
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    let days;
+    try {
+      days = historyDays(query.get("days"));
+    } catch (err) {
+      if (err instanceof SpendInputError) {
+        json(400, { message: err.message });
+        return;
+      }
+      throw err;
+    }
+    json(200, await readSpendHistory(db, { days, today: now() }));
   }
 
   async function serveReports(req, res, pathname) {
@@ -280,7 +322,13 @@ export async function createServer({
     }
     const filename =
       pathname === "/reports" ? undefined : decodeURIComponent(pathname.slice("/reports/".length));
-    const { status, body } = await reportsResponse(db, { method, filename, userId: LAPTOP_USER });
+    const corpus = new URL(req.url, "http://localhost").searchParams.get("corpus");
+    const { status, body } = await reportsResponse(db, {
+      method,
+      filename,
+      userId: LAPTOP_USER,
+      corpus,
+    });
     res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
     res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
   }
@@ -329,7 +377,7 @@ export async function createServer({
     }
   }
 
-  const notePath = (key) => path.join(path.resolve(corporaDir), DEFAULT_CORPUS.id, key);
+  const notePath = (corpus, key) => path.join(path.resolve(corporaDir), corpus, key);
 
   async function serveExport(req, res) {
     const json = (status, body) => {
@@ -361,17 +409,26 @@ export async function createServer({
       json(400, { message: "The request needs a sessionId (UUID) and a thread." });
       return;
     }
+    const named = corpora.find((c) => c.id === body.corpus);
+    if (!named) {
+      json(400, { message: "The request needs a corpus the page lists." });
+      return;
+    }
     try {
       const result = await exportConversation({
         db,
         which: { sessionId: body.sessionId, userId: LAPTOP_USER, thread: body.thread },
-        corpus: DEFAULT_CORPUS,
+        corpus: { id: named.id, title: named.name },
         now: now(),
         write: async (key, markdown) => {
-          const file = notePath(key);
+          const file = notePath(named.id, key);
           await mkdir(path.dirname(file), { recursive: true });
           await writeFile(file, markdown, { flag: "wx" });
-          return { key, bytes: Buffer.byteLength(markdown), url: `/${key}` };
+          return {
+            key,
+            bytes: Buffer.byteLength(markdown),
+            url: `/${key}?corpus=${encodeURIComponent(named.id)}`,
+          };
         },
       });
       json(200, result);
@@ -386,12 +443,12 @@ export async function createServer({
     }
   }
 
-  async function serveNote(req, res, key) {
-    if (!isNoteKey(key)) {
+  async function serveNote(req, res, corpus, key) {
+    if (!isNoteKey(key) || !corpora.some((c) => c.id === corpus)) {
       res.writeHead(400).end();
       return;
     }
-    const data = await readFile(notePath(key));
+    const data = await readFile(notePath(corpus, key));
     res.writeHead(200, {
       "content-type": "text/plain; charset=utf-8",
       "cache-control": "no-store",
@@ -444,21 +501,31 @@ export async function createServer({
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
     };
 
-    const sessionId = randomUUID();
+    /** @type {Map<string, { id: string, written: Promise<void> }>} One session per corpus. */
+    const sessions = new Map();
     // The session log is a queue beside the chat: a failed write is logged with its cause and
     // the turn's frames have already reached the client.
-    const sessionWritten = db
-      ? recordSession(db, { id: sessionId, userId: LAPTOP_USER }).catch((err) =>
-          console.error(`session log: session ${sessionId} was not written`, err),
-        )
-      : null;
-    const logTurn = async (turn) => {
+    const sessionOf = (corpus) => {
+      let session = sessions.get(corpus);
+      if (!session) {
+        const id = randomUUID();
+        session = {
+          id,
+          written: recordSession(db, { id, userId: LAPTOP_USER, corpus }).catch((err) =>
+            console.error(`session log: session ${id} was not written`, err),
+          ),
+        };
+        sessions.set(corpus, session);
+      }
+      return session;
+    };
+    const logTurn = async (session, turn) => {
       try {
-        await sessionWritten;
-        await recordTurn(db, { sessionId, ...turn });
+        await session.written;
+        await recordTurn(db, { sessionId: session.id, ...turn });
       } catch (err) {
         console.error(
-          `session log: turn ${turn.turnId} of session ${sessionId} was not written`,
+          `session log: turn ${turn.turnId} of session ${session.id} was not written`,
           err,
         );
       }
@@ -502,12 +569,13 @@ export async function createServer({
       threads.clear();
     });
 
-    async function openDocument({ docId, locator }) {
+    async function openDocument({ docId, locator, corpus }) {
       try {
         if (!isSafeSegment(docId)) throw new Error(`unsafe document id ${JSON.stringify(docId)}`);
         if (!db) throw new Error(NO_DATABASE);
         const original = await findOriginal(db, path.resolve(corporaDir), docId);
         if (!original) throw new Error(`no original PDF for ${docId}`);
+        if (original.corpus !== corpus) throw new Error(`${docId} is not a document of ${corpus}`);
         const page = Number.isInteger(locator?.page) && locator.page > 0 ? locator.page : 1;
         send(
           serverFrame.opened(docId, {
@@ -525,15 +593,17 @@ export async function createServer({
     // A closed socket stops the frames and never the report, as on AWS; the page lists it from
     // /reports when it comes back.
     async function runReportRequest(frame) {
-      const { thread, requestId } = frame;
+      const { thread, requestId, corpus } = frame;
       try {
         if (!db) throw new Error(NO_DATABASE);
-        await sessionWritten;
+        await requireKnownCorpus(db, corpus);
+        const session = sessionOf(corpus);
+        await session.written;
         const stored = await requestReport({
           db,
           provider,
           userId: LAPTOP_USER,
-          sessionId,
+          sessionId: session.id,
           request: frame,
           onStage: (stage) => send(serverFrame.reportStatus(thread, requestId, stage)),
         });
@@ -549,11 +619,12 @@ export async function createServer({
       }
     }
 
-    async function runTurn({ thread, turnId, text }) {
+    async function runTurn({ thread, turnId, text, corpus }) {
       if (!db) {
         send(serverFrame.error(NO_DATABASE, thread, turnId));
         return;
       }
+      const session = sessionOf(corpus);
       const controller = new AbortController();
       const { signal } = controller;
       threads.set(thread, { turnId, controller });
@@ -565,8 +636,11 @@ export async function createServer({
       };
       let finished = null;
       try {
+        await requireKnownCorpus(db, corpus);
+        signal.throwIfAborted();
         const result = await runQuery({
           question: text,
+          corpus,
           provider,
           db,
           signal,
@@ -587,7 +661,7 @@ export async function createServer({
             turnId,
             { ...result.checks, abstained: result.abstained },
             result.citations,
-            sessionId,
+            session.id,
           ),
         );
         finished = result;
@@ -597,7 +671,7 @@ export async function createServer({
       } finally {
         if (threads.get(thread)?.turnId === turnId) threads.delete(thread);
       }
-      await logTurn({ thread, turnId, userText: text, result: finished, frames });
+      await logTurn(session, { thread, turnId, userText: text, result: finished, frames });
     }
   });
 

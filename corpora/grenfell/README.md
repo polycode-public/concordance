@@ -16,6 +16,7 @@
   `pdftotext` returns the OCR ("lam the above named person"), so OCR errors reach the chunks.
 - **Answer key**: the Phase 1 report's findings, with paragraph locators, are the gold set source
   (see `evals/README.md`).
+- **Report**: `raw/report/phase1-volume-1.pdf` to `-4.pdf` and `phase1-executive-summary.pdf` (gitignored).
 
 ## Rules
 

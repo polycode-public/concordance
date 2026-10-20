@@ -5,22 +5,31 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 /**
  * Builds the contextual header that prefixes every embedded string, in this
- * field order: corpus, witness, role, statement date, event date, locator.
+ * field order: corpus, witness, role, statement date, event date, section heading, locator.
  * Missing fields are left out.
  * Example: [Grenfell Inquiry | Witness IWS00001200 | resident, floor 18 |
  * statement 6 Aug 2019 | event 14 Jun 2017 | p.3 para 11]
- * @param {{ corpus: string, witnessId?: string, role?: string,
+ * @param {{ corpus: string, witnessId?: string, role?: string, heading?: string,
  *   statementDate?: string | Date, eventDate?: string | Date,
  *   locator?: string | { page?: number, paragraph?: number, line?: number,
  *     startMs?: number } }} fields
  */
-export function buildHeader({ corpus, witnessId, role, statementDate, eventDate, locator }) {
+export function buildHeader({
+  corpus,
+  witnessId,
+  role,
+  statementDate,
+  eventDate,
+  heading,
+  locator,
+}) {
   const parts = [
     corpus,
     witnessId && `Witness ${witnessId}`,
     role,
     statementDate && `statement ${formatDate(statementDate)}`,
     eventDate && `event ${formatDate(eventDate)}`,
+    heading,
     formatLocator(locator),
   ].filter(Boolean);
   return `[${parts.join(" | ")}]`;

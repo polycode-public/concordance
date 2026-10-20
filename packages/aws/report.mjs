@@ -5,6 +5,7 @@
 // and posts its stage and done frames. A closed connection stops the frames and never the
 // report, which the page lists from GET /reports when it comes back.
 
+import { requireKnownCorpus } from "../core/corpora.mjs";
 import { serverFrame } from "../core/protocol.mjs";
 import { reportScores, requestReport as defaultRequestReport } from "../core/reports.mjs";
 import { recordSession, sessionIdFor } from "../core/sessions.mjs";
@@ -23,7 +24,7 @@ export function createHandler({
   requestReport = defaultRequestReport,
 }) {
   return async function handler({ frame, connectionId, domainName, stage, userId }) {
-    const { thread, requestId } = frame;
+    const { thread, requestId, corpus } = frame;
     const target = { connectionId, domainName, stage };
     let gone = false;
     let queue = Promise.resolve();
@@ -44,9 +45,10 @@ export function createHandler({
     try {
       if (!userId) throw new Error("the report request has no signed-in user");
       db = await openDb();
+      await requireKnownCorpus(db, corpus);
       const provider = await providerFor();
-      const sessionId = sessionIdFor(connectionId);
-      await recordSession(db, { id: sessionId, userId });
+      const sessionId = sessionIdFor(connectionId, corpus);
+      await recordSession(db, { id: sessionId, userId, corpus });
       const stored = await requestReport({
         db,
         provider,

@@ -582,7 +582,7 @@ describe("runComparison", () => {
     const store = createCompareStore(disputeSeed());
     const { provider, prompts } = compareProvider();
     const result = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
-    expect(result.counts).toMatchObject({ assertions: 24, pairs: 11, rules: 8, modelLabelled: 3 });
+    expect(result.counts).toMatchObject({ assertions: 26, pairs: 11, rules: 8, modelLabelled: 3 });
     expect(labelOf(store, "16", "17")).toMatchObject({
       label: "contradict",
       model: RULES_MODEL,

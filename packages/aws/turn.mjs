@@ -7,6 +7,7 @@
 // names another turn or is flagged. At the end it writes the turn, with every frame it posted,
 // to the session log.
 
+import { requireKnownCorpus } from "../core/corpora.mjs";
 import { serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
 import { recordSession, recordTurn, sessionIdFor } from "../core/sessions.mjs";
@@ -41,7 +42,7 @@ export function createHandler({
   pollMs = 500,
 }) {
   return async function handler({ frame, connectionId, domainName, stage, userId }) {
-    const { thread, turnId, text } = frame;
+    const { thread, turnId, text, corpus } = frame;
     const target = { connectionId, domainName, stage };
     const pk = cancelKey(connectionId, thread);
     const controller = new AbortController();
@@ -91,9 +92,11 @@ export function createHandler({
     let finished = null;
     try {
       db = await openDb();
+      await requireKnownCorpus(db, corpus);
       const provider = await providerFor();
       const result = await runQuery({
         question: text,
+        corpus,
         provider,
         db,
         signal,
@@ -116,7 +119,7 @@ export function createHandler({
           turnId,
           { ...result.checks, abstained: result.abstained },
           result.citations,
-          sessionIdFor(connectionId),
+          sessionIdFor(connectionId, corpus),
         ),
       );
       finished = result;
@@ -126,7 +129,9 @@ export function createHandler({
       else send(serverFrame.error(err.message, thread, turnId));
     } finally {
       await queue;
-      if (db) await logTurn(db, { connectionId, userId, thread, turnId, text, finished, frames });
+      if (db) {
+        await logTurn(db, { connectionId, userId, corpus, thread, turnId, text, finished, frames });
+      }
       await cancels.finish(pk, turnId);
       await db?.close?.();
     }
@@ -135,14 +140,17 @@ export function createHandler({
 }
 
 /**
- * Writes the sessions row of the connection, once, and the turn's row. The session log is a
+ * Writes the sessions row of the connection in the turn's corpus, once, and the turn's row. The session log is a
  * queue beside the chat: a failed write is logged with its cause and never fails the turn,
  * whose frames have already been posted.
  */
-async function logTurn(db, { connectionId, userId, thread, turnId, text, finished, frames }) {
-  const sessionId = sessionIdFor(connectionId);
+async function logTurn(
+  db,
+  { connectionId, userId, corpus, thread, turnId, text, finished, frames },
+) {
+  const sessionId = sessionIdFor(connectionId, corpus);
   try {
-    await recordSession(db, { id: sessionId, userId });
+    await recordSession(db, { id: sessionId, userId, corpus });
     await recordTurn(db, { sessionId, thread, turnId, userText: text, result: finished, frames });
   } catch (err) {
     console.error(`session log: turn ${turnId} of session ${sessionId} was not written`, err);

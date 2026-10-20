@@ -2,6 +2,15 @@
 // Copyright 2026 Polycode Limited
 
 const SHOWN = 200;
+
+/** The model's reply is not a JSON object that parses. */
+export class InvalidReplyError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = "InvalidReplyError";
+  }
+}
 const FENCE_OPEN = /^```[A-Za-z]*[ \t]*\r?\n?/;
 
 /** The text of the first brace-balanced object in `text`, or null. Braces inside strings do not count. */
@@ -47,6 +56,6 @@ export function parseJsonReply(content, describe) {
       content.length <= 2 * SHOWN
         ? content
         : `${content.slice(0, SHOWN)} ... ${content.slice(-SHOWN)}`;
-    throw new Error(`${describe} returned invalid JSON: ${shown}`);
+    throw new InvalidReplyError(`${describe} returned invalid JSON: ${shown}`);
   }
 }

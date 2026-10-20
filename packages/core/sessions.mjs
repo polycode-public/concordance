@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The session log: a sessions row per connection, a session_turns row per finished turn with
-// every frame the server sent for it, and the reads behind the conversation list and replay.
+// The session log: a sessions row per connection and corpus, a session_turns row per finished
+// turn with every frame the server sent for it, and the reads behind the conversation list and
+// replay.
 // The laptop server and the turn function both write through these functions.
 import { createHash } from "node:crypto";
 import { PROMPT_VERSION } from "./prompt.mjs";
@@ -22,12 +23,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (value) => typeof value === "string" && UUID.test(value);
 
 /**
- * The session id of an API Gateway connection: a UUID from the SHA-256 of the connection id,
- * so every turn on one connection names the same session without a lookup.
+ * The session id of an API Gateway connection in one corpus: a UUID from the SHA-256 of the
+ * connection id and the corpus, so every turn on one connection in one corpus names the same
+ * session without a lookup, and a page that switches corpus starts another session.
  * @param {string} connectionId
+ * @param {string} corpus
  */
-export function sessionIdFor(connectionId) {
-  const hex = createHash("sha256").update(`connection:${connectionId}`).digest("hex");
+export function sessionIdFor(connectionId, corpus) {
+  if (!corpus) throw new Error(`the session of connection ${connectionId} needs a corpus`);
+  const hex = createHash("sha256")
+    .update(`connection:${connectionId}\u0000corpus:${corpus}`)
+    .digest("hex");
   const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
@@ -51,16 +57,19 @@ export function storedFrames(frames) {
 }
 
 /**
- * Writes the sessions row of a connection. A second write of the same id does nothing.
+ * Writes the sessions row of a connection in one corpus. A second write of the same id does
+ * nothing.
  * @param {{ query: Function }} db
- * @param {{ id: string, userId: string }} session
+ * @param {{ id: string, userId: string, corpus: string }} session
  */
-export async function recordSession(db, { id, userId }) {
+export async function recordSession(db, { id, userId, corpus }) {
   if (!isUuid(id)) throw new Error(`session id ${JSON.stringify(id)} is not a UUID`);
   if (!userId) throw new Error(`session ${id} has no user id`);
+  if (!corpus) throw new Error(`session ${id} has no corpus`);
   await db.query(
-    "INSERT INTO sessions (id, user_id) VALUES ($1::uuid, $2) ON CONFLICT (id) DO NOTHING",
-    [id, userId],
+    `INSERT INTO sessions (id, user_id, corpus) VALUES ($1::uuid, $2, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [id, userId, corpus],
   );
 }
 
@@ -93,19 +102,20 @@ export async function recordTurn(db, { sessionId, thread, turnId, userText, resu
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
 
 /**
- * A user's conversations, newest first.
+ * A user's conversations in one corpus, newest first.
  * @param {{ query: Function }} db
- * @param {string} userId
+ * @param {{ userId: string, corpus: string }} which
  */
-export async function listConversations(db, userId) {
+export async function listConversations(db, { userId, corpus }) {
+  if (!corpus) throw new Error("the conversation list needs a corpus");
   const { rows } = await db.query(
     `SELECT session_id::text AS session_id, thread, first_question, turn_count,
             to_char(last_turn_at AT TIME ZONE 'UTC', ${ISO}) AS last_turn_at
        FROM conversations
-      WHERE user_id = $1
+      WHERE user_id = $1 AND corpus = $2
       ORDER BY last_turn_at DESC
       LIMIT ${MAX_CONVERSATIONS}`,
-    [userId],
+    [userId, corpus],
   );
   return rows.map((r) => ({
     sessionId: r.session_id,
@@ -118,16 +128,17 @@ export async function listConversations(db, userId) {
 
 /**
  * A session's turns with their frames, oldest first, or null when the session is not the
- * user's. `thread` limits the turns to one conversation.
+ * user's in that corpus. `thread` limits the turns to one conversation.
  * @param {{ query: Function }} db
- * @param {{ sessionId: string, userId: string, thread?: string | null }} which
+ * @param {{ sessionId: string, userId: string, corpus: string, thread?: string | null }} which
  */
-export async function conversationTurns(db, { sessionId, userId, thread = null }) {
+export async function conversationTurns(db, { sessionId, userId, corpus, thread = null }) {
   if (!isUuid(sessionId)) throw new Error(`session id ${JSON.stringify(sessionId)} is not a UUID`);
-  const owner = await db.query("SELECT 1 FROM sessions WHERE id = $1::uuid AND user_id = $2", [
-    sessionId,
-    userId,
-  ]);
+  if (!corpus) throw new Error("a conversation read needs a corpus");
+  const owner = await db.query(
+    "SELECT 1 FROM sessions WHERE id = $1::uuid AND user_id = $2 AND corpus = $3",
+    [sessionId, userId, corpus],
+  );
   if (!owner.rows.length) return null;
   const rows = [];
   let after = "0";

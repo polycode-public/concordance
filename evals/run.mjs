@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // Scores the query pipeline against a gold set:
-//   node evals/run.mjs --provider=laptop|bedrock --gold=evals/grenfell/gold.jsonl
+//   node evals/run.mjs --provider=laptop|bedrock --gold=evals/<corpus>/gold.jsonl
+// The corpus is the gold file's directory name unless --corpus= names it.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,10 +13,11 @@ const EXPECTED = new Set(["answer", "abstain"]);
 export function parseArgs(argv) {
   const args = { provider: "laptop", gold: "evals/grenfell/gold.jsonl" };
   for (const arg of argv) {
-    const match = /^--(provider|gold)=(.+)$/.exec(arg);
+    const match = /^--(provider|gold|corpus)=(.+)$/.exec(arg);
     if (!match) throw new Error(`unknown argument ${arg}`);
     args[match[1]] = match[2];
   }
+  args.corpus ??= path.basename(path.dirname(path.resolve(args.gold)));
   if (args.provider === "local") args.provider = "laptop";
   if (!["laptop", "bedrock"].includes(args.provider)) {
     throw new Error(`--provider must be laptop or bedrock, got ${args.provider}`);
@@ -106,16 +108,27 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
       MODEL_PROVIDER: kind,
     });
   const provider = await providerFor(args.provider);
-  openDb ??= async () => (await import("../packages/core/db.mjs")).createDb();
+  openDb ??= async () => (await import("../packages/core/db.mjs")).openDbFromEnv();
   const owned = db ? null : await openDb();
   try {
     const scored = [];
     for (const row of rows) {
-      const result = await runQuery({ question: row.question, provider, db: db ?? owned });
+      const result = await runQuery({
+        question: row.question,
+        corpus: args.corpus,
+        provider,
+        db: db ?? owned,
+      });
       scored.push({ row, result });
     }
     const metrics = score(scored);
-    console.log(JSON.stringify({ provider: args.provider, gold: args.gold, ...metrics }, null, 2));
+    console.log(
+      JSON.stringify(
+        { provider: args.provider, corpus: args.corpus, gold: args.gold, ...metrics },
+        null,
+        2,
+      ),
+    );
     return metrics;
   } finally {
     await owned?.close();

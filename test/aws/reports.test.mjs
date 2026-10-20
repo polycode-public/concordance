@@ -13,6 +13,7 @@ async function seeded() {
   const report = (userId, title) => ({
     sessionId: SESSION,
     userId,
+    corpus: "grenfell",
     filename: "stairs.md",
     title,
     topic: "The stairs",
@@ -33,9 +34,10 @@ async function seeded() {
   return { db, handler, closed: () => closed };
 }
 
-const event = (method, filename, sub = "sub-1") => ({
+const event = (method, filename, sub = "sub-1", corpus = "grenfell") => ({
   routeKey: filename === undefined ? `${method} /reports` : `${method} /reports/{filename}`,
   pathParameters: filename === undefined ? undefined : { filename },
+  queryStringParameters: corpus ? { corpus } : undefined,
   requestContext: {
     http: { method },
     authorizer: sub ? { jwt: { claims: { sub } } } : undefined,
@@ -109,6 +111,8 @@ describe("the reports routes", () => {
     expect((await handler(event("GET", "Stairs.md"))).statusCode).toBe(400);
     expect((await handler(event("GET", "%E0%A4%A"))).statusCode).toBe(400);
     expect((await handler(event("GET", "stairs.md", "sub-3"))).statusCode).toBe(404);
+    expect((await handler(event("GET", "stairs.md", "sub-1", "ucpi"))).statusCode).toBe(404);
+    expect((await handler(event("GET", undefined, "sub-1", null))).statusCode).toBe(400);
   });
 
   it("answers 500 with the cause when the store fails", async () => {

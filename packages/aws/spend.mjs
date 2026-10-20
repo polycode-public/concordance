@@ -3,7 +3,10 @@
 //
 // GET /spend on the HTTP API: the project budget's month-to-date spend and its limit, for the
 // spend strip under the page header. AWS refreshes a budget's spend up to three times a day,
-// so one DescribeBudget call per page load is enough; the call is free.
+// so one DescribeBudget call per page load is enough; the call is free. GET /spend/history: the
+// store's model use by corpus and day at list prices, an estimate the budget cannot split.
+
+import { SpendInputError, historyDays, readSpendHistory } from "../core/spend.mjs";
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -13,10 +16,39 @@ const json = (statusCode, body) => ({
 
 /**
  * @param {{ describeBudget: (input: { AccountId: string, BudgetName: string }) => Promise<object>,
- *   accountId: string, budgetName: string, now?: () => Date }} deps
+ *   accountId: string, budgetName: string,
+ *   openDb: () => Promise<{ query: Function, close?: Function }>, now?: () => Date }} deps
  */
-export function createHandler({ describeBudget, accountId, budgetName, now = () => new Date() }) {
-  return async () => {
+export function createHandler({
+  describeBudget,
+  accountId,
+  budgetName,
+  openDb,
+  now = () => new Date(),
+}) {
+  async function history(event) {
+    let days;
+    try {
+      days = historyDays(event.queryStringParameters?.days);
+    } catch (err) {
+      if (err instanceof SpendInputError) return json(400, { message: err.message });
+      throw err;
+    }
+    let db;
+    try {
+      db = await openDb();
+      return json(200, await readSpendHistory(db, { days, today: now() }));
+    } catch (err) {
+      console.error("spend: the history read failed", err);
+      return json(500, { message: `The spend history could not be read: ${err.message}` });
+    } finally {
+      await db?.close?.();
+    }
+  }
+
+  return async (event = {}) => {
+    const path = event.rawPath ?? event.routeKey?.split(" ")[1] ?? "/spend";
+    if (path.replace(/\/+$/, "") === "/spend/history") return history(event);
     try {
       if (!accountId || !budgetName) throw new Error("the account id and budget name are required");
       const { Budget } = await describeBudget({ AccountId: accountId, BudgetName: budgetName });
@@ -44,4 +76,5 @@ export const handler = createHandler({
   },
   accountId: process.env.BUDGET_ACCOUNT_ID,
   budgetName: process.env.BUDGET_NAME,
+  openDb: async () => (await import("./clients.mjs")).openDatabase(),
 });

@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // An in-memory store that answers the statements of the comparison run and the facts views by
-// their exact text, over seeded tables with the store's column names.
+// their exact text, over seeded tables with the store's column names. A seeded session or fact
+// without a corpus is Grenfell's, as the migration that added the column made every older row.
 
 import { RUN_SQL } from "../../packages/core/facts/compare.mjs";
 import { VIEW_SQL, comparisonFromRow, latestPerPair } from "../../packages/core/facts/views.mjs";
@@ -39,6 +40,12 @@ export function createCompareStore(seed = {}) {
     const e = t.entities.find((x) => x.id === asId(a.subject_entity_id) && x.kind === "person");
     return e ? (t.witnesses.find((w) => w.id === e.canonical)?.id ?? null) : null;
   };
+  const corpusOfRow = (row) => row.corpus ?? "grenfell";
+  const assertionCorpus = (id) => {
+    const a = assertion(id);
+    return a ? doc(chunk(a.source_chunk_id).document_id).corpus : null;
+  };
+  const inCorpus = (corpus) => (c) => assertionCorpus(c.assertion_a) === corpus;
   const pairOf = (c) =>
     `${c.kind}:${c.assertion_a}:${c.assertion_b ?? 0}:${c.accepted_fact_id ?? 0}`;
 
@@ -68,8 +75,9 @@ export function createCompareStore(seed = {}) {
     ],
     [
       RUN_SQL.facts,
-      () =>
-        [...t.accepted_facts]
+      ([corpus]) =>
+        t.accepted_facts
+          .filter((f) => corpusOfRow(f) === corpus)
           .sort((x, y) => Number(x.id) - Number(y.id))
           .map(({ id, assertion_id, text, is_hypothesis }) => ({
             id,
@@ -199,8 +207,10 @@ export function createCompareStore(seed = {}) {
     ],
     [
       VIEW_SQL.groups,
-      () => {
-        const latest = latestPerPair(t.assertion_comparisons.map(comparisonFromRow))
+      ([corpus]) => {
+        const latest = latestPerPair(
+          t.assertion_comparisons.filter(inCorpus(corpus)).map(comparisonFromRow),
+        )
           .map(({ shown }) => shown)
           .filter((c) => c.kind !== "accepted");
         const groups = new Map();
@@ -223,22 +233,33 @@ export function createCompareStore(seed = {}) {
     ],
     [
       VIEW_SQL.byEvent,
-      ([eventId]) => t.assertion_comparisons.filter((c) => c.event_id === String(eventId)),
+      ([eventId, corpus]) =>
+        t.assertion_comparisons.filter(
+          (c) => c.event_id === String(eventId) && inCorpus(corpus)(c),
+        ),
     ],
     [
       VIEW_SQL.byTopic,
-      ([topic]) => t.assertion_comparisons.filter((c) => c.event_id === null && c.topic === topic),
+      ([topic, corpus]) =>
+        t.assertion_comparisons.filter(
+          (c) => c.event_id === null && c.topic === topic && inCorpus(corpus)(c),
+        ),
     ],
     [
       VIEW_SQL.byWitness,
-      ([witnessId]) =>
+      ([witnessId, corpus]) =>
         t.assertion_comparisons.filter(
           (c) =>
-            assertion(c.assertion_a)?.witness_id === witnessId ||
-            (c.assertion_b && assertion(c.assertion_b)?.witness_id === witnessId),
+            (assertion(c.assertion_a)?.witness_id === witnessId ||
+              (c.assertion_b && assertion(c.assertion_b)?.witness_id === witnessId)) &&
+            inCorpus(corpus)(c),
         ),
     ],
-    [VIEW_SQL.comparison, ([id]) => t.assertion_comparisons.filter((c) => c.id === String(id))],
+    [
+      VIEW_SQL.comparison,
+      ([id, corpus]) =>
+        t.assertion_comparisons.filter((c) => c.id === String(id) && inCorpus(corpus)(c)),
+    ],
     [VIEW_SQL.event, ([id]) => t.events.filter((e) => e.id === String(id))],
     [
       VIEW_SQL.assertions,
@@ -253,6 +274,7 @@ export function createCompareStore(seed = {}) {
               ...a,
               cipher_only: w?.cipher_only ?? null,
               document_id: c.document_id,
+              corpus: d.corpus,
               sentence: c.text,
               locator: c.locator ?? {},
               statement_date: d.statement_date ?? null,
@@ -279,19 +301,20 @@ export function createCompareStore(seed = {}) {
     [VIEW_SQL.witness, ([id]) => t.witnesses.filter((w) => w.id === id)],
     [
       VIEW_SQL.witnessDocuments,
-      ([id]) =>
+      ([id, corpus]) =>
         t.documents
-          .filter((d) => d.witness_id === id)
+          .filter((d) => d.witness_id === id && d.corpus === corpus)
           .sort((x, y) => String(x.statement_date).localeCompare(String(y.statement_date)))
           .map((d) => ({ id: d.id, statement_date: d.statement_date ?? null })),
     ],
     [
       VIEW_SQL.timeline,
-      ([eventId, witnessId, after, limit]) =>
+      ([eventId, witnessId, after, limit, corpus]) =>
         t.assertions
           .filter(
             (a) =>
               a.time_text &&
+              assertionCorpus(a.id) === corpus &&
               (eventId === null || a.event_id === String(eventId)) &&
               (witnessId === null || a.witness_id === witnessId) &&
               Number(a.id) > Number(after),
@@ -330,11 +353,18 @@ export function createCompareStore(seed = {}) {
         return [{ id: row.id, run_at: row.run_at }];
       },
     ],
-    [VIEW_SQL.sessionUser, ([id]) => t.sessions.filter((s) => s.id === id)],
+    [
+      VIEW_SQL.sessionUser,
+      ([id]) =>
+        t.sessions
+          .filter((s) => s.id === id)
+          .map((s) => ({ user_id: s.user_id, corpus: corpusOfRow(s) })),
+    ],
     [
       VIEW_SQL.insertFact,
-      ([assertionId, text, citation, by, sessionId, hypothesis]) => {
+      ([assertionId, text, citation, by, sessionId, hypothesis, corpus]) => {
         if (!citation) throw new Error("source_citation is NOT NULL");
+        if (!corpus) throw new Error("corpus is NOT NULL");
         if (hypothesis && !sessionId) throw new Error("a hypothesis needs a session");
         const row = {
           id: newId(),
@@ -345,6 +375,7 @@ export function createCompareStore(seed = {}) {
           promoted_at: tick(),
           session_id: sessionId ?? null,
           is_hypothesis: hypothesis,
+          corpus,
         };
         t.accepted_facts.push(row);
         return [{ id: row.id, promoted_at: row.promoted_at }];

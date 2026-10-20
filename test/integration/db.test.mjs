@@ -48,15 +48,11 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       "0007_assertion_subjects.sql",
       "0008_accepted_fact_sources.sql",
       "0009_assertion_claims.sql",
+      "0010_corpus_scope.sql",
     ]);
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([]);
-    expect(log.slice(-5)).toEqual([
-      "skip    0001_initial.sql",
-      "skip    0002_session_frames.sql",
-      "skip    0003_fact_registers.sql",
-      "skip    0004_reports.sql",
-      "skip    0005_comparisons.sql",
-    ]);
+    const applied = log.slice(0, 10);
+    expect(log.slice(10)).toEqual(applied.map((line) => line.replace(/^\S+\s+/, "skip    ")));
   });
 
   it("creates the tables, the triples view and the search indexes", async () => {
@@ -182,8 +178,8 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
 
   it("writes a session and its turns and reads them through the conversations view", async () => {
     const sessionId = "6f1c2b9e-3a4d-4e5f-8a6b-7c8d9e0f1a2b";
-    await recordSession(client, { id: sessionId, userId: "laptop" });
-    await recordSession(client, { id: sessionId, userId: "laptop" });
+    await recordSession(client, { id: sessionId, userId: "laptop", corpus: "grenfell" });
+    await recordSession(client, { id: sessionId, userId: "laptop", corpus: "grenfell" });
     const frames = [
       { type: "token", thread: "t1", turnId: "u1", text: "Dark " },
       { type: "token", thread: "t1", turnId: "u1", text: "[E1]." },
@@ -210,7 +206,10 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       frames: [{ type: "cancelled", thread: "t1", turnId: "u2" }],
     });
 
-    const [conversation] = await listConversations(client, "laptop");
+    const [conversation] = await listConversations(client, {
+      userId: "laptop",
+      corpus: "grenfell",
+    });
     expect(conversation).toMatchObject({
       sessionId,
       thread: "t1",
@@ -218,11 +217,15 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       turnCount: 2,
     });
     expect(conversation.lastTurnAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
-    expect(await listConversations(client, "someone-else")).toEqual([]);
+    expect(await listConversations(client, { userId: "someone-else", corpus: "grenfell" })).toEqual(
+      [],
+    );
+    expect(await listConversations(client, { userId: "laptop", corpus: "ucpi" })).toEqual([]);
 
     const { turns } = await conversationTurns(client, {
       sessionId,
       userId: "laptop",
+      corpus: "grenfell",
       thread: "t1",
     });
     expect(turns.map((t) => [t.turnId, t.modelId])).toEqual([
@@ -233,7 +236,12 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       { type: "token", thread: "t1", turnId: "u1", text: "Dark [E1]." },
       frames[2],
     ]);
-    expect(await conversationTurns(client, { sessionId, userId: "someone-else" })).toBeNull();
+    expect(
+      await conversationTurns(client, { sessionId, userId: "someone-else", corpus: "grenfell" }),
+    ).toBeNull();
+    expect(
+      await conversationTurns(client, { sessionId, userId: "laptop", corpus: "ucpi" }),
+    ).toBeNull();
     const row = await client.query(
       "SELECT query_rewrites, retrieved_ids, reranker_scores FROM session_turns WHERE turn_id = 'u1'",
     );
