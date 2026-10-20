@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 import { describe, expect, it } from "vitest";
-import { REFUSAL } from "../../packages/ui/facts.js";
+import { groupOptionText, REFUSAL } from "../../packages/ui/facts.js";
 import { pointText } from "../../packages/ui/timeline.js";
 
 describe("the facts panel's text", () => {
+  it("cuts a long topic's option at 60 characters with an ellipsis", () => {
+    const short = { eventId: null, topic: "dark", pairs: 3, contradictions: 1 };
+    expect(groupOptionText(short)).toBe("dark (no event named): 1 contradict of 3");
+    const long = { ...short, topic: "much thicker outside of our flat than it was on the stairs" };
+    const text = groupOptionText(long);
+    expect(text).toHaveLength(60);
+    expect(text.endsWith("…")).toBe(true);
+  });
+
   it("writes a timeline point as its window, witness, claim and the witness's own words", () => {
     const point = {
       witnessId: "C123",

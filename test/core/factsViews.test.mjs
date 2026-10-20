@@ -24,9 +24,17 @@ beforeEach(async () => {
 });
 
 describe("the groups", () => {
-  it("lists every group with its pair and contradiction counts, most contradictions first", async () => {
+  it("lists the groups with a contradiction, most contradictions first", async () => {
     const res = await call("GET", "/facts/groups");
     expect(res.status).toBe(200);
+    expect(res.body.groups).toEqual([
+      { eventId: "7", name: "smoke in the lobby", topic: null, pairs: 6, contradictions: 4 },
+      { eventId: "8", name: "the fire alarm", topic: null, pairs: 1, contradictions: 1 },
+    ]);
+  });
+
+  it("lists the groups without a contradiction too when all=1", async () => {
+    const res = await call("GET", "/facts/groups", { query: { all: "1" } });
     expect(res.body.groups).toEqual([
       { eventId: "7", name: "smoke in the lobby", topic: null, pairs: 6, contradictions: 4 },
       { eventId: "8", name: "the fire alarm", topic: null, pairs: 1, contradictions: 1 },
