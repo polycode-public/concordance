@@ -2,10 +2,11 @@
 // Copyright 2026 Polycode Limited
 
 // Ingest on AWS: a Standard state machine that reads the budget, lists a corpus manifest from
-// the corpus bucket and maps over its rows, at most four documents at once. Each row is one
-// Lambda run that extracts the PDF text with pdf.js, calls Bedrock and writes to Aurora over
-// the Data API. A failed document is recorded in the result and the map goes on. Nothing runs
-// or costs money until an execution starts.
+// the corpus bucket and maps over its rows one document at a time. Each row is one Lambda run
+// that extracts the PDF text with pdf.js, calls Bedrock and writes to Aurora over the Data API.
+// A second map, after a second budget check, runs assertion extraction over the same rows, one
+// Lambda run a document. A failed document is recorded in the result and the map goes on.
+// Nothing runs or costs money until an execution starts.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +94,17 @@ export class IngestStack extends Stack {
       },
     });
 
+    const extractAssertionsFn = fn("extractAssertions", {
+      timeout: Duration.minutes(15),
+      memorySize: 512,
+      environment: {
+        MODEL_PROVIDER: "bedrock",
+        DB_RESOURCE_ARN: dbResourceArn,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_NAME: dbName,
+      },
+    });
+
     checkBudgetFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["budgets:ViewBudget"],
@@ -114,32 +126,34 @@ export class IngestStack extends Stack {
         }),
       );
     }
-    ingestDocumentFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "rds-data:ExecuteStatement",
-          "rds-data:BeginTransaction",
-          "rds-data:CommitTransaction",
-          "rds-data:RollbackTransaction",
-        ],
-        resources: [dbResourceArn],
-      }),
-    );
-    ingestDocumentFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["secretsmanager:GetSecretValue"],
-        resources: [dbSecretArn],
-      }),
-    );
-    ingestDocumentFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["bedrock:InvokeModel"],
-        resources: [
-          "arn:aws:bedrock:*::foundation-model/*",
-          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
-        ],
-      }),
-    );
+    for (const f of [ingestDocumentFn, extractAssertionsFn]) {
+      f.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: [
+            "rds-data:ExecuteStatement",
+            "rds-data:BeginTransaction",
+            "rds-data:CommitTransaction",
+            "rds-data:RollbackTransaction",
+          ],
+          resources: [dbResourceArn],
+        }),
+      );
+      f.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["secretsmanager:GetSecretValue"],
+          resources: [dbSecretArn],
+        }),
+      );
+      f.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["bedrock:InvokeModel"],
+          resources: [
+            "arn:aws:bedrock:*::foundation-model/*",
+            `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
+          ],
+        }),
+      );
+    }
 
     const checkBudget = new tasks.LambdaInvoke(this, "CheckBudget", {
       lambdaFunction: checkBudgetFn,
@@ -183,9 +197,50 @@ export class IngestStack extends Stack {
     });
     documents.itemProcessor(ingestDocument);
 
+    const checkBudgetBeforeExtraction = new tasks.LambdaInvoke(
+      this,
+      "CheckBudgetBeforeExtraction",
+      {
+        lambdaFunction: checkBudgetFn,
+        payloadResponseOnly: true,
+        resultPath: "$.extractionBudget",
+      },
+    );
+    const extractDocumentAssertions = new tasks.LambdaInvoke(this, "ExtractDocumentAssertions", {
+      lambdaFunction: extractAssertionsFn,
+      payloadResponseOnly: true,
+    });
+    extractDocumentAssertions.addRetry({
+      errors: ["ThrottlingException"],
+      interval: Duration.seconds(30),
+      maxAttempts: 2,
+      backoffRate: 2,
+    });
+    const recordExtractionFailure = sfn.Pass.jsonata(this, "RecordExtractionFailure", {
+      outputs: {
+        evidenceId: "{% $states.input.row.evidence_id %}",
+        error: "{% $states.input.error.Error %}",
+        cause: "{% $substring($states.input.error.Cause, 0, 300) %}",
+      },
+    });
+    extractDocumentAssertions.addCatch(recordExtractionFailure, { resultPath: "$.error" });
+
+    const extractions = new sfn.Map(this, "ExtractAssertions", {
+      itemsPath: "$.items",
+      maxConcurrency: MAX_CONCURRENT_DOCUMENTS,
+      itemSelector: {
+        corpus: sfn.JsonPath.stringAt("$.corpus"),
+        row: sfn.JsonPath.objectAt("$$.Map.Item.Value"),
+      },
+      resultPath: "$.extractions",
+    });
+    extractions.itemProcessor(extractDocumentAssertions);
+
     const definition = checkBudget
       .next(listManifest)
       .next(documents)
+      .next(checkBudgetBeforeExtraction)
+      .next(extractions)
       .next(new sfn.Succeed(this, "Done"));
 
     this.stateMachine = new sfn.StateMachine(this, "IngestStateMachine", {
@@ -206,5 +261,8 @@ export class IngestStack extends Stack {
     new CfnOutput(this, "CheckBudgetFunctionName", { value: checkBudgetFn.functionName });
     new CfnOutput(this, "ListManifestFunctionName", { value: listManifestFn.functionName });
     new CfnOutput(this, "IngestDocumentFunctionName", { value: ingestDocumentFn.functionName });
+    new CfnOutput(this, "ExtractAssertionsFunctionName", {
+      value: extractAssertionsFn.functionName,
+    });
   }
 }
