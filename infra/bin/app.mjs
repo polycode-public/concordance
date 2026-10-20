@@ -16,7 +16,7 @@ import { App, Tags } from "aws-cdk-lib";
 import { DataStack } from "../lib/dataStack.mjs";
 import { GuardrailsStack } from "../lib/guardrailsStack.mjs";
 import { StoreStack } from "../lib/storeStack.mjs";
-import { AppStack } from "../lib/appStack.mjs";
+import { AppStack, DEFAULT_CORPORA } from "../lib/appStack.mjs";
 import { IngestStack } from "../lib/ingestStack.mjs";
 
 export const WORKLOAD_REGION = "eu-west-2";
@@ -44,6 +44,8 @@ const storeStack = new StoreStack(app, stackName("store"), {
   description: `${PROJECT} ${envName}: the Aurora Serverless v2 Postgres store behind the RDS Data API`,
 });
 
+const corpora = corporaContext(optionalContext("corpora")) ?? DEFAULT_CORPORA;
+
 new AppStack(app, stackName("app"), {
   env,
   corpusBucket: dataStack.bucket,
@@ -51,7 +53,7 @@ new AppStack(app, stackName("app"), {
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
   budgetName: `${PROJECT}-${envName}-monthly`,
-  corpora: corporaContext(optionalContext("corpora")),
+  corpora,
   domainName: optionalContext("domainName"),
   certificateArn: optionalContext("certificateArn"),
   description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
@@ -60,6 +62,7 @@ new AppStack(app, stackName("app"), {
 new IngestStack(app, stackName("ingest"), {
   env,
   corpusBucket: dataStack.bucket,
+  corpora: corpora.map((corpus) => corpus.id),
   dbResourceArn: storeStack.cluster.clusterArn,
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
