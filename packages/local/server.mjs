@@ -2,7 +2,7 @@
 // Copyright 2026 Polycode Limited
 //
 // The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations,
-// /reports, /export, and the chat WebSocket at /ws.
+// /reports, /facts, /export, and the chat WebSocket at /ws.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { createReadStream } from "node:fs";
@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { InvalidThread, NothingToExport, exportConversation, isNoteKey } from "../core/export.mjs";
+import { factsResponse } from "../core/facts/views.mjs";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
 import {
@@ -39,6 +40,7 @@ export const DEFAULT_CORPUS = {
 };
 
 export const NO_DATABASE = "the database is not configured";
+const FACTS_BODY_LIMIT = 8 * 1024;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -160,6 +162,10 @@ export async function createServer({
         await serveReports(req, res, pathname);
         return;
       }
+      if (pathname.startsWith("/facts/")) {
+        await serveFacts(req, res, pathname, new URL(req.url, "http://localhost").searchParams);
+        return;
+      }
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405, { allow: "GET, HEAD" }).end();
         return;
@@ -188,6 +194,7 @@ export async function createServer({
           spendUrl: "/spend",
           conversationsUrl: "/conversations",
           reportsUrl: "/reports",
+          factsUrl: "/facts",
           exportUrl: "/export",
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
@@ -276,6 +283,50 @@ export async function createServer({
     const { status, body } = await reportsResponse(db, { method, filename, userId: LAPTOP_USER });
     res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
     res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
+  }
+
+  async function serveFacts(req, res, pathname, query) {
+    const json = (status, body) => {
+      res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
+    };
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    const method = req.method === "HEAD" ? "GET" : req.method;
+    let body;
+    if (method === "POST") {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > FACTS_BODY_LIMIT) {
+          json(413, { message: "The request body is too large." });
+          return;
+        }
+        chunks.push(chunk);
+      }
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        json(400, { message: "The request body is not JSON." });
+        return;
+      }
+    }
+    try {
+      const out = await factsResponse(db, {
+        method,
+        path: pathname,
+        query,
+        body,
+        userId: LAPTOP_USER,
+      });
+      json(out.status, out.body);
+    } catch (err) {
+      console.error("facts: the request failed", err);
+      json(500, { message: `The facts could not be read: ${err.message}` });
+    }
   }
 
   const notePath = (key) => path.join(path.resolve(corporaDir), DEFAULT_CORPUS.id, key);

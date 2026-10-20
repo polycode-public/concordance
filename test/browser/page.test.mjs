@@ -18,6 +18,10 @@ import { PROMPT_VERSION, answerMessages } from "../../packages/core/prompt.mjs";
 import { checkAnswer } from "../../packages/core/query.mjs";
 import { requestReport } from "../../packages/core/reports.mjs";
 import { createReportsStore } from "../core/reportsFakeStore.mjs";
+import { runComparison } from "../../packages/core/facts/compare.mjs";
+import { REFUSAL } from "../../packages/ui/facts.js";
+import { createCompareStore } from "../core/compareFakeStore.mjs";
+import { compareProvider, compareSeed } from "../core/compareFixture.mjs";
 
 const CHROME_PATHS = [
   process.env.CHROME_BIN,
@@ -116,10 +120,14 @@ const fakeDb = {
 
 const reportStore = createReportsStore();
 
-/** The reports tables answer from the fake store; every other statement from fakeDb. */
+const factsStore = createCompareStore(compareSeed());
+const FACT_DOCUMENTS = ["IWS-A1", "IWS-A2", "IWS-B1", "C123-1"];
+
+/** The reports tables and the facts answer from their fake stores; the rest from fakeDb. */
 const reportsDb = {
   ...reportStore,
   query: async (text, params) => {
+    if (factsStore.answers(text)) return factsStore.query(text, params);
     if (/FROM documents WHERE id/.test(text)) return fakeDb.query(text, params);
     try {
       return await reportStore.query(text, params);
@@ -270,9 +278,15 @@ describe.skipIf(!enabled)(
     beforeAll(async () => {
       corpora = await mkdtemp(path.join(tmpdir(), "concordance-browser-corpora-"));
       await mkdir(path.join(corpora, "grenfell", "raw"), { recursive: true });
-      for (const id of ["IWS00000169", "IWS00000342"]) {
+      for (const id of ["IWS00000169", "IWS00000342", ...FACT_DOCUMENTS]) {
         await writeFile(path.join(corpora, "grenfell", "raw", `${id}.pdf`), PDF);
       }
+      await runComparison({
+        corpus: "grenfell",
+        db: factsStore,
+        provider: compareProvider().provider,
+        log: () => {},
+      });
       app = await createServer({
         corporaDir: corpora,
         provider: createFakeProvider({ tokens: TOKENS, delayMs: 5 }),
@@ -639,7 +653,12 @@ describe.skipIf(!enabled)(
         await evaluate(
           `[...document.querySelectorAll(".bundle section")].map((s) => document.getElementById(s.getAttribute("aria-labelledby")).textContent.trim())`,
         ),
-      ).toEqual(["Referenced documents", "Evidence this turn", "Generated reports"]);
+      ).toEqual([
+        "Referenced documents",
+        "Evidence this turn",
+        expect.stringMatching(/^Contradictions/),
+        "Generated reports",
+      ]);
       expect(await evaluate(`document.querySelector(".bundle").getAttribute("aria-label")`)).toBe(
         "Evidence bundle",
       );
@@ -830,6 +849,253 @@ describe.skipIf(!enabled)(
       await until(`!document.getElementById("viewer").hidden`);
       await press("Escape");
       await until(`document.getElementById("viewer").hidden`);
+    });
+
+    const cellButton = (row, column) =>
+      `[...document.querySelectorAll("#facts-matrix tbody tr")].find((tr) => tr.querySelector("th").textContent === ${JSON.stringify(row)}).children[[...document.querySelectorAll("#facts-matrix thead th")].findIndex((th) => th.textContent === ${JSON.stringify(column)}) + 1].querySelector("button")`;
+    const chooseGroup = async (value) => {
+      await evaluate(
+        `(() => { const s = document.getElementById("facts-group"); if (s.value === ${JSON.stringify(value)}) return true; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event("change")); return true; })()`,
+      );
+      await until(
+        `document.querySelector("#facts-matrix caption")?.textContent === ${JSON.stringify(
+          { "event:7": "smoke in the lobby", "event:8": "the fire alarm" }[value],
+        )}`,
+      );
+    };
+
+    it("shows the Contradictions panel with the groups and the witnesses on both axes", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      expect(await evaluate(`document.getElementById("facts-title").textContent.trim()`)).toBe(
+        "Contradictions 5",
+      );
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-group option")].map((o) => [o.value, o.textContent])`,
+        ),
+      ).toEqual([
+        ["event:7", "smoke in the lobby: 4 contradict of 6"],
+        ["event:8", "the fire alarm: 1 contradict of 1"],
+        ["topic:dark", "dark (no event named): 0 contradict of 1"],
+        ["event:9", "leaving the flat: 0 contradict of 1"],
+        ["topic:told", "told (no event named): 0 contradict of 1"],
+      ]);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-matrix thead th")].map((t) => t.textContent)`,
+        ),
+      ).toEqual(["C123", "IWS-A", "IWS-B"]);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-matrix tbody th")].map((t) => [t.textContent, t.scope])`,
+        ),
+      ).toEqual([
+        ["C123", "row"],
+        ["IWS-A", "row"],
+        ["IWS-B", "row"],
+      ]);
+      expect(await evaluate(`${cellButton("IWS-A", "C123")}.textContent`)).toBe("contradict 2");
+      expect(await evaluate(`${cellButton("IWS-A", "IWS-A")}.getAttribute("aria-label")`)).toBe(
+        "IWS-A and IWS-A: contradict; 1 contradict",
+      );
+      expect(await evaluate(`${cellButton("IWS-B", "IWS-B")} ?? null`)).toBeNull();
+      await shot("laptop-facts");
+    });
+
+    for (const dark of [false, true]) {
+      it(`keeps the matrix labels and the reason at 4.5:1 in ${dark ? "dark" : "light"}`, async () => {
+        await open({ width: 1280, height: 800, dark });
+        await until(`document.querySelector("#facts-matrix table") !== null`);
+        await evaluate(`${cellButton("IWS-A", "IWS-B")}.click(); true`);
+        await until(`!document.getElementById("facts-detail").hidden`);
+        for (const selector of [
+          "button.facts-cell.label-contradict",
+          ".facts-label.label-contradict",
+          ".facts-label.label-agree",
+          ".facts-reason",
+          ".facts-quote",
+          "#facts-matrix th",
+        ]) {
+          expect(await lowest(selector), selector).toBeGreaterThanOrEqual(4.5);
+        }
+        expect(await lowest("button.facts-cell", "edge")).toBeGreaterThanOrEqual(1);
+      });
+    }
+
+    it("opens a cell's pairs with the reason, the spans and chips that open each source", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await evaluate(`${cellButton("IWS-A", "C123")}.click(); true`);
+      await until(`!document.getElementById("facts-detail").hidden`);
+      expect(await evaluate(`document.activeElement.textContent`)).toBe("C123 and IWS-A");
+      const pairs = await evaluate(
+        `[...document.querySelectorAll("#facts-detail .facts-pair")].map((li) => ({ label: li.dataset.label, reason: li.querySelector(".facts-reason").textContent, quotes: [...li.querySelectorAll(".facts-quote")].map((q) => q.textContent) }))`,
+      );
+      expect(pairs).toEqual([
+        {
+          label: "contradict",
+          reason:
+            'time: "about 1.00 am" (00:50-01:10) and "1.30 am" (01:25-01:35) do not overlap for "saw" "smoke"',
+          quotes: ["about 1.00 am", "1.30 am"],
+        },
+        {
+          label: "agree",
+          reason: expect.stringMatching(/^same predicate, object, polarity and place/),
+          quotes: ["saw", "first saw"],
+        },
+      ]);
+      await evaluate(
+        `document.querySelectorAll("#facts-detail .facts-pair")[0].querySelectorAll(".cite")[1].click(); true`,
+      );
+      await until(`!document.getElementById("viewer").hidden`);
+      await until(`document.getElementById("viewer-title").textContent.includes("C123-1")`);
+    });
+
+    it("shows two sentences side by side, and refuses an identity-revealing pair with the reason", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await evaluate(`${cellButton("IWS-A", "IWS-B")}.click(); true`);
+      await until(`!document.getElementById("facts-detail").hidden`);
+      await evaluate(
+        `[...document.querySelectorAll("#facts-detail button")].find((b) => b.textContent === "Show side by side").click(); true`,
+      );
+      await until(`document.querySelector("#facts-detail .facts-sides") !== null`);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-detail .facts-sentence")].map((p) => p.textContent)`,
+        ),
+      ).toHaveLength(2);
+      await evaluate(`${cellButton("IWS-B", "C123")}.click(); true`);
+      await until(
+        `document.querySelector("#facts-detail .facts-detail-title")?.textContent === "C123 and IWS-B"`,
+      );
+      expect(
+        await evaluate(`document.querySelector("#facts-detail .facts-pair").dataset.label`),
+      ).toBe("contradict");
+      expect(
+        await evaluate(`document.querySelector("#facts-detail .facts-refusal").textContent`),
+      ).toBe(REFUSAL);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-detail button")].some((b) => b.textContent === "Show side by side")`,
+        ),
+      ).toBe(false);
+      expect(
+        await evaluate(`document.querySelectorAll("#facts-detail .facts-sentence").length`),
+      ).toBe(0);
+      await shot("laptop-facts-refusal");
+    });
+
+    it("posts a person's relabel and shows it in the cell with the pencil mark", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await chooseGroup("event:8");
+      expect(await evaluate(`${cellButton("IWS-A", "IWS-B")}.textContent`)).toBe("contradict");
+      await evaluate(`${cellButton("IWS-A", "IWS-B")}.click(); true`);
+      await until(`!document.getElementById("facts-detail").hidden`);
+      await evaluate(`(() => {
+        const form = document.querySelector("#facts-detail .facts-pair details .facts-form");
+        form.closest("details").open = true;
+        form.querySelector("select").value = "agree";
+        form.querySelector("textarea").value = "Both describe the same alarm.";
+        form.requestSubmit();
+        return true;
+      })()`);
+      await until(`${cellButton("IWS-A", "IWS-B")}.textContent.startsWith("agree")`);
+      expect(await evaluate(`${cellButton("IWS-A", "IWS-B")}.textContent`)).toBe("agree ✎");
+      expect(await evaluate(`document.getElementById("facts-status").textContent`)).toBe(
+        "Labelled agree by laptop.",
+      );
+      await until(
+        `document.querySelector("#facts-detail .facts-by")?.textContent.startsWith("Machine label")`,
+      );
+      expect(
+        await evaluate(`document.querySelector("#facts-detail .facts-reason").textContent`),
+      ).toBe("Both describe the same alarm.");
+      expect(factsStore.tables.assertion_comparisons.at(-1)).toMatchObject({
+        model: "operator",
+        decided_by: "laptop",
+        label: "agree",
+      });
+    });
+
+    it("posts a promotion with its citation", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await chooseGroup("event:7");
+      await evaluate(`${cellButton("IWS-A", "C123")}.click(); true`);
+      await until(`!document.getElementById("facts-detail").hidden`);
+      const before = factsStore.tables.accepted_facts.length;
+      await evaluate(`(() => {
+        const form = document.querySelectorAll("#facts-detail .facts-pair")[0].querySelectorAll(".facts-form")[1];
+        form.closest("details").open = true;
+        form.querySelector("select").selectedIndex = 1;
+        form.querySelector("input").value = "Phase 1 report, fixture paragraph";
+        form.requestSubmit();
+        return true;
+      })()`);
+      await until(
+        `document.getElementById("facts-status").textContent.startsWith("Accepted fact")`,
+      );
+      expect(factsStore.tables.accepted_facts.slice(before)).toEqual([
+        expect.objectContaining({
+          assertion_id: "3",
+          source_citation: "Phase 1 report, fixture paragraph",
+          promoted_by: "laptop",
+          is_hypothesis: false,
+        }),
+      ]);
+    });
+
+    it("moves between cells with the arrow keys and opens one with Enter", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await chooseGroup("event:7");
+      await evaluate(`${cellButton("C123", "IWS-A")}.focus(); true`);
+      await press("ArrowRight");
+      expect(await evaluate(`document.activeElement === ${cellButton("C123", "IWS-B")}`)).toBe(
+        true,
+      );
+      await press("ArrowDown");
+      expect(await evaluate(`document.activeElement === ${cellButton("IWS-A", "IWS-B")}`)).toBe(
+        true,
+      );
+      await press("Enter");
+      await until(`document.activeElement?.textContent === "IWS-A and IWS-B"`);
+    });
+
+    it("draws the timeline and lists its points in window order with a chip to the source", async () => {
+      await open({ width: 1280, height: 800 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      await chooseGroup("event:7");
+      await until(`document.querySelectorAll("#facts-timeline li").length === 4`);
+      await evaluate(`document.getElementById("facts-timeline-box").open = true; true`);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll("#facts-timeline li")].map((li) => li.textContent)`,
+        ),
+      ).toEqual([
+        '00:50–01:10 IWS-A: first saw smoke ("about 1.00 am")',
+        '00:50–01:10 IWS-B: saw smoke ("about 1.00 am")',
+        '01:25–01:35 C123: saw smoke ("1.30 am")',
+        '01:25–01:35 IWS-A: first saw smoke ("1.30 am")',
+      ]);
+      expect(
+        await evaluate(`document.querySelectorAll("#facts-timeline-figure circle").length`),
+      ).toBe(4);
+      await evaluate(`document.querySelector("#facts-timeline button").click(); true`);
+      await until(`document.getElementById("viewer-title").textContent.includes("IWS-A1")`);
+    });
+
+    it("keeps the matrix inside a phone screen with no horizontal page scroll", async () => {
+      await open({ width: 390, height: 844 });
+      await until(`document.querySelector("#facts-matrix table") !== null`);
+      expect(
+        await evaluate(
+          `document.documentElement.scrollWidth <= document.documentElement.clientWidth`,
+        ),
+      ).toBe(true);
     });
   },
 );

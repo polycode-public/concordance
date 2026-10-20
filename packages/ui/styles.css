@@ -956,3 +956,200 @@ button.pill:hover {
     scroll-behavior: auto !important;
   }
 }
+
+/* Contradictions: the matrix, a cell's pairs and the timeline */
+
+.facts-select {
+  display: block;
+  width: 100%;
+  min-height: var(--target);
+  margin: calc(var(--unit) / 2) 0 var(--unit);
+  padding: 0 var(--unit);
+  background: var(--paper);
+  border: var(--rule-width) solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.facts-matrix {
+  overflow-x: auto;
+}
+
+.facts-matrix[hidden],
+.facts-detail[hidden] {
+  display: none;
+}
+
+.facts-table {
+  border-collapse: collapse;
+  font-size: var(--size-small);
+  line-height: var(--line-small);
+}
+
+.facts-table caption {
+  text-align: left;
+  color: var(--ink-soft);
+  padding-bottom: calc(var(--unit) / 2);
+}
+
+.facts-table th,
+.facts-table td {
+  padding: calc(var(--unit) / 4);
+  border: var(--rule-width) solid var(--rule);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.facts-table th {
+  font-weight: var(--weight-label);
+  white-space: nowrap;
+}
+
+button.facts-cell {
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 var(--unit);
+  background: var(--paper);
+  border: var(--rule-width) solid var(--rule);
+  font-weight: var(--weight-label);
+}
+
+.label-agree,
+.label-consistent {
+  color: var(--ink);
+}
+
+.label-contradict,
+.label-inconsistent {
+  color: var(--red-ink);
+}
+
+.label-unrelated,
+.label-not_covered {
+  color: var(--grey);
+}
+
+.facts-cell-count,
+.facts-pencil {
+  font-weight: var(--weight-prose);
+  color: var(--ink-soft);
+}
+
+.facts-detail {
+  margin-top: var(--unit);
+  padding: var(--unit) var(--gutter);
+  border: var(--rule-width) solid var(--rule);
+  background: var(--paper);
+}
+
+.facts-detail-title {
+  font-size: var(--size-body);
+  font-weight: var(--weight-label);
+  color: var(--navy);
+}
+
+.facts-pair {
+  display: grid;
+  gap: calc(var(--unit) / 2);
+}
+
+.facts-span .facts-quote,
+.facts-sentence {
+  font-family: var(--face-witness);
+}
+
+.facts-reason {
+  color: var(--ink);
+}
+
+.facts-refusal {
+  color: var(--red-ink);
+}
+
+.facts-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--unit);
+}
+
+.facts-side {
+  padding: var(--unit);
+  border: var(--rule-width) solid var(--rule);
+}
+
+.facts-more summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  cursor: pointer;
+  color: var(--navy);
+}
+
+.facts-form {
+  display: grid;
+  gap: calc(var(--unit) / 2);
+}
+
+.facts-form select,
+.facts-form input,
+.facts-form textarea {
+  min-height: var(--target);
+  padding: var(--unit);
+  background: var(--paper);
+  border: var(--rule-width) solid var(--edge);
+  border-radius: var(--radius);
+}
+
+#facts-status:empty {
+  display: none;
+}
+
+#facts-status[data-level="error"] {
+  color: var(--red-ink);
+}
+
+.facts-timeline-box summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: var(--weight-label);
+}
+
+.timeline-figure[hidden] {
+  display: none;
+}
+
+.timeline-drawing {
+  width: 100%;
+  height: auto;
+}
+
+.timeline-witness,
+.timeline-tick {
+  fill: var(--ink-soft);
+  font-size: 11px;
+}
+
+.timeline-row {
+  stroke: var(--rule);
+}
+
+.timeline-bar {
+  stroke: var(--ink-soft);
+  stroke-width: 3;
+}
+
+.timeline-point {
+  fill: var(--navy);
+}
+
+.timeline-point.negative {
+  fill: var(--red-ink);
+}
+
+.timeline-open {
+  min-height: var(--target);
+  padding: 0;
+  text-align: left;
+}

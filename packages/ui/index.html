@@ -143,6 +143,36 @@
             hidden
           ></ul>
         </section>
+        <section id="facts-panel" aria-labelledby="facts-title">
+          <h2 id="facts-title">Contradictions<span id="facts-count" class="count"></span></h2>
+          <label for="facts-group" class="small">Event</label>
+          <select id="facts-group" class="facts-select" disabled></select>
+          <p id="facts-message" class="message small" role="status"></p>
+          <p id="facts-empty" class="empty small">No comparison has run yet.</p>
+          <div
+            id="facts-matrix"
+            class="facts-matrix"
+            role="region"
+            aria-label="Contradiction matrix"
+            tabindex="0"
+            hidden
+          ></div>
+          <div
+            id="facts-detail"
+            class="facts-detail"
+            role="region"
+            aria-label="The selected cell"
+            hidden
+          ></div>
+          <div id="facts-accepted" class="facts-detail" hidden></div>
+          <p id="facts-status" class="small" role="status"></p>
+          <details id="facts-timeline-box" class="facts-timeline-box">
+            <summary class="small">Timeline</summary>
+            <div id="facts-timeline-figure" class="timeline-figure" hidden></div>
+            <ol id="facts-timeline" class="timeline"></ol>
+            <p id="facts-timeline-empty" class="empty small" hidden></p>
+          </details>
+        </section>
         <section id="reports-panel" aria-labelledby="reports-title">
           <h2 id="reports-title">
             Generated reports<span id="reports-count" class="count"></span>

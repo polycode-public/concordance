@@ -3,6 +3,7 @@
 import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
 import { mountExport } from "./export.js";
+import { mountFacts } from "./facts.js";
 import { mountReports } from "./reports.js";
 import { showSpend } from "./spend.js";
 import { chipInline, renderMarkdown } from "./markdown.mjs";
@@ -55,7 +56,7 @@ let replaying = false;
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, reportsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, reportsUrl: string, factsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -575,7 +576,9 @@ function cancel() {
 cancelButton.addEventListener("click", cancel);
 
 const isTyping = (target) =>
-  target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+  target instanceof HTMLInputElement ||
+  target instanceof HTMLTextAreaElement ||
+  target instanceof HTMLSelectElement;
 
 /** Moves focus among the newest answer's chips; `step` is +1 or -1. */
 function focusChip(step) {
@@ -660,6 +663,12 @@ if (config) {
   } catch (err) {
     console.error(err);
     $("reports-message").textContent = `Reports are unavailable (${err.message}).`;
+  }
+  try {
+    await mountFacts(config, { token, open }).refresh();
+  } catch (err) {
+    console.error(err);
+    $("facts-message").textContent = `Contradictions are unavailable (${err.message}).`;
   }
   try {
     exporter = mountExport(config, { token });

@@ -3,9 +3,9 @@
 
 // The serving layer: the chat WebSocket on API Gateway with a Lambda per route, the turn
 // function and the report function it invokes asynchronously, the cancel table, GET /doc/{id},
-// GET /spend, the conversation and report routes and POST /export on an HTTP API, one Cognito
-// user, and the page on CloudFront with a generated config.json. Every resource is destroyable
-// and nothing costs money at idle.
+// GET /spend, the conversation, report and fact-store routes and POST /export on an HTTP API,
+// the comparison function invoked with { corpus }, one Cognito user, and the page on CloudFront
+// with a generated config.json. Every resource is destroyable and nothing costs money at idle.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +150,20 @@ export class AppStack extends Stack {
     const reportsFn = fn("reports", {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
+    const factsFn = fn("facts", {
+      environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
+    });
+    // Alignment compares every pair of claim vectors in memory; 1769 MB is one full vCPU.
+    const compareFn = fn("compare", {
+      timeout: Duration.minutes(15),
+      memorySize: 1769,
+      environment: {
+        MODEL_PROVIDER: "bedrock",
+        DB_RESOURCE_ARN: dbResourceArn,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_NAME: dbName,
+      },
+    });
     const exportFn = fn("export", {
       environment: {
         DB_RESOURCE_ARN: dbResourceArn,
@@ -202,7 +216,16 @@ export class AppStack extends Stack {
     });
 
     for (const f of [turnFn, reportFn, wsRoutesFn]) webSocketApi.grantManageConnections(f);
-    for (const f of [turnFn, reportFn, wsRoutesFn, conversationsFn, reportsFn, exportFn]) {
+    for (const f of [
+      turnFn,
+      reportFn,
+      wsRoutesFn,
+      conversationsFn,
+      reportsFn,
+      factsFn,
+      compareFn,
+      exportFn,
+    ]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -221,7 +244,7 @@ export class AppStack extends Stack {
         }),
       );
     }
-    for (const f of [turnFn, reportFn]) {
+    for (const f of [turnFn, reportFn, compareFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
@@ -323,6 +346,24 @@ export class AppStack extends Stack {
       authorizer: userAuthorizer,
     });
 
+    const factsIntegration = new HttpLambdaIntegration("FactsIntegration", factsFn);
+    for (const [routePath, method] of [
+      ["/facts/groups", apigwv2.HttpMethod.GET],
+      ["/facts/matrix", apigwv2.HttpMethod.GET],
+      ["/facts/timeline", apigwv2.HttpMethod.GET],
+      ["/facts/witness/{id}", apigwv2.HttpMethod.GET],
+      ["/facts/override", apigwv2.HttpMethod.POST],
+      ["/facts/accept", apigwv2.HttpMethod.POST],
+      ["/facts/hypothesis", apigwv2.HttpMethod.POST],
+    ]) {
+      httpApi.addRoutes({
+        path: routePath,
+        methods: [method],
+        integration: factsIntegration,
+        authorizer: userAuthorizer,
+      });
+    }
+
     // The presigned GET is the access control, and a holder of the URL can fetch it outside a
     // browser anyway. A rule naming the distribution's domain would make the data stack
     // depend on this one, which already depends on it for the bucket.
@@ -345,6 +386,7 @@ export class AppStack extends Stack {
           spendUrl: `${httpApi.apiEndpoint}/spend`,
           conversationsUrl: `${httpApi.apiEndpoint}/conversations`,
           reportsUrl: `${httpApi.apiEndpoint}/reports`,
+          factsUrl: `${httpApi.apiEndpoint}/facts`,
           exportUrl: `${httpApi.apiEndpoint}/export`,
           auth: {
             region: this.region,
@@ -364,5 +406,6 @@ export class AppStack extends Stack {
     new CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: client.userPoolClientId });
     new CfnOutput(this, "DemoUserName", { value: demoUser.username });
+    new CfnOutput(this, "CompareFunctionName", { value: compareFn.functionName });
   }
 }
