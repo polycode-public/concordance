@@ -272,11 +272,44 @@ const DELETE_ASSERTIONS = `
   DELETE FROM assertions a USING chunks c
    WHERE a.source_chunk_id = c.id AND c.document_id = $1`;
 
+const SELECT_PROGRESS = `
+  SELECT source_sha256, tool_version, model, prompt_version, window_size, windows_done
+    FROM extraction_progress WHERE document_id = $1`;
+
+const UPSERT_PROGRESS = `
+  INSERT INTO extraction_progress (document_id, source_sha256, tool_version, model,
+                                   prompt_version, window_size, windows_done)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  ON CONFLICT (document_id) DO UPDATE SET
+    source_sha256 = EXCLUDED.source_sha256, tool_version = EXCLUDED.tool_version,
+    model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,
+    window_size = EXCLUDED.window_size, windows_done = EXCLUDED.windows_done,
+    updated_at = now()`;
+
+const DELETE_PROGRESS = "DELETE FROM extraction_progress WHERE document_id = $1";
+
+const ASSERTION_COLUMNS = [
+  "chunk",
+  "event",
+  "predicate",
+  "object_text",
+  "object_entity",
+  "time_text",
+  "place_text",
+  "place_entity",
+  "polarity",
+  "modality",
+  "confidence",
+];
+
 /**
- * Extracts the assertions of one ingested document. Model calls run before the transaction;
- * every row is written in one transaction, so a failure leaves nothing behind. A document
- * whose sentence set was already extracted with this model, prompt and pipeline version is
- * skipped; one extracted under another version is replaced.
+ * Extracts the assertions of one ingested document. Each window's rows are written in their
+ * own transaction together with a progress row, so a stopped run keeps what it stored and the
+ * next run resumes after the last stored window. When the abort signal fires the run stores
+ * the window in hand and returns status "partial". The finished provenance row is written in
+ * the transaction of the last window. A document whose sentence set was already extracted
+ * with this model, prompt and pipeline version is skipped; one extracted under another
+ * version, or whose sentences changed, is replaced from the first window.
  * @param {object} args
  * @param {string} args.documentId
  * @param {import('../providers/modelProvider.mjs').ModelProvider} args.provider
@@ -315,6 +348,7 @@ export async function extractAssertions({
   if (!sentences.length) throw new Error(`${documentId} has no sentence chunks`);
   stage("sentences-loaded", sentences.length);
 
+  const windows = sentenceWindows(sentences, window);
   const sourceSha256 = sha256Text(JSON.stringify(sentences.map((s) => [s.id, s.text])));
   const zero = { sentences: sentences.length, calls: 0, kept: 0, rejected: 0, written: 0 };
   const done = await db.query(
@@ -324,19 +358,170 @@ export async function extractAssertions({
   );
   if (done.rows.length) {
     stage("skipped", 0);
-    return { status: "skipped", counts: zero };
+    return {
+      status: "skipped",
+      counts: zero,
+      windows: { done: windows.length, total: windows.length },
+    };
   }
 
-  const kept = [];
+  const {
+    rows: [progress],
+  } = await db.query(SELECT_PROGRESS, [documentId]);
+  const resumes =
+    progress &&
+    progress.source_sha256 === sourceSha256 &&
+    progress.tool_version === pipelineVersion &&
+    progress.model === extractModel &&
+    progress.prompt_version === EXTRACT_PROMPT_VERSION &&
+    Number(progress.window_size) === window &&
+    Number(progress.windows_done) < windows.length;
+  const first = resumes ? Number(progress.windows_done) : 0;
+  if (first > 0) stage("resumed", first);
+
+  const registers = await loadRegisters(db);
+  if (registers.ignoredAliases.length) {
+    stage("cipher-entity-aliases-ignored", registers.ignoredAliases.length);
+  }
+
   const seen = new Set();
   const rejected = {};
   let calls = 0;
-  for (const w of sentenceWindows(sentences, window)) {
-    const result = await provider.extractJson({
-      prompt: extractPrompt(w),
-      schema: ASSERTION_SCHEMA,
-      signal,
-    });
+  let keptCount = 0;
+  let written = 0;
+  let entityCount = 0;
+  let eventCount = 0;
+  let replaced = false;
+  let next = first;
+
+  const writeWindow = async (kept, index) => {
+    for (const r of kept) {
+      r.objectEntity = entityFor(registers, r.object_text, r.objectKind);
+      r.placeEntity = entityFor(registers, r.place_text, "place");
+    }
+    const newEntities = new Map();
+    for (const r of kept) {
+      for (const e of [r.objectEntity, r.placeEntity]) {
+        if (e && !e.id) newEntities.set(entityKey(e.kind, e.canonical.toLowerCase()), e);
+      }
+    }
+    const eventNames = new Map();
+    for (const r of kept)
+      if (r.event_text) eventNames.set(r.event_text.toLowerCase(), r.event_text);
+
+    const last = index === windows.length - 1;
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (index === 0) {
+        const removed = await client.query(DELETE_ASSERTIONS, [documentId]);
+        if (removed.rowCount) replaced = true;
+      }
+      const entityIds = new Map();
+      for (const batch of byteBatches([...newEntities.values()])) {
+        const params = [batch.map((e) => e.kind), batch.map((e) => e.canonical)];
+        await client.query(INSERT_ENTITIES, params);
+        for (const row of (await client.query(SELECT_ENTITIES, params)).rows) {
+          entityIds.set(entityKey(row.kind, row.canonical.toLowerCase()), String(row.id));
+        }
+      }
+      const eventIds = new Map();
+      for (const batch of byteBatches([...eventNames.values()])) {
+        await client.query(INSERT_EVENTS, [batch]);
+        for (const row of (await client.query(SELECT_EVENTS, [batch])).rows) {
+          eventIds.set(row.name.toLowerCase(), String(row.id));
+        }
+      }
+      const idOf = (e) => {
+        if (!e) return null;
+        if (e.id) return e.id;
+        const id = entityIds.get(entityKey(e.kind, e.canonical.toLowerCase()));
+        if (!id) throw new Error(`${documentId}: entity ${e.kind} ${e.canonical} was not stored`);
+        return id;
+      };
+      const rows = kept.map((r) => ({
+        chunk: r.sourceChunkId,
+        event: r.event_text ? eventIds.get(r.event_text.toLowerCase()) : null,
+        predicate: r.predicate,
+        object_text: r.object_text,
+        object_entity: idOf(r.objectEntity),
+        time_text: r.time_text,
+        place_text: r.place_text,
+        place_entity: idOf(r.placeEntity),
+        polarity: r.polarity,
+        modality: r.modality,
+        confidence: r.confidence,
+      }));
+      for (const row of rows) {
+        if (row.event === undefined) throw new Error(`${documentId}: an event was not stored`);
+      }
+      let stored = 0;
+      for (const batch of byteBatches(rows)) {
+        const result = await client.query(INSERT_ASSERTIONS, [
+          document.witness_id,
+          extractModel,
+          pipelineVersion,
+          ...ASSERTION_COLUMNS.map((c) => batch.map((r) => r[c])),
+        ]);
+        stored += result.rowCount ?? batch.length;
+      }
+      if (last) {
+        await client.query(
+          `INSERT INTO provenance (derived_sha256, source_sha256, step, tool, tool_version, model, prompt_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            sha256Text(JSON.stringify([sourceSha256, window, windows.length])),
+            sourceSha256,
+            EXTRACT_STEP,
+            EXTRACT_TOOL,
+            pipelineVersion,
+            extractModel,
+            EXTRACT_PROMPT_VERSION,
+          ],
+        );
+        await client.query(DELETE_PROGRESS, [documentId]);
+      } else {
+        await client.query(UPSERT_PROGRESS, [
+          documentId,
+          sourceSha256,
+          pipelineVersion,
+          extractModel,
+          EXTRACT_PROMPT_VERSION,
+          window,
+          index + 1,
+        ]);
+      }
+      await client.query("COMMIT");
+      written += stored;
+      entityCount += newEntities.size;
+      eventCount += eventNames.size;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  };
+
+  let stopped = false;
+  for (; next < windows.length; next++) {
+    if (signal?.aborted) {
+      stopped = true;
+      break;
+    }
+    const w = windows[next];
+    let result;
+    try {
+      result = await provider.extractJson({
+        prompt: extractPrompt(w),
+        schema: ASSERTION_SCHEMA,
+        signal,
+      });
+    } catch (err) {
+      if (!signal?.aborted) throw err;
+      stopped = true;
+      break;
+    }
     calls++;
     if (!Array.isArray(result?.assertions)) {
       throw new Error(
@@ -344,6 +529,7 @@ export async function extractAssertions({
           `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}: ${JSON.stringify(result).slice(0, 200)}`,
       );
     }
+    const kept = [];
     const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
     for (const raw of result.assertions) {
       const checked = checkAssertion(raw, targets);
@@ -370,126 +556,28 @@ export async function extractAssertions({
         );
       }
     }
+    keptCount += kept.length;
+    await writeWindow(kept, next);
   }
   const rejectedCount = Object.values(rejected).reduce((a, b) => a + b, 0);
   stage("calls-made", calls);
-  stage("assertions-kept", kept.length);
+  stage("assertions-kept", keptCount);
   stage("assertions-rejected", rejectedCount, { reasons: rejected });
-
-  const registers = await loadRegisters(db);
-  if (registers.ignoredAliases.length) {
-    stage("cipher-entity-aliases-ignored", registers.ignoredAliases.length);
+  stage("rows-written", written, { entities: entityCount, events: eventCount });
+  const counts = {
+    sentences: sentences.length,
+    calls,
+    kept: keptCount,
+    rejected: rejectedCount,
+    written,
+  };
+  if (stopped) {
+    stage("stopped", next, { windows: windows.length });
+    return { status: "partial", counts, windows: { done: next, total: windows.length } };
   }
-  for (const r of kept) {
-    r.objectEntity = entityFor(registers, r.object_text, r.objectKind);
-    r.placeEntity = entityFor(registers, r.place_text, "place");
-  }
-  const newEntities = new Map();
-  for (const r of kept) {
-    for (const e of [r.objectEntity, r.placeEntity]) {
-      if (e && !e.id) newEntities.set(entityKey(e.kind, e.canonical.toLowerCase()), e);
-    }
-  }
-  const eventNames = new Map();
-  for (const r of kept) if (r.event_text) eventNames.set(r.event_text.toLowerCase(), r.event_text);
-
-  const client = await db.pool.connect();
-  let status = "extracted";
-  let written = 0;
-  try {
-    await client.query("BEGIN");
-    const removed = await client.query(DELETE_ASSERTIONS, [documentId]);
-    if (removed.rowCount) status = "replaced";
-
-    const entityIds = new Map();
-    for (const batch of byteBatches([...newEntities.values()])) {
-      const params = [batch.map((e) => e.kind), batch.map((e) => e.canonical)];
-      await client.query(INSERT_ENTITIES, params);
-      for (const row of (await client.query(SELECT_ENTITIES, params)).rows) {
-        entityIds.set(entityKey(row.kind, row.canonical.toLowerCase()), String(row.id));
-      }
-    }
-    const eventIds = new Map();
-    for (const batch of byteBatches([...eventNames.values()])) {
-      await client.query(INSERT_EVENTS, [batch]);
-      for (const row of (await client.query(SELECT_EVENTS, [batch])).rows) {
-        eventIds.set(row.name.toLowerCase(), String(row.id));
-      }
-    }
-    const idOf = (e) => {
-      if (!e) return null;
-      if (e.id) return e.id;
-      const id = entityIds.get(entityKey(e.kind, e.canonical.toLowerCase()));
-      if (!id) throw new Error(`${documentId}: entity ${e.kind} ${e.canonical} was not stored`);
-      return id;
-    };
-    const rows = kept.map((r) => ({
-      chunk: r.sourceChunkId,
-      event: r.event_text ? eventIds.get(r.event_text.toLowerCase()) : null,
-      predicate: r.predicate,
-      object_text: r.object_text,
-      object_entity: idOf(r.objectEntity),
-      time_text: r.time_text,
-      place_text: r.place_text,
-      place_entity: idOf(r.placeEntity),
-      polarity: r.polarity,
-      modality: r.modality,
-      confidence: r.confidence,
-    }));
-    for (const row of rows) {
-      if (row.event === undefined) throw new Error(`${documentId}: an event was not stored`);
-    }
-    const columns = [
-      "chunk",
-      "event",
-      "predicate",
-      "object_text",
-      "object_entity",
-      "time_text",
-      "place_text",
-      "place_entity",
-      "polarity",
-      "modality",
-      "confidence",
-    ];
-    for (const batch of byteBatches(rows)) {
-      const result = await client.query(INSERT_ASSERTIONS, [
-        document.witness_id,
-        extractModel,
-        pipelineVersion,
-        ...columns.map((c) => batch.map((r) => r[c])),
-      ]);
-      written += result.rowCount ?? batch.length;
-    }
-    await client.query(
-      `INSERT INTO provenance (derived_sha256, source_sha256, step, tool, tool_version, model, prompt_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        sha256Text(JSON.stringify(rows)),
-        sourceSha256,
-        EXTRACT_STEP,
-        EXTRACT_TOOL,
-        pipelineVersion,
-        extractModel,
-        EXTRACT_PROMPT_VERSION,
-      ],
-    );
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-  stage("rows-written", written, { entities: newEntities.size, events: eventNames.size });
   return {
-    status,
-    counts: {
-      sentences: sentences.length,
-      calls,
-      kept: kept.length,
-      rejected: rejectedCount,
-      written,
-    },
+    status: first === 0 && replaced ? "replaced" : "extracted",
+    counts,
+    windows: { done: windows.length, total: windows.length },
   };
 }

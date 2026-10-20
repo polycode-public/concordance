@@ -2,12 +2,14 @@
 // Copyright 2026 Polycode Limited
 //
 // One Map item of the extraction pass of the ingest state machine: the sentence chunks of one
-// ingested document into its assertions. A throw fails this item only.
+// ingested document into its assertions. A throw fails this item only. A run that reaches the
+// write margin returns status "partial" with the windows it stored; the next execution of the
+// state machine resumes the document.
 
 import { extractAssertions } from "../core/facts/extract.mjs";
 import { corpusInfo, parseManifest } from "../core/ingest/run.mjs";
 
-/** The time kept back from the model calls so the transaction can write before the timeout. */
+/** The time kept back from the model calls so the window in hand can write before the timeout. */
 export const WRITE_MARGIN_MS = 60_000;
 
 /**
@@ -27,7 +29,7 @@ export function createHandler({ providerFor, openDb, now = Date.now, log = conso
     const provider = await providerFor();
     const db = await openDb();
     try {
-      const { status, counts } = await extractAssertions({
+      const { status, counts, windows } = await extractAssertions({
         documentId: row.evidence_id,
         provider,
         db,
@@ -35,8 +37,17 @@ export function createHandler({ providerFor, openDb, now = Date.now, log = conso
         log,
         now,
       });
-      log(JSON.stringify({ evidenceId: row.evidence_id, status, ...counts, ms: now() - started }));
-      return { evidenceId: row.evidence_id, status, counts };
+      log(
+        JSON.stringify({
+          evidenceId: row.evidence_id,
+          status,
+          ...counts,
+          windowsDone: windows.done,
+          windowsTotal: windows.total,
+          ms: now() - started,
+        }),
+      );
+      return { evidenceId: row.evidence_id, status, counts, windows };
     } finally {
       await db.close();
     }

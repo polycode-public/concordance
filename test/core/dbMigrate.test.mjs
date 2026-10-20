@@ -95,6 +95,21 @@ describe("splitStatements", () => {
     expect(reports).toContain("CHECK (filename ~ '^[a-z0-9][a-z0-9-]*\\.md$')");
   });
 
+  it("splits 0006_extraction_progress.sql into one table keyed by document", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0006_extraction_progress.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    const [progress] = statements;
+    expect(progress).toMatch(/^CREATE TABLE extraction_progress \(/);
+    for (const column of [
+      "document_id     text PRIMARY KEY REFERENCES documents (id) ON DELETE CASCADE",
+      "source_sha256   char(64) NOT NULL",
+      "window_size     int NOT NULL",
+      "windows_done    int NOT NULL",
+    ])
+      expect(progress).toContain(column);
+  });
+
   it("does not split on a ; inside a string literal or an identifier", () => {
     expect(splitStatements(`SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"; SELECT 2`)).toEqual([
       `SELECT 'a;b', 'it''s; x', E'q\\'; r', "c;d"`,
