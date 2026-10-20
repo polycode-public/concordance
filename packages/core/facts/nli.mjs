@@ -24,7 +24,7 @@ import { normaliseSpan } from "./registers.mjs";
 import { parseTimeWindow, windowsDisjoint } from "./timeline.mjs";
 
 export const RULES_MODEL = "rules-v2";
-export const NLI_PROMPT_VERSION = "nli-v2";
+export const NLI_PROMPT_VERSION = "nli-v3";
 export const PAIRS_PER_CALL = 8;
 export const REASON_MAX = 240;
 
@@ -246,6 +246,7 @@ const WITNESS_RULES = [
   "agree when B states the same thing as A; contradict when B and A cannot both be true (a different time, place, person, number or a denial); unrelated when they are not about the same matter.",
   "Different wording, more detail, or a hedge such as 'about' is not a contradiction. Times stated with 'about' or 'around' agree when they are within ten minutes.",
   "Two people who each did, saw or were told something at a different time or place do not contradict each other. Contradict needs one event, person or thing that A and B describe in ways that cannot both be true.",
+  "Two witnesses' statements about themselves (their own age, health, home or family) are not about one person and do not contradict.",
 ];
 const ACCEPTED_RULES = [
   "You compare a sentence from a witness statement with an accepted fact.",

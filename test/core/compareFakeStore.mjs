@@ -35,6 +35,10 @@ export function createCompareStore(seed = {}) {
   const doc = (id) => t.documents.find((d) => d.id === id);
   const assertion = (id) => t.assertions.find((a) => a.id === String(id));
   const asId = (v) => (v === null || v === undefined ? null : String(v));
+  const subjectWitness = (a) => {
+    const e = t.entities.find((x) => x.id === asId(a.subject_entity_id) && x.kind === "person");
+    return e ? (t.witnesses.find((w) => w.id === e.canonical)?.id ?? null) : null;
+  };
   const pairOf = (c) =>
     `${c.kind}:${c.assertion_a}:${c.assertion_b ?? 0}:${c.accepted_fact_id ?? 0}`;
 
@@ -56,6 +60,7 @@ export function createCompareStore(seed = {}) {
             ...a,
             object_entity_kind:
               t.entities.find((e) => e.id === asId(a.object_entity_id))?.kind ?? null,
+            subject_witness_id: subjectWitness(a),
             document_id: c.document_id,
             sentence: c.text,
             statement_date: d.statement_date ?? null,

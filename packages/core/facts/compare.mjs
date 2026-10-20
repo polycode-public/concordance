@@ -29,7 +29,7 @@ import {
   rulesLabel,
 } from "./nli.mjs";
 
-export const COMPARE_PIPELINE_VERSION = "compare-v2";
+export const COMPARE_PIPELINE_VERSION = "compare-v3";
 /** A running row older than this belongs to an invocation that died; the Lambda timeout is 15. */
 export const LEASE_MINUTES = 16;
 const ASSERTION_PAGE = 400;
@@ -38,6 +38,7 @@ const LABELLED_PAGE = 2000;
 export const RUN_SQL = Object.freeze({
   assertions: `
   SELECT a.id, a.witness_id, a.source_chunk_id, a.event_id, a.subject_text, a.subject_kind,
+         a.claim_kind, a.subject_entity_id, sw.id AS subject_witness_id,
          a.predicate, a.object_text, a.object_entity_id, oe.kind AS object_entity_kind,
          a.time_text, a.place_text, a.place_entity_id, a.polarity, a.modality, a.confidence,
          c.document_id, c.text AS sentence,
@@ -46,6 +47,8 @@ export const RUN_SQL = Object.freeze({
     JOIN chunks c ON c.id = a.source_chunk_id
     JOIN documents d ON d.id = c.document_id
     LEFT JOIN entities oe ON oe.id = a.object_entity_id
+    LEFT JOIN entities se ON se.id = a.subject_entity_id AND se.kind = 'person'
+    LEFT JOIN witnesses sw ON sw.id = se.canonical
    WHERE d.corpus = $1 AND a.id > $2::bigint
    ORDER BY a.id LIMIT $3`,
   facts: `SELECT id, assertion_id, text, is_hypothesis FROM accepted_facts ORDER BY id`,
@@ -95,6 +98,9 @@ export function assertionFromRow(r) {
     eventId: id(r.event_id),
     subjectText: r.subject_text ?? null,
     subjectKind: r.subject_kind ?? null,
+    claimKind: r.claim_kind ?? null,
+    subjectEntityId: id(r.subject_entity_id),
+    subjectWitnessId: r.subject_witness_id ?? null,
     predicate: r.predicate,
     objectText: r.object_text ?? null,
     objectEntityId: id(r.object_entity_id),
@@ -156,6 +162,9 @@ export function inputHash(assertions, facts) {
         a.eventId,
         a.subjectText,
         a.subjectKind,
+        a.claimKind,
+        a.subjectEntityId,
+        a.subjectWitnessId,
         a.predicate,
         a.objectText,
         a.objectEntityId,

@@ -13,6 +13,7 @@ import {
   sentenceWindows,
 } from "../../packages/core/facts/extract.mjs";
 import { ReplyTruncatedError } from "../../packages/core/providers/modelProvider.mjs";
+import { CLAIM_KINDS } from "../../packages/core/facts/align.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { createFactsStore } from "./factsFakeStore.mjs";
 
@@ -156,6 +157,7 @@ describe("checkAssertion", () => {
         sourceChunkId: "12",
         subject_text: "I",
         subjectKind: "witness",
+        claimKind: null,
         predicate: "did not see",
         object_text: "firefighters",
         event_text: "the fire",
@@ -197,6 +199,7 @@ describe("checkAssertion", () => {
     [{ ...A1, subject_text: null, subject_kind: "group" }, "subject_kind", "kind-without-subject"],
     [{ ...A1, subject_text: "W5", subject_kind: "crowd" }, "subject_kind", "not-a-subject-kind"],
     [{ ...A1, event_text: "the blaze" }, "event_text", "not-shared-or-in-sentence"],
+    [{ ...A1, claim_kind: "opinion" }, "claim_kind", "not-a-claim-kind"],
     ["text", null, "not-an-object"],
   ])("rejects %j at %s as %s", (raw, field, reason) => {
     expect(checkAssertion(raw, targets)).toMatchObject({ ok: false, field, reason });
@@ -259,6 +262,71 @@ describe("checkAssertion subjects and events", () => {
       field: "event_text",
       reason: "too-long",
     });
+  });
+});
+
+describe("checkAssertion claim kinds and pronoun subjects", () => {
+  const NAMED = "Mrs Alder was carried down the stairs by a firefighter.";
+  const SHE = "She died the following day.";
+  const targets = new Map([
+    [1, { id: "21", ordinal: 1, text: NAMED }],
+    [2, { id: "22", ordinal: 2, text: SHE }],
+    [3, { id: "23", ordinal: 3, text: "The fire spread quickly up the building." }],
+  ]);
+  const died = { sentence: 2, subject_kind: "person", predicate: "died", polarity: "positive" };
+
+  it("offers the claim kinds in the schema and keeps each one, or null", () => {
+    const item = ASSERTION_SCHEMA.properties.assertions.items.properties;
+    expect(item.claim_kind).toEqual({ enum: [...CLAIM_KINDS, null] });
+    expect(CLAIM_KINDS).toEqual(["attribute", "action", "observation", "report"]);
+    const one = new Map([[1, { id: "12", ordinal: 1, text: S1 }]]);
+    for (const kind of CLAIM_KINDS) {
+      expect(checkAssertion({ ...A1, claim_kind: kind }, one).row.claimKind).toBe(kind);
+    }
+    expect(checkAssertion(A1, one).row.claimKind).toBeNull();
+  });
+
+  it("asks for the name a pronoun stands for and for the claim kind", () => {
+    const prompt = extractPrompt({
+      before: null,
+      targets: [{ ordinal: 0, text: "A." }],
+      after: null,
+    });
+    expect(prompt).toContain(
+      "When the target sentence names the subject by a pronoun such as he, she, they, it or 'this man', subject_text is the name or description of that person or thing, copied exactly from the target sentence or another sentence shown here. Write the pronoun only when no sentence shown here names them.",
+    );
+    expect(prompt).toContain(
+      "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
+    );
+    expect(prompt).not.toContain("resolve pronouns");
+  });
+
+  it("keeps the name a pronoun stands for from a target or a context sentence", () => {
+    expect(checkAssertion({ ...died, subject_text: "Mrs Alder" }, targets).row).toMatchObject({
+      sourceChunkId: "22",
+      subject_text: "Mrs Alder",
+      subjectKind: "person",
+    });
+    const context = ["Mr Birch lived on the twentieth floor.", null];
+    expect(
+      checkAssertion({ ...died, subject_text: "Mr Birch" }, targets, [], context).row.subject_text,
+    ).toBe("Mr Birch");
+    expect(checkAssertion({ ...died, subject_text: "She" }, targets).row.subject_text).toBe("She");
+  });
+
+  it("rejects a name from outside the window, or from a neighbour when the sentence has no pronoun", () => {
+    expect(checkAssertion({ ...died, subject_text: "Mr Birch" }, targets)).toMatchObject({
+      ok: false,
+      field: "subject_text",
+      reason: "not-in-sentence",
+    });
+    const fire = { ...died, sentence: 3, subject_text: "Mrs Alder", predicate: "spread" };
+    expect(checkAssertion(fire, targets)).toMatchObject({
+      ok: false,
+      field: "subject_text",
+      reason: "not-in-sentence",
+    });
+    expect(checkAssertion({ ...died, subject_text: "Ald" }, targets).ok).toBe(false);
   });
 });
 
@@ -377,6 +445,40 @@ describe("extractAssertions", () => {
     expect(prompts[0]).toContain("'the fire brigade arriving'");
     expect(store.tables.events).toEqual([
       { id: expect.any(String), name: "the fire starting in Flat 16" },
+    ]);
+  });
+
+  it("stores the claim kind and the register entry a subject names, from the window", async () => {
+    const named = "Witness W5 lived on the twentieth floor.";
+    const store = createFactsStore(
+      seed({
+        sentences: [
+          { id: "11", document_id: "IWS1", ordinal: 0, text: named },
+          { id: "12", document_id: "IWS1", ordinal: 1, text: "She died the following day." },
+          { id: "13", document_id: "IWS1", ordinal: 2, text: "He was 80 years old." },
+        ],
+      }),
+    );
+    const report = { subject_kind: "person", polarity: "positive", claim_kind: "report" };
+    const { result } = await run(store, {
+      0: [{ ...report, sentence: 0, subject_text: "Witness W5", predicate: "lived on" }],
+      1: [{ ...report, sentence: 1, subject_text: "Witness W5", predicate: "died" }],
+      2: [{ ...report, sentence: 2, subject_text: "He", predicate: "was" }],
+    });
+    expect(result.counts).toMatchObject({ kept: 3, rejected: 0 });
+    const cipher = store.tables.entities.find((e) => e.canonical === "W5");
+    expect(cipher).toMatchObject({ kind: "person" });
+    expect(
+      store.tables.assertions.map((a) => [
+        a.source_chunk_id,
+        a.subject_text,
+        a.claim_kind,
+        a.subject_entity_id,
+      ]),
+    ).toEqual([
+      ["11", "Witness W5", "report", cipher.id],
+      ["12", "Witness W5", "report", cipher.id],
+      ["13", "He", "report", null],
     ]);
   });
 
