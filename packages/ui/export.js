@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The Export control in the header: posts the current session and thread, then shows the key
-// the document was written under and a link that opens it in a new tab.
+// The Export control in the header: posts the current session, thread and corpus, then shows the
+// key the document was written under and a link that opens it in a new tab.
 
 /**
  * @param {{ exportUrl?: string }} config
- * @param {{ token: () => string | null }} page
+ * @param {{ token: () => string | null, corpus: () => string }} page
  * @returns {{ ready: (sessionId: string, thread: string) => void, reset: () => void }}
  */
-export function mountExport(config, { token }) {
+export function mountExport(config, { token, corpus }) {
   const url = config.exportUrl;
   if (typeof url !== "string") throw new Error("config.json has no exportUrl");
   const button = document.getElementById("export");
@@ -38,7 +38,7 @@ export function mountExport(config, { token }) {
           "content-type": "application/json",
           ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         },
-        body: JSON.stringify(target),
+        body: JSON.stringify({ ...target, corpus: corpus() }),
       });
       if (!res.ok) {
         const { message } = await res.json().catch(() => ({}));

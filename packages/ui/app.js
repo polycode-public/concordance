@@ -2,6 +2,7 @@
 // Copyright 2026 Polycode Limited
 import { currentToken, isExpired, signIn, signOut } from "./auth.js";
 import { mountConversations, replayTurns } from "./conversations.js";
+import { chooseCorpus, configCorpora, readStoredCorpus, storeCorpus } from "./corpus.mjs";
 import { mountExport } from "./export.js";
 import { mountFacts } from "./facts.js";
 import { mountReports } from "./reports.js";
@@ -49,6 +50,14 @@ let evidenceTurn = null;
 
 /** @type {ReturnType<typeof mountReports> | null} */
 let reports = null;
+/** @type {ReturnType<typeof mountFacts> | null} */
+let facts = null;
+/** @type {ReturnType<typeof mountConversations> | null} */
+let conversations = null;
+/** The id of the corpus every frame and route reads. */
+let corpus;
+/** @type {{ id: string, name: string }[]} */
+let corpora = [];
 /** @type {{ ready: (sessionId: string, thread: string) => void, reset: () => void } | null} */
 let exporter = null;
 let replaying = false;
@@ -56,7 +65,7 @@ let replaying = false;
 /** Every document cited this session, by document id. */
 const documents = new Map();
 
-/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, reportsUrl: string, factsUrl: string, exportUrl: string, auth: null | { region: string, userPoolId: string, clientId: string } }} */
+/** @type {{ wsUrl: string, httpUrl: string, spendUrl: string, conversationsUrl: string, reportsUrl: string, factsUrl: string, exportUrl: string, corpora: { id: string, name: string }[], auth: null | { region: string, userPoolId: string, clientId: string } }} */
 let config;
 
 async function loadConfig() {
@@ -65,11 +74,47 @@ async function loadConfig() {
   return res.json();
 }
 
-function nameCorpus({ title, subtitle }) {
-  const name = `${title}: ${subtitle}`;
+const corpusName = () => corpora.find((c) => c.id === corpus).name;
+
+function nameCorpus() {
+  const name = `${corpusName()}: witness statements`;
   $("corpus-name").textContent = name;
   $("signin-corpus").textContent = name;
-  document.title = `Concordance: ${title} ${subtitle}`;
+  document.title = `Concordance: ${corpusName()} witness statements`;
+}
+
+/** Fills the header's drop list; a change starts a new conversation in the chosen corpus. */
+function mountCorpusChoice() {
+  const select = $("corpus-select");
+  select.replaceChildren(
+    ...corpora.map((c) => {
+      const option = el("option", null, c.name);
+      option.value = c.id;
+      return option;
+    }),
+  );
+  select.value = corpus;
+  select.disabled = corpora.length < 2;
+  select.addEventListener("change", () => switchCorpus(select.value));
+}
+
+/** Moves every panel to another corpus: a new conversation, and each list read again. */
+async function switchCorpus(id) {
+  if (id === corpus || !corpora.some((c) => c.id === id)) return;
+  corpus = id;
+  storeCorpus(id);
+  nameCorpus();
+  startNew();
+  mountSuggestions(id);
+  closeViewer();
+  conversations?.reload();
+  await Promise.all([
+    reports?.reload(suggestionsFor(id, "reports")),
+    facts?.reload().catch((err) => {
+      console.error(err);
+      $("facts-message").textContent = `Contradictions are unavailable (${err.message}).`;
+    }),
+  ]);
 }
 
 async function connect() {
@@ -200,7 +245,7 @@ function open(documentId, locator) {
     return;
   }
   opening = documentId;
-  ws.send(JSON.stringify({ type: "open", docId: documentId, locator }));
+  ws.send(JSON.stringify({ type: "open", docId: documentId, locator, corpus }));
 }
 
 function el(tag, className, text) {
@@ -559,7 +604,7 @@ form.addEventListener("submit", (event) => {
   newest = turn;
   question.value = "";
   cancelButton.disabled = false;
-  ws.send(JSON.stringify({ type: "turn", thread, turnId: turn.id, text, attachments: [] }));
+  ws.send(JSON.stringify({ type: "turn", thread, turnId: turn.id, text, attachments: [], corpus }));
 });
 
 question.addEventListener("keydown", (event) => {
@@ -627,8 +672,11 @@ if (new URLSearchParams(location.search).has("present")) {
 
 try {
   config = await loadConfig();
-  nameCorpus(config.corpus);
-  mountSuggestions(config.corpus.id);
+  corpora = configCorpora(config);
+  corpus = chooseCorpus(corpora, readStoredCorpus());
+  nameCorpus();
+  mountCorpusChoice();
+  mountSuggestions(corpus);
   await connect();
 } catch (err) {
   connectionEl.textContent = `cannot start: ${err.message}`;
@@ -636,8 +684,9 @@ try {
 
 if (config) {
   const token = () => (config.auth ? currentToken() : null);
+  const chosen = () => corpus;
   try {
-    mountConversations(config, { token, replay, startNew });
+    conversations = mountConversations(config, { token, corpus: chosen, replay, startNew });
   } catch (err) {
     console.error(err);
     const opener = $("conversations-open");
@@ -655,8 +704,9 @@ if (config) {
         return true;
       },
       thread: () => thread,
+      corpus: chosen,
       open,
-      suggestions: suggestionsFor(config.corpus.id, "reports"),
+      suggestions: suggestionsFor(corpus, "reports"),
     });
     reports.syncDocuments([...documents.keys()]);
     await reports.refresh();
@@ -665,13 +715,14 @@ if (config) {
     $("reports-message").textContent = `Reports are unavailable (${err.message}).`;
   }
   try {
-    await mountFacts(config, { token, open }).refresh();
+    facts = mountFacts(config, { token, corpus: chosen, open });
+    await facts.refresh();
   } catch (err) {
     console.error(err);
     $("facts-message").textContent = `Contradictions are unavailable (${err.message}).`;
   }
   try {
-    exporter = mountExport(config, { token });
+    exporter = mountExport(config, { token, corpus: chosen });
   } catch (err) {
     console.error(err);
     const status = $("export-status");
@@ -679,7 +730,7 @@ if (config) {
     status.textContent = `Export is unavailable (${err.message}).`;
   }
   try {
-    await showSpend(config, token());
+    await showSpend(config, token);
   } catch (err) {
     console.error(err);
     const strip = $("spend");

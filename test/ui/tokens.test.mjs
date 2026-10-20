@@ -90,9 +90,12 @@ describe("the page's tokens", () => {
     expect(read("index.html").match(/rel="preload"/g)).toHaveLength(2);
   });
 
-  it("writes the corpus title and subtitle from config.json into the header", () => {
+  it("names the chosen corpus from config.json in the header beside its labelled drop list", () => {
     expect(read("index.html")).toMatch(/<header[\s\S]*id="corpus-name"[\s\S]*<\/header>/);
+    expect(read("index.html")).toMatch(
+      /<header[\s\S]*<label for="corpus-select"[\s\S]*<select id="corpus-select"[\s\S]*<\/header>/,
+    );
     expect(read("app.js")).toMatch(/\$\("corpus-name"\)\.textContent = name/);
-    expect(read("app.js")).toContain("nameCorpus(config.corpus)");
+    expect(read("app.js")).toContain("corpora = configCorpora(config)");
   });
 });

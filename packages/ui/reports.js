@@ -3,6 +3,7 @@
 //
 // The "Generated reports" panel: the list, the request form, a stored version rendered with
 // citation chips, and delete with an inline confirm.
+import { withCorpus } from "./corpus.mjs";
 import { chipInline, renderMarkdown } from "./markdown.mjs";
 import { FILENAME, FILENAME_MAX, editTarget, slugFilename } from "./reportNames.mjs";
 
@@ -51,10 +52,11 @@ const checkLine = (checks) => {
  * Wires the panel.
  * @param {{ reportsUrl?: string }} config
  * @param {{ token: () => string | null, send: (frame: object) => boolean,
- *   thread: () => string, open: (documentId: string, locator: object) => void,
+ *   thread: () => string, corpus: () => string,
+ *   open: (documentId: string, locator: object) => void,
  *   suggestions: { text: string, filename?: string }[] }} page
  */
-export function mountReports(config, { token, send, thread, open, suggestions }) {
+export function mountReports(config, { token, send, thread, corpus, open, suggestions }) {
   const base = config.reportsUrl;
   if (typeof base !== "string") throw new Error("config.json has no reportsUrl");
 
@@ -86,7 +88,11 @@ export function mountReports(config, { token, send, thread, open, suggestions })
   };
 
   async function call(url, method = "GET") {
-    const res = await fetch(url, { method, cache: "no-store", headers: headers() });
+    const res = await fetch(withCorpus(url, corpus()), {
+      method,
+      cache: "no-store",
+      headers: headers(),
+    });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.message ?? `the reports route answered ${res.status}`);
@@ -294,6 +300,7 @@ export function mountReports(config, { token, send, thread, open, suggestions })
       topic: text,
       documentIds,
       filename: name,
+      corpus: corpus(),
     };
     if (!send(frame)) {
       setStatus("Not connected to the server.", "error");
@@ -333,25 +340,37 @@ export function mountReports(config, { token, send, thread, open, suggestions })
     }
   });
 
-  pillList.replaceChildren(
-    ...suggestions.map((suggestion) => {
-      const button = el("button", "pill", suggestion.text);
-      button.type = "button";
-      button.addEventListener("click", () =>
-        fillForm({
-          topic: suggestion.text,
-          filename: suggestion.filename ?? slugFilename(suggestion.text),
-        }),
-      );
-      const item = el("li");
-      item.append(button);
-      return item;
-    }),
-  );
-  pillList.hidden = pillList.children.length === 0;
+  const mountPills = (list) => {
+    pillList.replaceChildren(
+      ...list.map((suggestion) => {
+        const button = el("button", "pill", suggestion.text);
+        button.type = "button";
+        button.addEventListener("click", () =>
+          fillForm({
+            topic: suggestion.text,
+            filename: suggestion.filename ?? slugFilename(suggestion.text),
+          }),
+        );
+        const item = el("li");
+        item.append(button);
+        return item;
+      }),
+    );
+    pillList.hidden = pillList.children.length === 0;
+  };
+  mountPills(suggestions);
 
   return {
     refresh,
+    /** Empties the panel for another corpus and lists that corpus's reports. */
+    reload(nextSuggestions) {
+      closeView();
+      pending.clear();
+      busy();
+      setStatus("");
+      mountPills(nextSuggestions);
+      return refresh();
+    },
     syncDocuments,
     /** The existing filename a chat message names, or null. */
     editTarget: (text) => editTarget(text, names),
