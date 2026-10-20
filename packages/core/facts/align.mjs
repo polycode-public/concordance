@@ -9,9 +9,10 @@
 // thing as the shared subject, or a shared object entity of kind place, vehicle or unit anchor it:
 // two witnesses who each went to bed are two events, so a shared predicate is no anchor. Two
 // first-person claims of two witnesses pair only when both are observations of a shared event. A
-// claim about the witness's own age, health, home, family or job is about that witness alone: no
-// event anchors it to another witness's claim, and only a claim whose subject names that witness
-// shares its subject. A pronoun subject names nobody in particular and shares no subject by its
+// person or group named only by a pronoun or by a possessive kin term ("my daughter") with no
+// register entry is somebody different in each statement, so it makes no cross pair at all. A
+// claim about someone's age, health, home, family or job is about that one person: it pairs across
+// witnesses only when both subjects resolve to one register entry, never by an event, an object or
 // words. A witness assertion against an accepted fact makes an accepted pair. Every bound is a
 // constant here.
 import { normaliseSpan } from "./registers.mjs";
@@ -69,6 +70,88 @@ export const pronounSubject = (text) =>
       .toLowerCase()
       .replace(/[^\p{L}\p{N}' ]+/gu, ""),
   );
+
+/** The kin and household nouns that, after a possessive, name somebody of the witness's own. */
+export const KIN_TERMS = Object.freeze([
+  "daughter",
+  "son",
+  "child",
+  "children",
+  "kids",
+  "baby",
+  "husband",
+  "wife",
+  "partner",
+  "boyfriend",
+  "girlfriend",
+  "fiance",
+  "fiancee",
+  "mother",
+  "father",
+  "mum",
+  "mom",
+  "dad",
+  "parent",
+  "parents",
+  "brother",
+  "sister",
+  "sibling",
+  "grandmother",
+  "grandfather",
+  "grandson",
+  "granddaughter",
+  "grandchildren",
+  "nan",
+  "aunt",
+  "uncle",
+  "cousin",
+  "niece",
+  "nephew",
+  "family",
+  "relative",
+  "neighbour",
+  "neighbor",
+  "flatmate",
+  "friend",
+  "carer",
+  "household",
+]);
+
+const KIN_SET = new Set(KIN_TERMS);
+const POSSESSIVES = new Set(["my", "our", "his", "her", "their"]);
+const PLURAL_PRONOUNS = new Set(["we", "us"]);
+
+const subjectWords = (text) =>
+  normaliseSpan(text ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
+    .split(" ")
+    .filter(Boolean);
+
+/** True when a subject span is a possessive followed by a kin or household noun as its head. */
+export function kinSubject(text) {
+  const words = subjectWords(text);
+  if (words.length < 2 || !POSSESSIVES.has(words[0])) return false;
+  const head = words.at(-1).replace(/'s$/, "");
+  return KIN_SET.has(head) || (head.endsWith("s") && KIN_SET.has(head.slice(0, -1)));
+}
+
+/**
+ * True when a person or group subject names nobody the registers know: a pronoun, or a possessive
+ * kin term, with no subject entity.
+ */
+export function unnamedSubject(a) {
+  if (a.subjectKind !== "person" && a.subjectKind !== "group") return false;
+  if (a.subjectEntityId) return false;
+  const words = subjectWords(a.subjectText);
+  return (
+    pronounSubject(a.subjectText) ||
+    (words.length === 1 && PLURAL_PRONOUNS.has(words[0])) ||
+    kinSubject(a.subjectText)
+  );
+}
 
 const LEADING_WORDS = new Set([
   "i",
@@ -139,6 +222,19 @@ export function sameSubject(a, b) {
   return subject !== "" && subject === normaliseObject(b.subjectText);
 }
 
+/**
+ * True when two assertions' subjects resolve to one register entry: one subject entity, or a
+ * witness's first person against a subject resolved to that witness.
+ */
+export function sameRegisteredSubject(a, b) {
+  if (firstPerson(a) && firstPerson(b)) return false;
+  if (firstPerson(a) || firstPerson(b)) {
+    const [self, other] = firstPerson(a) ? [a, b] : [b, a];
+    return Boolean(other.subjectWitnessId) && other.subjectWitnessId === self.witnessId;
+  }
+  return Boolean(a.subjectEntityId) && a.subjectEntityId === b.subjectEntityId;
+}
+
 /** True when two assertions name one event. */
 export const sameEvent = (a, b) => Boolean(a.eventId) && a.eventId === b.eventId;
 
@@ -159,13 +255,17 @@ export function sharedAnchors(a, b) {
   const out = [];
   const sameObjectEntity = Boolean(a.objectEntityId) && a.objectEntityId === b.objectEntityId;
   if (a.witnessId !== b.witnessId) {
+    if (unnamedSubject(a) || unnamedSubject(b)) return [];
     const event = sameEvent(a, b);
     if (firstPerson(a) && firstPerson(b)) {
       return event && a.claimKind === "observation" && b.claimKind === "observation"
         ? ["event"]
         : [];
     }
-    if (event && a.claimKind !== "attribute" && b.claimKind !== "attribute") out.push("event");
+    if (a.claimKind === "attribute" || b.claimKind === "attribute") {
+      return sameRegisteredSubject(a, b) ? ["subject"] : [];
+    }
+    if (event) out.push("event");
     if (sameSubject(a, b)) out.push("subject");
     if (sameObjectEntity && CROSS_OBJECT_KINDS.includes(a.objectEntityKind)) out.push("object");
     return out;

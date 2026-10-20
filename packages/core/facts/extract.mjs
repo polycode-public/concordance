@@ -21,7 +21,7 @@ import { sha256Text } from "../ingest/run.mjs";
 import { CLAIM_KINDS, PRONOUN_SUBJECTS, pronounSubject } from "./align.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
 
-export const EXTRACT_PROMPT_VERSION = "assertions-v4";
+export const EXTRACT_PROMPT_VERSION = "assertions-v5";
 export const EXTRACT_PIPELINE_VERSION = "facts-v1";
 export const EXTRACT_STEP = "extract-assertions";
 export const EXTRACT_WINDOW = 10;
@@ -48,15 +48,18 @@ const FAMILY_WORDS =
   /\b(?:wife|husband|son|sons|daughter|daughters|mother|father|children|child|family)\b/iu;
 const HOME_WORDS = /\b(?:flat|home|house)\b/iu;
 
+/** The subject kinds whose age, residence, health, job, family or home a claim can state. */
+export const ATTRIBUTE_SUBJECT_KINDS = Object.freeze(["witness", "person"]);
+
 /**
- * True when a claim by the witness states the witness's own age, years of residence, health, job,
- * family or home. A family or home word counts only after a having verb, and a health or job word
- * after a being or having verb or a working verb, so "I called my son" and "I left the flat" stay
- * what the model said.
+ * True when a claim states its subject's age, years of residence, health, job, family or home. A
+ * family or home word counts only after a having verb, and a health or job word after a being or
+ * having verb or a working verb, so "I called my son" and "I left the flat" stay what the model
+ * said.
  * @param {string} predicate
  * @param {string | null} objectText
  */
-export function statesOwnAttribute(predicate, objectText) {
+export function statesAttribute(predicate, objectText) {
   const both = `${predicate} ${objectText ?? ""}`;
   if (AGE_WORDS.test(both) || RESIDENCE_WORDS.test(both)) return true;
   if (
@@ -160,8 +163,8 @@ export function extractPrompt({ before, targets, after }, events = []) {
     "Copy every text value exactly as it appears in its own target sentence, with the same words, spelling and case. Do not paraphrase or add words. Use null when the sentence does not state the value.",
     "Fields: sentence is the number n of the target sentence. subject_text is who or what does or undergoes the action of the claim. subject_kind is witness when subject_text is I, we or me (the witness); person for a named or ciphered person or one person such as 'a firefighter'; group for a group such as 'the fire brigade', 'the 999 operator' or 'residents'; thing for a thing such as 'the fire', 'the smoke' or 'the lift'. predicate is the verb phrase of the claim. object_text is what the claim is about; object_kind is person, place, vehicle or unit when object_text names one, else null. event_text names the event the claim is about. time_text is the time or date stated. place_text is the place stated. modality is the words that hedge the claim, such as 'I think' or 'about'. polarity is negative when the witness denies the claim, else positive. confidence is from 0 to 1.",
     "When the target sentence names the subject by a pronoun such as he, she, they, it or 'this man', subject_text is the name or description of that person or thing, copied exactly from the target sentence or another sentence shown here. Write the pronoun only when no sentence shown here names them.",
-    "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
-    "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
+    "claim_kind is attribute when the claim states the age, health, home, years of residence, family or job of the witness or of another person; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
+    "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute, and so are 'They had lived at Grenfell Tower for over twenty years' and 'my daughter was 6 years old'; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
     ...(events.length
       ? [
           `event_text is a label. When the claim is about one of these events, copy its name exactly: ${events.map((e) => `'${e}'`).join("; ")}. Use the sentence's own words only when none of them fits, and null when the claim is about no event.`,
@@ -306,7 +309,10 @@ export function checkAssertion(raw, targets, events = [], context = []) {
     return reject("claim_kind", "not-a-claim-kind", claimKind);
   }
   row.claimKind = claimKind;
-  if (row.subjectKind === "witness" && statesOwnAttribute(row.predicate, row.object_text)) {
+  if (
+    ATTRIBUTE_SUBJECT_KINDS.includes(row.subjectKind) &&
+    statesAttribute(row.predicate, row.object_text)
+  ) {
     row.kindOverridden = claimKind !== "attribute";
     row.claimKind = "attribute";
   }
