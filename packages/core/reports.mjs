@@ -407,7 +407,7 @@ export async function runReport({
       abstained,
       flaggedRatio: marks.length ? (marks.length - supported - abstained) / marks.length : 0,
       flagged,
-      rewritten: flagged - sections.reduce((n, s) => n + s.removed, 0),
+      rewritten: sections.reduce((n, s) => n + Math.max(0, s.flagged - s.removed), 0),
       removed: sections.reduce((n, s) => n + s.removed, 0),
       droppedCitations: sections.reduce((n, s) => n + s.dropped, 0),
       droppedEvidence,
