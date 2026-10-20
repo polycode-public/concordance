@@ -24,6 +24,28 @@ export const SUGGESTIONS = {
       filename: "first-awareness.md",
     },
   ],
+  ucpi: [
+    {
+      text: "What did HN43 say about the reports he made on the Stephen Lawrence campaign?",
+      panel: null,
+    },
+    {
+      text: "How do the managers describe the way undercover reporting was authorised?",
+      panel: null,
+    },
+    {
+      text: "How did the people reported on describe meeting the undercover officer?",
+      panel: null,
+    },
+    { text: "What did witnesses say about Militant and the Socialist Party?", panel: null },
+    { text: "List the statements in the corpus", panel: "documents" },
+    { text: "Show the evidence about cover names", panel: "evidence" },
+    {
+      text: "Write me a report on how the Special Demonstration Squad reported on Militant",
+      panel: "reports",
+      filename: "militant-reporting.md",
+    },
+  ],
 };
 
 /**
