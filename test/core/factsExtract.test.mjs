@@ -288,6 +288,7 @@ describe("extractAssertions", () => {
     expect(result).toEqual({
       status: "skipped",
       counts: { sentences: 2, calls: 0, kept: 0, rejected: 0, written: 0 },
+      windows: { done: 2, total: 2 },
     });
     expect(prompts).toEqual([]);
     expect(store.tables).toEqual(before);
@@ -344,7 +345,7 @@ describe("extractAssertions", () => {
     expect(store.tables.provenance).toEqual([]);
   });
 
-  it("rolls back every row when a write fails", async () => {
+  it("rolls back the window whose write fails and keeps the windows before it", async () => {
     const store = createFactsStore(seed());
     const query = store.query;
     const failing = async (text, params) => {
@@ -359,8 +360,11 @@ describe("extractAssertions", () => {
     await expect(
       extractAssertions({ documentId: "IWS1", provider: p, db, window: 1, log: () => {} }),
     ).rejects.toThrow("write failed");
-    expect(store.tables.assertions).toEqual([]);
-    expect(store.tables.entities).toEqual([]);
+    expect(store.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["11"]);
+    expect(store.tables.provenance).toEqual([]);
+    expect(store.tables.extraction_progress).toEqual([
+      expect.objectContaining({ document_id: "IWS1", windows_done: 1, window_size: 1 }),
+    ]);
   });
 
   it("throws for a document that is not ingested or has no sentences", async () => {
@@ -381,5 +385,164 @@ describe("extractAssertions", () => {
         log() {},
       }),
     ).rejects.toThrow("IWS1 has no sentence chunks");
+  });
+
+  describe("resuming across runs", () => {
+    const COUNT = 7;
+    const textOf = (n) => `I saw smoke number ${n}.`;
+    const long = (extraSeed = {}) =>
+      createFactsStore({
+        documents: [{ id: "IWS1", witness_id: "IWS1" }],
+        sentences: Array.from({ length: COUNT }, (_, n) => ({
+          id: String(100 + n),
+          document_id: "IWS1",
+          ordinal: n,
+          text: textOf(n),
+          header: HEADER,
+          context_line: null,
+        })),
+        witnesses: [{ id: "IWS1", cipher_only: false, aliases: [] }],
+        ...extraSeed,
+      });
+
+    /** Answers every target of a window; aborts the signal after `stopAfter` calls. */
+    function runner(store, { stopAfter = Infinity, window = 2 } = {}) {
+      const controller = new AbortController();
+      const firsts = [];
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = [...prompt.matchAll(/^\[S(\d+)\]/gm)].map((m) => Number(m[1]));
+          firsts.push(ordinals[0]);
+          if (firsts.length >= stopAfter) controller.abort();
+          return {
+            assertions: ordinals.map((n) => ({
+              sentence: n,
+              predicate: "saw",
+              object_text: `smoke number ${n}`,
+              polarity: "positive",
+            })),
+          };
+        },
+      });
+      const lines = [];
+      return {
+        firsts,
+        lines,
+        run: () =>
+          extractAssertions({
+            documentId: "IWS1",
+            provider: p,
+            db: store,
+            window,
+            signal: controller.signal,
+            log: (line) => lines.push(JSON.parse(line)),
+            now: () => 0,
+          }),
+      };
+    }
+
+    it("stores the windows it finished, records the marker and returns partial", async () => {
+      const store = long();
+      const first = runner(store, { stopAfter: 2 });
+      const result = await first.run();
+      expect(result).toEqual({
+        status: "partial",
+        counts: { sentences: COUNT, calls: 2, kept: 4, rejected: 0, written: 4 },
+        windows: { done: 2, total: 4 },
+      });
+      expect(store.tables.assertions.map((a) => a.source_chunk_id)).toEqual([
+        "100",
+        "101",
+        "102",
+        "103",
+      ]);
+      expect(store.tables.provenance).toEqual([]);
+      expect(store.tables.extraction_progress).toEqual([
+        expect.objectContaining({ document_id: "IWS1", windows_done: 2, window_size: 2 }),
+      ]);
+    });
+
+    it("resumes after the last stored window, finishes and then skips", async () => {
+      const store = long();
+      await runner(store, { stopAfter: 2 }).run();
+      const second = runner(store);
+      const result = await second.run();
+      expect(second.firsts).toEqual([4, 6]);
+      expect(result).toEqual({
+        status: "extracted",
+        counts: { sentences: COUNT, calls: 2, kept: 3, rejected: 0, written: 3 },
+        windows: { done: 4, total: 4 },
+      });
+      expect(store.tables.assertions).toHaveLength(COUNT);
+      expect(store.tables.provenance).toHaveLength(1);
+      expect(store.tables.extraction_progress).toEqual([]);
+
+      const third = runner(store);
+      expect(await third.run()).toMatchObject({ status: "skipped" });
+      expect(third.firsts).toEqual([]);
+      expect(store.tables.assertions).toHaveLength(COUNT);
+    });
+
+    it("stops when the call itself is aborted and keeps the earlier windows", async () => {
+      const store = long();
+      const controller = new AbortController();
+      let calls = 0;
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: () => {
+          if (++calls === 3) {
+            controller.abort();
+            throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
+          }
+          return { assertions: [] };
+        },
+      });
+      const result = await extractAssertions({
+        documentId: "IWS1",
+        provider: p,
+        db: store,
+        window: 2,
+        signal: controller.signal,
+        log: () => {},
+      });
+      expect(result.status).toBe("partial");
+      expect(result.windows).toEqual({ done: 2, total: 4 });
+      expect(store.tables.extraction_progress[0].windows_done).toBe(2);
+    });
+
+    it("fails the document when a call fails and the signal has not fired", async () => {
+      const store = long();
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: () => {
+          throw new Error("throttled");
+        },
+      });
+      await expect(
+        extractAssertions({ documentId: "IWS1", provider: p, db: store, window: 2, log: () => {} }),
+      ).rejects.toThrow("throttled");
+    });
+
+    it("starts from the first window when the sentence set changed", async () => {
+      const store = long();
+      await runner(store, { stopAfter: 2 }).run();
+      store.tables.chunks[0].text = "I saw smoke number 0, again.";
+      const again = runner(store);
+      const result = await again.run();
+      expect(again.firsts).toEqual([0, 2, 4, 6]);
+      expect(result.status).toBe("replaced");
+      expect(store.tables.assertions).toHaveLength(COUNT);
+      expect(store.tables.extraction_progress).toEqual([]);
+    });
+
+    it("starts from the first window when the window size changed", async () => {
+      const store = long();
+      await runner(store, { stopAfter: 2 }).run();
+      const again = runner(store, { window: 3 });
+      await again.run();
+      expect(again.firsts).toEqual([0, 3, 6]);
+      expect(store.tables.assertions).toHaveLength(COUNT);
+    });
   });
 });

@@ -20,6 +20,7 @@ export function createFactsStore(seed = {}) {
     events: seed.events ?? [],
     assertions: [],
     provenance: [],
+    extraction_progress: [],
   };
   let snapshot = null;
   const statements = [];
@@ -75,6 +76,27 @@ export function createFactsStore(seed = {}) {
             p.prompt_version === prompt,
         ),
       );
+    }
+    if (/^\s*SELECT [^;]*FROM extraction_progress WHERE document_id/.test(text)) {
+      return rows(t.extraction_progress.filter((p) => p.document_id === params[0]));
+    }
+    if (/^\s*INSERT INTO extraction_progress/.test(text)) {
+      const [document_id, source_sha256, tool_version, model, prompt_version, size, done] = params;
+      t.extraction_progress = t.extraction_progress.filter((p) => p.document_id !== document_id);
+      t.extraction_progress.push({
+        document_id,
+        source_sha256,
+        tool_version,
+        model,
+        prompt_version,
+        window_size: size,
+        windows_done: done,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (/^DELETE FROM extraction_progress/.test(text)) {
+      t.extraction_progress = t.extraction_progress.filter((p) => p.document_id !== params[0]);
+      return { rows: [], rowCount: 1 };
     }
     if (/^SELECT id, cipher_only, aliases FROM witnesses$/.test(text)) return rows(t.witnesses);
     if (/^SELECT id, kind, canonical, aliases FROM entities$/.test(text)) return rows(t.entities);

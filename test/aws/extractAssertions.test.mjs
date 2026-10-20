@@ -54,6 +54,7 @@ describe("extractAssertions handler", () => {
       evidenceId: "IWS1",
       status: "extracted",
       counts: { sentences: 1, calls: 1, kept: 1, rejected: 1, written: 1 },
+      windows: { done: 1, total: 1 },
     });
     expect(store.closed).toBe(1);
     expect(store.tables.assertions).toEqual([
@@ -76,6 +77,8 @@ describe("extractAssertions handler", () => {
       kept: 1,
       rejected: 1,
       written: 1,
+      windowsDone: 1,
+      windowsTotal: 1,
       ms: 0,
     });
   });
@@ -111,5 +114,31 @@ describe("extractAssertions handler", () => {
       /sha256 is missing or invalid/,
     );
     await expect(handler({ corpus: "nope", row: ROW })).rejects.toThrow(/unknown corpus nope/);
+  });
+
+  it("returns partial, not a throw, when the margin passes during a model call", async () => {
+    const calls = [];
+    const { handler, store } = setup({
+      extractJson: async ({ signal }) => {
+        calls.push(signal);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        if (signal.aborted)
+          throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
+        return { assertions: [] };
+      },
+    });
+    const result = await handler(
+      { corpus: "grenfell", row: ROW },
+      { getRemainingTimeInMillis: () => WRITE_MARGIN_MS },
+    );
+    expect(result).toEqual({
+      evidenceId: "IWS1",
+      status: "partial",
+      counts: { sentences: 1, calls: 0, kept: 0, rejected: 0, written: 0 },
+      windows: { done: 0, total: 1 },
+    });
+    expect(calls).toHaveLength(1);
+    expect(store.tables.provenance).toEqual([]);
+    expect(store.closed).toBe(1);
   });
 });
