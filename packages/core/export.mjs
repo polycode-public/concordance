@@ -163,7 +163,12 @@ export async function exportConversation({ db, which, corpus, write, now = new D
   const { sessionId, userId, thread } = which;
   if (!isNoteSegment(thread))
     throw new InvalidThread(`The thread name ${JSON.stringify(thread)} cannot be exported.`);
-  const conversation = await conversationTurns(db, { sessionId, userId, thread });
+  const conversation = await conversationTurns(db, {
+    sessionId,
+    userId,
+    corpus: corpus.id,
+    thread,
+  });
   if (!conversation?.turns.length) throw new NothingToExport("This thread has no turns to export.");
   const markdown = renderConversation({
     corpus,

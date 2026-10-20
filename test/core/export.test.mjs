@@ -11,7 +11,7 @@ import {
 } from "../../packages/core/export.mjs";
 
 const SESSION = "6f1c2b9e-3a4d-4e5f-8a6b-7c8d9e0f1a2b";
-const CORPUS = { title: "Grenfell Tower Inquiry" };
+const CORPUS = { id: "grenfell", title: "Grenfell Tower Inquiry" };
 const frame = (type, rest) => ({ type, thread: "main", turnId: "x", ...rest });
 
 const TURNS = [

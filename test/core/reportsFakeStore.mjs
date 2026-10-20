@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // An in-memory store that answers the retrieval reads of a report over fixed chunks and
-// documents, and the statements of the reports table.
+// documents, and the statements of the reports table. Every chunk and report belongs to a corpus;
+// a seeded chunk without one is Grenfell's.
 
 export const DOCUMENT_ROWS = {
   IWS1: {
@@ -55,14 +56,23 @@ export function createReportsStore({ chunks = CHUNK_ROWS, documents = DOCUMENT_R
   let clock = Date.parse("2026-10-20T09:00:00.000Z");
   const rows = (r) => ({ rows: r, rowCount: r.length });
   const asRow = (r) => ({ ...r, id: String(r.id) });
+  const param = (text, params, column) => {
+    const at = new RegExp(`${column} = \\$(\\d+)`).exec(text);
+    return at ? params[Number(at[1]) - 1] : undefined;
+  };
 
   const query = async (text, params = []) => {
     calls.push({ text, params });
     if (/^SELECT id FROM chunks/.test(text.trim())) {
       const scope = /document_id = ANY\(\$(\d)/.exec(text);
       const ids = scope ? params[Number(scope[1]) - 1] : null;
+      const corpus = param(text, params, "corpus");
+      if (!corpus) throw new Error("a ranking reads one corpus");
       return rows(
-        chunks.filter((c) => !ids || ids.includes(c.document_id)).map((c) => ({ id: c.id })),
+        chunks
+          .filter((c) => (c.corpus ?? "grenfell") === corpus)
+          .filter((c) => !ids || ids.includes(c.document_id))
+          .map((c) => ({ id: c.id })),
       );
     }
     if (/FROM chunks WHERE id = ANY/.test(text)) {
@@ -72,17 +82,20 @@ export function createReportsStore({ chunks = CHUNK_ROWS, documents = DOCUMENT_R
       return rows(params[0].filter((id) => documents[id]).map((id) => documents[id]));
     }
     if (/^INSERT INTO sessions/.test(text)) {
+      if (!params[2]) throw new Error("sessions.corpus is NOT NULL");
       if (!sessions.has(params[0])) sessions.set(params[0], params[1]);
       return rows([]);
     }
     if (/^INSERT INTO reports/.test(text.trim())) {
       const [sessionId, userId, filename, title, topic, changePrompt, documentIds, body] = params;
+      const corpus = params[12];
       if (!sessions.has(sessionId)) throw new Error("reports_session_id_fkey");
+      if (!corpus) throw new Error("reports.corpus is NOT NULL");
       const version =
         Math.max(
           0,
           ...reports
-            .filter((r) => r.user_id === userId && r.filename === filename)
+            .filter((r) => r.user_id === userId && r.corpus === corpus && r.filename === filename)
             .map((r) => r.version),
         ) + 1;
       clock += 1000;
@@ -101,19 +114,22 @@ export function createReportsStore({ chunks = CHUNK_ROWS, documents = DOCUMENT_R
         checks: JSON.parse(params[9]),
         prompt_version: params[10],
         model_id: params[11],
+        corpus,
         created_at: new Date(clock).toISOString(),
       };
       reports.push(row);
       return rows([{ id: String(row.id), version, created_at: row.created_at }]);
     }
     if (/^DELETE FROM reports/.test(text)) {
-      const gone = reports.filter((r) => r.user_id === params[0] && r.filename === params[1]);
+      const gone = reports.filter(
+        (r) => r.user_id === params[0] && r.corpus === params[1] && r.filename === params[2],
+      );
       for (const r of gone) reports.splice(reports.indexOf(r), 1);
       return rows(gone.map((r) => ({ version: r.version })));
     }
     if (/GROUP BY filename/.test(text)) {
       const byName = new Map();
-      for (const r of reports.filter((x) => x.user_id === params[0])) {
+      for (const r of reports.filter((x) => x.user_id === params[0] && x.corpus === params[1])) {
         const list = byName.get(r.filename) ?? [];
         list.push(r);
         byName.set(r.filename, list);
@@ -132,9 +148,11 @@ export function createReportsStore({ chunks = CHUNK_ROWS, documents = DOCUMENT_R
           .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
       );
     }
-    if (/FROM reports WHERE user_id = \$1 AND filename = \$2/.test(text)) {
+    if (/FROM reports WHERE user_id = \$1 AND corpus = \$2 AND filename = \$3/.test(text)) {
       const found = reports
-        .filter((r) => r.user_id === params[0] && r.filename === params[1])
+        .filter(
+          (r) => r.user_id === params[0] && r.corpus === params[1] && r.filename === params[2],
+        )
         .sort((a, b) => a.version - b.version)
         .map(asRow);
       return rows(/DESC LIMIT 1/.test(text) ? found.slice(-1) : found);

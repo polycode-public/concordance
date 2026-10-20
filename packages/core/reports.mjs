@@ -4,6 +4,7 @@
 // Generated reports: a longer answer over a topic, built in one request through a draft, write
 // and review cycle, and stored with versions. The model writes [En] tags over the evidence
 // blocks it was given; the server resolves them with checkAnswer, as it does for a turn.
+import { CorpusError, requireCorpusId } from "./corpora.mjs";
 import { ABSTAIN_PHRASE } from "./prompt.mjs";
 import { isReportFilename } from "./protocol.mjs";
 import { NO_EVIDENCE_ANSWER, checkAnswer } from "./query.mjs";
@@ -215,6 +216,7 @@ const sumUsage = (a, b) =>
  * Runs the cycle and returns the report to store.
  * @param {object} args
  * @param {string} args.topic
+ * @param {string} args.corpus the corpus the evidence comes from
  * @param {string[]} [args.documentIds] empty means the whole corpus
  * @param {string} [args.filename]
  * @param {string | null} [args.previous] the latest version's body
@@ -227,6 +229,7 @@ const sumUsage = (a, b) =>
  */
 export async function runReport({
   topic,
+  corpus,
   documentIds = [],
   filename = null,
   previous = null,
@@ -238,6 +241,7 @@ export async function runReport({
   limits = REPORT_LIMITS,
 }) {
   if (!db) throw new Error("runReport needs a database");
+  if (!corpus) throw new Error("runReport needs a corpus");
   if (typeof topic !== "string" || !topic.trim()) throw new Error("runReport needs a topic");
   if (previous && !changePrompt?.trim()) throw new Error("an edit needs a change prompt");
   const timings = {};
@@ -250,7 +254,7 @@ export async function runReport({
 
   onStage?.("drafting");
   const question = previous ? `${topic}\n${changePrompt}` : topic;
-  const { fused } = await retrieve({ question, provider, db, signal, documentIds });
+  const { fused } = await retrieve({ question, corpus, provider, db, signal, documentIds });
   const hitIds = fused.slice(0, limits.maxHits).map((f) => f.id);
   const rows = await loadChunks(db, hitIds);
   for (const [id, r] of await loadChunks(db, neighbourIds([...rows.values()], rows))) {
@@ -501,22 +505,23 @@ const requireFilename = (filename) => {
 };
 
 /**
- * A user's reports, newest first: each filename with its versions and the latest title.
+ * A user's reports in one corpus, newest first: each filename with its versions and the latest
+ * title.
  * @param {{ query: Function }} db
- * @param {{ userId: string }} which
+ * @param {{ userId: string, corpus: string }} which
  */
-export async function listReports(db, { userId }) {
+export async function listReports(db, { userId, corpus }) {
   const { rows } = await db.query(
     `SELECT filename,
             array_agg(version ORDER BY version)::int[] AS versions,
             (array_agg(title ORDER BY version DESC))[1] AS title,
             to_char(max(created_at) AT TIME ZONE 'UTC', ${ISO}) AS updated_at
        FROM reports
-      WHERE user_id = $1
+      WHERE user_id = $1 AND corpus = $2
       GROUP BY filename
       ORDER BY max(created_at) DESC, filename
       LIMIT ${MAX_REPORTS}`,
-    [userId],
+    [userId, corpus],
   );
   return rows.map((r) => ({
     filename: r.filename,
@@ -527,39 +532,40 @@ export async function listReports(db, { userId }) {
 }
 
 /**
- * Every version of one of a user's reports, oldest first.
+ * Every version of one of a user's reports in a corpus, oldest first.
  * @param {{ query: Function }} db
- * @param {{ userId: string, filename: string }} which
+ * @param {{ userId: string, corpus: string, filename: string }} which
  */
-export async function reportVersions(db, { userId, filename }) {
+export async function reportVersions(db, { userId, corpus, filename }) {
   requireFilename(filename);
   const { rows } = await db.query(
-    `SELECT ${REPORT_COLUMNS} FROM reports WHERE user_id = $1 AND filename = $2 ORDER BY version`,
-    [userId, filename],
+    `SELECT ${REPORT_COLUMNS} FROM reports WHERE user_id = $1 AND corpus = $2 AND filename = $3
+      ORDER BY version`,
+    [userId, corpus, filename],
   );
   return rows.map(fromRow);
 }
 
 /**
- * The latest version of one of a user's reports, or null.
+ * The latest version of one of a user's reports in a corpus, or null.
  * @param {{ query: Function }} db
- * @param {{ userId: string, filename: string }} which
+ * @param {{ userId: string, corpus: string, filename: string }} which
  */
-export async function latestReport(db, { userId, filename }) {
+export async function latestReport(db, { userId, corpus, filename }) {
   requireFilename(filename);
   const { rows } = await db.query(
-    `SELECT ${REPORT_COLUMNS} FROM reports WHERE user_id = $1 AND filename = $2
+    `SELECT ${REPORT_COLUMNS} FROM reports WHERE user_id = $1 AND corpus = $2 AND filename = $3
       ORDER BY version DESC LIMIT 1`,
-    [userId, filename],
+    [userId, corpus, filename],
   );
   return rows.length ? fromRow(rows[0]) : null;
 }
 
 /**
- * Stores a report as the next version of its filename for the user. The version is computed in
- * the insert, and the unique key refuses a concurrent write of the same version.
+ * Stores a report as the next version of its filename for the user in its corpus. The version is
+ * computed in the insert, and the unique key refuses a concurrent write of the same version.
  * @param {{ query: Function }} db
- * @param {{ sessionId: string, userId: string, filename: string, title: string, topic: string,
+ * @param {{ sessionId: string, userId: string, corpus: string, filename: string, title: string, topic: string,
  *   changePrompt?: string | null, documentIds: string[], body: string, citations: object[],
  *   checks: object, promptVersion: string, model: string | null }} report
  * @returns {Promise<{ id: string, version: number, createdAt: string }>}
@@ -567,13 +573,14 @@ export async function latestReport(db, { userId, filename }) {
 export async function storeReport(db, report) {
   requireFilename(report.filename);
   if (!report.userId) throw new Error(`report ${report.filename} has no user id`);
+  if (!report.corpus) throw new Error(`report ${report.filename} has no corpus`);
   const { rows } = await db.query(
     `INSERT INTO reports
        (session_id, user_id, filename, version, title, topic, change_prompt, document_ids,
-        body_markdown, citations, checks, prompt_version, model_id)
+        body_markdown, citations, checks, prompt_version, model_id, corpus)
      SELECT $1::uuid, $2, $3, COALESCE(max(version), 0) + 1, $4, $5, $6, $7::text[], $8,
-            $9::jsonb, $10::jsonb, $11, $12
-       FROM reports WHERE user_id = $2 AND filename = $3
+            $9::jsonb, $10::jsonb, $11, $12, $13
+       FROM reports WHERE user_id = $2 AND corpus = $13 AND filename = $3
      RETURNING id, version, to_char(created_at AT TIME ZONE 'UTC', ${ISO}) AS created_at`,
     [
       report.sessionId,
@@ -588,6 +595,7 @@ export async function storeReport(db, report) {
       JSON.stringify(report.checks),
       report.promptVersion,
       report.model ?? null,
+      report.corpus,
     ],
   );
   return {
@@ -598,53 +606,63 @@ export async function storeReport(db, report) {
 }
 
 /**
- * Deletes every version of one of a user's reports. Resolves to the number of versions removed.
+ * Deletes every version of one of a user's reports in a corpus. Resolves to the number of
+ * versions removed.
  * @param {{ query: Function }} db
- * @param {{ userId: string, filename: string }} which
+ * @param {{ userId: string, corpus: string, filename: string }} which
  */
-export async function deleteReport(db, { userId, filename }) {
+export async function deleteReport(db, { userId, corpus, filename }) {
   requireFilename(filename);
   const { rows } = await db.query(
-    "DELETE FROM reports WHERE user_id = $1 AND filename = $2 RETURNING version",
-    [userId, filename],
+    "DELETE FROM reports WHERE user_id = $1 AND corpus = $2 AND filename = $3 RETURNING version",
+    [userId, corpus, filename],
   );
   return rows.length;
 }
 
 /**
  * The answer to one reports request: the HTTP routes on AWS and on the laptop answer with it.
+ * The corpus is the request's `?corpus=`.
  * @param {{ query: Function }} db
- * @param {{ method: string, filename?: string, userId: string }} request
+ * @param {{ method: string, filename?: string, userId: string, corpus: unknown }} request
  * @returns {Promise<{ status: number, body: object }>}
  */
-export async function reportsResponse(db, { method, filename, userId }) {
+export async function reportsResponse(db, { method, filename, userId, corpus: raw }) {
+  let corpus;
+  try {
+    corpus = requireCorpusId(raw);
+  } catch (err) {
+    if (err instanceof CorpusError) return { status: 400, body: { message: err.message } };
+    throw err;
+  }
   if (filename === undefined) {
     if (method !== "GET") return { status: 405, body: { message: "Use GET for the list." } };
-    return { status: 200, body: { reports: await listReports(db, { userId }) } };
+    return { status: 200, body: { reports: await listReports(db, { userId, corpus }) } };
   }
   if (!isReportFilename(filename)) {
     return { status: 400, body: { message: "The filename is not a lower-case .md name." } };
   }
   if (method === "DELETE") {
-    const deleted = await deleteReport(db, { userId, filename });
+    const deleted = await deleteReport(db, { userId, corpus, filename });
     if (!deleted) return { status: 404, body: { message: "No such report." } };
     return { status: 200, body: { filename, deleted } };
   }
   if (method !== "GET") return { status: 405, body: { message: "Use GET or DELETE." } };
-  const versions = await reportVersions(db, { userId, filename });
+  const versions = await reportVersions(db, { userId, corpus, filename });
   if (!versions.length) return { status: 404, body: { message: "No such report." } };
   return { status: 200, body: { filename, versions } };
 }
 
 /**
- * One report request from start to store: a filename the user already has becomes an edit, with
- * the request's topic as the change prompt and the latest version as input.
+ * One report request from start to store: a filename the user already has in the request's
+ * corpus becomes an edit, with the request's topic as the change prompt and the latest version as
+ * input.
  * @param {object} args
  * @param {{ query: Function }} args.db
  * @param {import('./providers/modelProvider.mjs').ModelProvider} args.provider
  * @param {string} args.userId
  * @param {string} args.sessionId
- * @param {{ topic: string, documentIds: string[], filename: string }} args.request
+ * @param {{ topic: string, documentIds: string[], filename: string, corpus: string }} args.request
  * @param {AbortSignal} [args.signal]
  * @param {(stage: string) => void} [args.onStage]
  * @param {typeof runReport} [args.run]
@@ -659,8 +677,8 @@ export async function requestReport({
   onStage,
   run = runReport,
 }) {
-  const { topic, filename } = request;
-  const latest = await latestReport(db, { userId, filename });
+  const { topic, filename, corpus } = request;
+  const latest = await latestReport(db, { userId, corpus, filename });
   const documentIds = request.documentIds.length
     ? request.documentIds
     : (latest?.documentIds ?? []);
@@ -668,6 +686,7 @@ export async function requestReport({
     topic: latest ? latest.topic : topic,
     changePrompt: latest ? topic : null,
     previous: latest ? latest.bodyMarkdown : null,
+    corpus,
     documentIds,
     filename,
     provider,
@@ -679,6 +698,7 @@ export async function requestReport({
   const stored = await storeReport(db, {
     sessionId,
     userId,
+    corpus,
     filename,
     title: report.title,
     topic: latest ? latest.topic : topic,

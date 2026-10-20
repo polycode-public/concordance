@@ -9,8 +9,8 @@ import { OTHER_SESSION, SESSION, compareProvider, compareSeed } from "./compareF
 const USER = "sub-1";
 let store;
 
-const call = (method, path, { query = {}, body, userId = USER } = {}) =>
-  factsResponse(store, { method, path, query, body, userId });
+const call = (method, path, { query = {}, body, userId = USER, corpus = "grenfell" } = {}) =>
+  factsResponse(store, { method, path, query: { corpus, ...query }, body, userId });
 
 const comparisonId = (a, b) =>
   store.tables.assertion_comparisons.find(
@@ -296,5 +296,60 @@ describe("latestPerPair", () => {
       row("4", "m", "contradict", "2026-01-04T00:00:00.000Z"),
     ]);
     expect([shown.id, machine.id]).toEqual(["3", "4"]);
+  });
+});
+
+describe("the corpus", () => {
+  it("answers 400 to a request that names no corpus or a malformed one", async () => {
+    for (const corpus of [undefined, "", "Grenfell/../x"]) {
+      const res = await factsResponse(store, {
+        method: "GET",
+        path: "/facts/groups",
+        query: corpus === undefined ? {} : { corpus },
+        userId: USER,
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("shows another corpus none of this corpus's pairs, witnesses or timeline", async () => {
+    expect((await call("GET", "/facts/groups", { corpus: "ucpi" })).body.groups).toEqual([]);
+    const matrix = await call("GET", "/facts/matrix", { corpus: "ucpi", query: { event: "7" } });
+    expect(matrix.body.pairs).toEqual([]);
+    expect((await call("GET", "/facts/witness/IWS-A", { corpus: "ucpi" })).status).toBe(404);
+    expect((await call("GET", "/facts/timeline", { corpus: "ucpi" })).body).toEqual(
+      (await call("GET", "/facts/timeline", { corpus: "ucpi", query: { witness: "IWS-A" } })).body,
+    );
+    const timeline = await call("GET", "/facts/timeline", { corpus: "ucpi" });
+    expect(JSON.stringify(timeline.body)).not.toContain("IWS-A1");
+  });
+
+  it("refuses to relabel or promote across corpora and stores the corpus on a fact", async () => {
+    const id = comparisonId("1", "3");
+    const relabel = await call("POST", "/facts/override", {
+      corpus: "ucpi",
+      body: { comparisonId: id, label: "agree", reason: "same" },
+    });
+    expect(relabel.status).toBe(404);
+    const across = await call("POST", "/facts/accept", {
+      corpus: "ucpi",
+      body: { assertionId: "1", sourceCitation: "IWS-A1 p.2" },
+    });
+    expect(across.status).toBe(404);
+    const typed = await call("POST", "/facts/accept", {
+      corpus: "ucpi",
+      body: { text: "The meeting was in 1995.", sourceCitation: "UCPI0000001 p.1" },
+    });
+    expect(typed.status).toBe(201);
+    expect(typed.body.fact.corpus).toBe("ucpi");
+    expect(store.tables.accepted_facts.at(-1).corpus).toBe("ucpi");
+  });
+
+  it("refuses a hypothesis in a session of another corpus", async () => {
+    const res = await call("POST", "/facts/hypothesis", {
+      corpus: "ucpi",
+      body: { sessionId: SESSION, text: "The stairs were dark." },
+    });
+    expect(res.status).toBe(404);
   });
 });

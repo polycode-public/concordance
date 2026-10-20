@@ -289,6 +289,7 @@ describe("runQuery", () => {
     const usage = { inputTokens: 12, outputTokens: 5 };
     const result = await runQuery({
       question: "q",
+      corpus: "grenfell",
       db,
       provider: providerOf({ text: "Dark [E1].", model: "m", promptVersion: "v", usage }),
     });
@@ -306,6 +307,7 @@ describe("runQuery", () => {
   it("scores no sentence and cites nothing on an abstention", async () => {
     const result = await runQuery({
       question: "q",
+      corpus: "grenfell",
       db,
       provider: providerOf({
         text: "The corpus does not say.",
@@ -336,8 +338,48 @@ describe("retrieval guards", () => {
   it("rejects a provider that embeds another dimension", async () => {
     const db = { query: async () => ({ rows: [] }) };
     await expect(
-      retrieve({ question: "q", provider: { name: "p", embedModel: "m", embedDim: 4 }, db }),
+      retrieve({
+        question: "q",
+        corpus: "grenfell",
+        provider: { name: "p", embedModel: "m", embedDim: 4 },
+        db,
+      }),
     ).rejects.toThrow(/4 dimensions/);
+  });
+
+  it("needs a corpus", async () => {
+    const db = { query: async () => ({ rows: [] }) };
+    const provider = { name: "p", embedModel: "m", embedDim: 1024 };
+    await expect(retrieve({ question: "q", provider, db })).rejects.toThrow(/needs a corpus/);
+    await expect(runQuery({ question: "q", provider, db })).rejects.toThrow(/needs a corpus/);
+  });
+
+  it("reads every ranking from the one corpus, with and without named documents", async () => {
+    const calls = [];
+    const db = {
+      query: async (text, params) => {
+        calls.push({ text, params });
+        return { rows: [] };
+      },
+    };
+    const provider = {
+      name: "p",
+      embedModel: "m",
+      embedDim: 1024,
+      embed: async () => [new Array(1024).fill(0.5)],
+    };
+    await retrieve({ question: "q", corpus: "ucpi", provider, db });
+    await retrieve({ question: "q", corpus: "ucpi", provider, db, documentIds: ["UCPI1"] });
+    expect(calls).toHaveLength(8);
+    for (const { text, params } of calls) {
+      const at = Number(/corpus = \$(\d)/.exec(text)[1]);
+      expect(params[at - 1]).toBe("ucpi");
+    }
+    const unscoped = calls.filter((c) => /embedding <=>/.test(c.text) && c.params.length === 5);
+    expect(unscoped).toHaveLength(2);
+    for (const { text } of unscoped) {
+      expect(text).toMatch(/ORDER BY embedding <=> \$1::halfvec\n/);
+    }
   });
 
   it("needs a database", async () => {

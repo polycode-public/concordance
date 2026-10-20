@@ -51,7 +51,8 @@ export const RUN_SQL = Object.freeze({
     LEFT JOIN witnesses sw ON sw.id = se.canonical
    WHERE d.corpus = $1 AND a.id > $2::bigint
    ORDER BY a.id LIMIT $3`,
-  facts: `SELECT id, assertion_id, text, is_hypothesis FROM accepted_facts ORDER BY id`,
+  facts: `SELECT id, assertion_id, text, is_hypothesis FROM accepted_facts
+   WHERE corpus = $1 ORDER BY id`,
   findRun: `
   SELECT id, status, counts, started_at FROM comparison_runs
    WHERE corpus = $1 AND pipeline_version = $2 AND input_sha256 = $3 AND model = $4`,
@@ -266,7 +267,7 @@ export async function runComparison({
     log(JSON.stringify({ corpus, stage: name, count, ...extra, ms: now() - started }));
 
   const assertions = await loadAssertions(db, corpus);
-  const facts = (await db.query(RUN_SQL.facts)).rows.map((f) => ({
+  const facts = (await db.query(RUN_SQL.facts, [corpus])).rows.map((f) => ({
     id: String(f.id),
     assertionId: id(f.assertion_id),
     text: f.text,

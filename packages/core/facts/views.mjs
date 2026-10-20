@@ -7,7 +7,10 @@
 // hypothesis. A pair's label is its newest person's row when one exists, else its newest machine
 // row. A pair whose two documents reveal an identity together is returned without its two
 // sentences, so no client can show them side by side. A hypothesis is visible to its own user only.
+// Every view and action reads one corpus: a pair belongs to the corpus of its first assertion's
+// chunk, and an accepted fact to the corpus it was promoted in.
 
+import { CorpusError, requireCorpusId } from "../corpora.mjs";
 import { isUuid } from "../sessions.mjs";
 import { pairKey as pairKeyOf } from "./align.mjs";
 import { labelsFor } from "./nli.mjs";
@@ -51,12 +54,18 @@ const columns = (p = "") =>
     .join(", ");
 const COMPARISON_COLUMNS = columns();
 
+/** A comparison row's first assertion lies in the corpus that the parameter names. */
+const inCorpus = (param, p = "") =>
+  `${p}assertion_a IN (SELECT ia.id FROM assertions ia JOIN chunks ic ON ic.id = ia.source_chunk_id
+                        WHERE ic.corpus = ${param})`;
+
 export const VIEW_SQL = Object.freeze({
   groups: `
   WITH latest AS (
     SELECT DISTINCT ON (kind, assertion_a, coalesce(assertion_b, 0), coalesce(accepted_fact_id, 0))
            kind, event_id, topic, label
       FROM assertion_comparisons
+     WHERE ${inCorpus("$1")}
      ORDER BY kind, assertion_a, coalesce(assertion_b, 0), coalesce(accepted_fact_id, 0),
               (model = 'operator') DESC, run_at DESC, id DESC)
   SELECT l.event_id, e.name, CASE WHEN l.event_id IS NULL THEN l.topic END AS topic,
@@ -65,20 +74,22 @@ export const VIEW_SQL = Object.freeze({
     FROM latest l LEFT JOIN events e ON e.id = l.event_id
    WHERE l.kind <> 'accepted'
    GROUP BY l.event_id, e.name, CASE WHEN l.event_id IS NULL THEN l.topic END`,
-  byEvent: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons WHERE event_id = $1::bigint`,
+  byEvent: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons
+   WHERE event_id = $1::bigint AND ${inCorpus("$2")}`,
   byTopic: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons
-   WHERE event_id IS NULL AND topic = $1`,
+   WHERE event_id IS NULL AND topic = $1 AND ${inCorpus("$2")}`,
   byWitness: `SELECT ${columns("c.")}
     FROM assertion_comparisons c
     JOIN assertions a ON a.id = c.assertion_a
     LEFT JOIN assertions b ON b.id = c.assertion_b
-   WHERE a.witness_id = $1 OR b.witness_id = $1`,
-  comparison: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons WHERE id = $1::bigint`,
+   WHERE (a.witness_id = $1 OR b.witness_id = $1) AND ${inCorpus("$2", "c.")}`,
+  comparison: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons
+   WHERE id = $1::bigint AND ${inCorpus("$2")}`,
   event: `SELECT id, name FROM events WHERE id = $1::bigint`,
   assertions: `
   SELECT a.id, a.witness_id, w.cipher_only, a.event_id, a.subject_text, a.subject_kind,
          a.claim_kind, a.predicate, a.object_text, a.time_text, a.place_text, a.polarity, a.modality,
-         a.source_chunk_id, c.document_id,
+         a.source_chunk_id, c.document_id, c.corpus,
          c.text AS sentence, c.locator, to_char(d.statement_date, 'YYYY-MM-DD') AS statement_date
     FROM assertions a
     JOIN chunks c ON c.id = a.source_chunk_id
@@ -96,7 +107,7 @@ export const VIEW_SQL = Object.freeze({
   witness: `SELECT id, cipher_only, role FROM witnesses WHERE id = $1`,
   witnessDocuments: `
   SELECT id, to_char(statement_date, 'YYYY-MM-DD') AS statement_date FROM documents
-   WHERE witness_id = $1 ORDER BY statement_date NULLS LAST, id`,
+   WHERE witness_id = $1 AND corpus = $2 ORDER BY statement_date NULLS LAST, id`,
   timeline: `
   SELECT a.id, a.witness_id, a.event_id, a.subject_text, a.subject_kind, a.predicate,
          a.object_text, a.time_text, a.polarity, a.modality, a.source_chunk_id, c.document_id,
@@ -106,6 +117,7 @@ export const VIEW_SQL = Object.freeze({
      AND ($1::bigint IS NULL OR a.event_id = $1::bigint)
      AND ($2::text IS NULL OR a.witness_id = $2)
      AND a.id > $3::bigint
+     AND c.corpus = $5
    ORDER BY a.id LIMIT $4`,
   insertOverride: `
   INSERT INTO assertion_comparisons (kind, assertion_a, assertion_b, accepted_fact_id, label,
@@ -114,11 +126,11 @@ export const VIEW_SQL = Object.freeze({
   VALUES ($1, $2::bigint, $3::bigint, $4::bigint, $5, $6, $7, $8, 'operator', $9, $10::bigint,
           $11::bigint, $12, $13)
   RETURNING id, ${ISO("run_at")} AS run_at`,
-  sessionUser: `SELECT user_id FROM sessions WHERE id = $1::uuid`,
+  sessionUser: `SELECT user_id, corpus FROM sessions WHERE id = $1::uuid`,
   insertFact: `
   INSERT INTO accepted_facts (assertion_id, text, source_citation, promoted_by, session_id,
-                              is_hypothesis)
-  VALUES ($1::bigint, $2, $3, $4, $5::uuid, $6)
+                              is_hypothesis, corpus)
+  VALUES ($1::bigint, $2, $3, $4, $5::uuid, $6, $7)
   RETURNING id, ${ISO("promoted_at")} AS promoted_at`,
 });
 
@@ -178,9 +190,9 @@ export function latestPerPair(rows) {
   }));
 }
 
-/** The groups that have pairs, most contradictions first. */
-export async function factsGroups(db) {
-  const { rows } = await db.query(VIEW_SQL.groups);
+/** The groups of one corpus that have pairs, most contradictions first. */
+export async function factsGroups(db, { corpus }) {
+  const { rows } = await db.query(VIEW_SQL.groups, [corpus]);
   const groups = rows.map((r) => ({
     eventId: str(r.event_id),
     name: r.name ?? null,
@@ -335,21 +347,22 @@ function axis(pairs) {
 }
 
 /**
- * The contradiction matrix of one group: an event by id, or a predicate where no event is named.
+ * The contradiction matrix of one group in one corpus: an event by id, or a predicate where no
+ * event is named.
  * @param {{ query: Function }} db
- * @param {{ eventId?: string, topic?: string, userId: string }} which
+ * @param {{ corpus: string, eventId?: string, topic?: string, userId: string }} which
  */
-export async function factsMatrix(db, { eventId, topic, userId }) {
+export async function factsMatrix(db, { corpus, eventId, topic, userId }) {
   let group;
   let rows;
   if (eventId) {
     const event = (await db.query(VIEW_SQL.event, [eventId])).rows[0];
     if (!event) return null;
     group = { eventId: String(event.id), name: event.name, topic: null };
-    rows = (await db.query(VIEW_SQL.byEvent, [eventId])).rows;
+    rows = (await db.query(VIEW_SQL.byEvent, [eventId, corpus])).rows;
   } else {
     group = { eventId: null, name: null, topic };
-    rows = (await db.query(VIEW_SQL.byTopic, [topic])).rows;
+    rows = (await db.query(VIEW_SQL.byTopic, [topic, corpus])).rows;
   }
   const pairs = await resolvePairs(db, rows, userId);
   const witnessPairs = pairs.filter((p) => p.kind !== "accepted");
@@ -363,19 +376,20 @@ export async function factsMatrix(db, { eventId, topic, userId }) {
 }
 
 /**
- * One witness's consistency report: their documents by statement date, their own pairs across
- * documents, their cross pairs counted by the other witness, and their accepted-fact labels.
+ * One witness's consistency report in one corpus: their documents by statement date, their own
+ * pairs across documents, their cross pairs counted by the other witness, and their accepted-fact
+ * labels. A witness with no document in the corpus has no report there.
  */
-export async function witnessReport(db, { witnessId, userId }) {
+export async function witnessReport(db, { corpus, witnessId, userId }) {
   const witness = (await db.query(VIEW_SQL.witness, [witnessId])).rows[0];
   if (!witness) return null;
-  const documents = (await db.query(VIEW_SQL.witnessDocuments, [witnessId])).rows.map((d) => ({
-    id: d.id,
-    statementDate: d.statement_date ?? null,
-  }));
+  const documents = (await db.query(VIEW_SQL.witnessDocuments, [witnessId, corpus])).rows.map(
+    (d) => ({ id: d.id, statementDate: d.statement_date ?? null }),
+  );
+  if (!documents.length) return null;
   const pairs = await resolvePairs(
     db,
-    (await db.query(VIEW_SQL.byWitness, [witnessId])).rows,
+    (await db.query(VIEW_SQL.byWitness, [witnessId, corpus])).rows,
     userId,
   );
   const self = pairs
@@ -412,13 +426,16 @@ export async function witnessReport(db, { witnessId, userId }) {
   };
 }
 
-/** The timeline over every assertion with a time phrase, optionally of one event or witness. */
-export async function factsTimeline(db, { eventId = null, witnessId = null } = {}) {
+/**
+ * The timeline over every assertion of one corpus with a time phrase, optionally of one event or
+ * witness.
+ */
+export async function factsTimeline(db, { corpus, eventId = null, witnessId = null }) {
   const rows = [];
   for (;;) {
     const after = rows.at(-1)?.id ?? "0";
     const page = (
-      await db.query(VIEW_SQL.timeline, [eventId, witnessId, String(after), TIMELINE_PAGE])
+      await db.query(VIEW_SQL.timeline, [eventId, witnessId, String(after), TIMELINE_PAGE, corpus])
     ).rows;
     rows.push(...page);
     if (page.length < TIMELINE_PAGE) break;
@@ -471,10 +488,10 @@ const numericId = (value, name, required = true) => {
 };
 
 /** A person's relabel of a pair, stored as a new row that wins over every machine row. */
-export async function overrideLabel(db, { comparisonId, label, reason, userId }) {
+export async function overrideLabel(db, { corpus, comparisonId, label, reason, userId }) {
   const idValue = numericId(comparisonId, "comparisonId");
   const why = text(reason, "a reason", REASON_LIMIT);
-  const row = (await db.query(VIEW_SQL.comparison, [idValue])).rows[0];
+  const row = (await db.query(VIEW_SQL.comparison, [idValue, corpus])).rows[0];
   if (!row) throw new FactsInputError("No such comparison.", 404);
   const c = comparisonFromRow(row);
   if (!labelsFor(c.kind).includes(label)) {
@@ -510,11 +527,11 @@ export async function overrideLabel(db, { comparisonId, label, reason, userId })
   };
 }
 
-async function storeFact(db, { assertionId, factText, citation, userId, sessionId }) {
+async function storeFact(db, { corpus, assertionId, factText, citation, userId, sessionId }) {
   let body = factText;
   if (assertionId) {
     const a = (await db.query(VIEW_SQL.assertions, [[assertionId]])).rows[0];
-    if (!a) throw new FactsInputError("No such assertion.", 404);
+    if (!a || a.corpus !== corpus) throw new FactsInputError("No such assertion.", 404);
     body ??= a.sentence;
   }
   if (!body) throw new FactsInputError("The request needs an assertionId or a text.");
@@ -526,6 +543,7 @@ async function storeFact(db, { assertionId, factText, citation, userId, sessionI
       userId,
       sessionId,
       Boolean(sessionId),
+      corpus,
     ])
   ).rows[0];
   return {
@@ -537,12 +555,14 @@ async function storeFact(db, { assertionId, factText, citation, userId, sessionI
     promotedAt: time(stored.promoted_at),
     isHypothesis: Boolean(sessionId),
     sessionId: sessionId ?? null,
+    corpus,
   };
 }
 
-/** Promotes an assertion, or a typed text, to an accepted fact with its source citation. */
-export function acceptFact(db, { assertionId, text: typed, sourceCitation, userId }) {
+/** Promotes an assertion, or a typed text, to an accepted fact of one corpus with its citation. */
+export function acceptFact(db, { corpus, assertionId, text: typed, sourceCitation, userId }) {
   return storeFact(db, {
+    corpus,
     assertionId: numericId(assertionId, "assertionId", false),
     factText: text(typed, "text", TEXT_LIMIT, false),
     citation: text(sourceCitation, "a sourceCitation", REASON_LIMIT),
@@ -550,15 +570,18 @@ export function acceptFact(db, { assertionId, text: typed, sourceCitation, userI
   });
 }
 
-/** A session hypothesis: an accepted fact scoped to one of the user's sessions. */
+/** A session hypothesis: an accepted fact scoped to one of the user's sessions in the corpus. */
 export async function addHypothesis(
   db,
-  { sessionId, text: typed, assertionId, sourceCitation, userId },
+  { corpus, sessionId, text: typed, assertionId, sourceCitation, userId },
 ) {
   if (!isUuid(sessionId)) throw new FactsInputError("The request needs a sessionId (UUID).");
   const owner = (await db.query(VIEW_SQL.sessionUser, [sessionId])).rows[0];
-  if (!owner || owner.user_id !== userId) throw new FactsInputError("No such session.", 404);
+  if (!owner || owner.user_id !== userId || owner.corpus !== corpus) {
+    throw new FactsInputError("No such session.", 404);
+  }
   return storeFact(db, {
+    corpus,
     assertionId: numericId(assertionId, "assertionId", false),
     factText: text(typed, "text", TEXT_LIMIT, false),
     citation: text(sourceCitation, "a sourceCitation", REASON_LIMIT, false) ?? "session hypothesis",
@@ -572,7 +595,7 @@ const get = (query, name) =>
   typeof query?.get === "function" ? query.get(name) : (query?.[name] ?? null);
 
 /**
- * Answers one facts route.
+ * Answers one facts route over the corpus that the query's `corpus` names.
  * @param {{ query: Function }} db
  * @param {{ method: string, path: string, query?: URLSearchParams | Record<string, string>,
  *   body?: unknown, userId: string }} request
@@ -590,12 +613,21 @@ export async function factsResponse(db, { method, path, query, body, userId }) {
   if (method !== (wantsPost ? "POST" : "GET")) {
     return { status: 405, body: { message: `Use ${wantsPost ? "POST" : "GET"}.` } };
   }
+  let corpus;
   try {
-    if (route === "/facts/groups") return { status: 200, body: { groups: await factsGroups(db) } };
+    corpus = requireCorpusId(get(query, "corpus"));
+  } catch (err) {
+    if (err instanceof CorpusError) return { status: 400, body: { message: err.message } };
+    throw err;
+  }
+  try {
+    if (route === "/facts/groups") {
+      return { status: 200, body: { groups: await factsGroups(db, { corpus }) } };
+    }
     if (route === "/facts/matrix") {
       const eventId = numericId(get(query, "event"), "event", false);
       const topic = eventId ? null : text(get(query, "topic"), "an event or a topic", 200);
-      const matrix = await factsMatrix(db, { eventId, topic, userId });
+      const matrix = await factsMatrix(db, { corpus, eventId, topic, userId });
       if (!matrix) return { status: 404, body: { message: "No such event." } };
       return { status: 200, body: matrix };
     }
@@ -604,7 +636,7 @@ export async function factsResponse(db, { method, path, query, body, userId }) {
       const witnessId = get(query, "witness") || null;
       if (witnessId && !WITNESS_ID.test(witnessId))
         throw new FactsInputError("witness is not an id.");
-      return { status: 200, body: await factsTimeline(db, { eventId, witnessId }) };
+      return { status: 200, body: await factsTimeline(db, { corpus, eventId, witnessId }) };
     }
     if (isWitness) {
       let witnessId;
@@ -614,7 +646,7 @@ export async function factsResponse(db, { method, path, query, body, userId }) {
         throw new FactsInputError("The witness id is not an id.");
       }
       if (!WITNESS_ID.test(witnessId)) throw new FactsInputError("The witness id is not an id.");
-      const report = await witnessReport(db, { witnessId, userId });
+      const report = await witnessReport(db, { corpus, witnessId, userId });
       if (!report) return { status: 404, body: { message: "No such witness." } };
       return { status: 200, body: report };
     }
@@ -622,12 +654,15 @@ export async function factsResponse(db, { method, path, query, body, userId }) {
       throw new FactsInputError("The request body is not a JSON object.");
     }
     if (route === "/facts/override") {
-      return { status: 201, body: { comparison: await overrideLabel(db, { ...body, userId }) } };
+      return {
+        status: 201,
+        body: { comparison: await overrideLabel(db, { ...body, corpus, userId }) },
+      };
     }
     if (route === "/facts/accept") {
-      return { status: 201, body: { fact: await acceptFact(db, { ...body, userId }) } };
+      return { status: 201, body: { fact: await acceptFact(db, { ...body, corpus, userId }) } };
     }
-    return { status: 201, body: { fact: await addHypothesis(db, { ...body, userId }) } };
+    return { status: 201, body: { fact: await addHypothesis(db, { ...body, corpus, userId }) } };
   } catch (err) {
     if (err instanceof FactsInputError)
       return { status: err.status, body: { message: err.message } };

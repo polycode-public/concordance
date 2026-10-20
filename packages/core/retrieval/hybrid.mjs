@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // Hybrid retrieval over the chunks table: lexical (tsvector) and vector (HNSW,
-// cosine) rankings at passage and section level, fused by reciprocal rank.
+// cosine) rankings at passage and section level, fused by reciprocal rank. Every ranking reads
+// one corpus.
 import { reciprocalRankFusion } from "./rrf.mjs";
 
 /** The dimension of chunks.embedding in the schema. */
@@ -42,58 +43,82 @@ export function halfvecLiteral(vector) {
 }
 
 /**
- * Chunk ids at one level, best lexical match first.
+ * Chunk ids of one corpus at one level, best lexical match first.
  * @param {{ query: Function }} db
+ * @param {string} question
+ * @param {string} level
+ * @param {number} limit
+ * @param {{ corpus: string, documentIds?: string[] | null }} scope
  */
-export async function lexicalRanking(db, question, level, limit, documentIds = null) {
+export async function lexicalRanking(db, question, level, limit, { corpus, documentIds = null }) {
+  requireCorpus(corpus);
   const scoped = documentIds?.length > 0;
   const { rows } = await db.query(
     `SELECT id FROM chunks
-      WHERE level = $2::chunk_level AND tsv @@ plainto_tsquery('english', $1)${scoped ? " AND document_id = ANY($4::text[])" : ""}
+      WHERE corpus = $4 AND level = $2::chunk_level AND tsv @@ plainto_tsquery('english', $1)${scoped ? " AND document_id = ANY($5::text[])" : ""}
       ORDER BY ts_rank(tsv, plainto_tsquery('english', $1)) DESC, id
       LIMIT $3`,
-    scoped ? [question, level, limit, documentIds] : [question, level, limit],
+    scoped ? [question, level, limit, corpus, documentIds] : [question, level, limit, corpus],
   );
   return rows.map((r) => String(r.id));
 }
 
 /**
- * Chunk ids at one level, nearest embedding first. Only rows embedded by the
+ * Chunk ids of one corpus at one level, nearest embedding first. Only rows embedded by the
  * same model take part.
  * @param {{ query: Function }} db
+ * @param {string} literal
+ * @param {string} embedModel
+ * @param {string} level
+ * @param {number} limit
+ * @param {{ corpus: string, documentIds?: string[] | null }} scope
  */
-export async function vectorRanking(db, literal, embedModel, level, limit, documentIds = null) {
+export async function vectorRanking(
+  db,
+  literal,
+  embedModel,
+  level,
+  limit,
+  { corpus, documentIds = null },
+) {
+  requireCorpus(corpus);
   if (documentIds?.length > 0) {
     // The HNSW index filters after its candidate list, so a few documents' rows would mostly
     // fall outside it; "+ 0" keeps the planner off the index and the scan exact.
     const { rows } = await db.query(
       `SELECT id FROM chunks
-        WHERE level = $2::chunk_level AND embedding IS NOT NULL AND embedding_model = $3
-          AND document_id = ANY($5::text[])
+        WHERE corpus = $5 AND level = $2::chunk_level AND embedding IS NOT NULL
+          AND embedding_model = $3 AND document_id = ANY($6::text[])
         ORDER BY (embedding <=> $1::halfvec) + 0
         LIMIT $4`,
-      [literal, level, embedModel, limit, documentIds],
+      [literal, level, embedModel, limit, corpus, documentIds],
     );
     return rows.map((r) => String(r.id));
   }
   const { rows } = await db.query(
     `SELECT id FROM chunks
-      WHERE level = $2::chunk_level AND embedding IS NOT NULL AND embedding_model = $3
+      WHERE corpus = $5 AND level = $2::chunk_level AND embedding IS NOT NULL
+        AND embedding_model = $3
       ORDER BY embedding <=> $1::halfvec
       LIMIT $4`,
-    [literal, level, embedModel, limit],
+    [literal, level, embedModel, limit, corpus],
   );
   return rows.map((r) => String(r.id));
 }
 
+const requireCorpus = (corpus) => {
+  if (typeof corpus !== "string" || !corpus) throw new Error("retrieval needs a corpus");
+};
+
 /**
- * Embeds the question and runs the four rankings, then fuses them. A non-empty `documentIds`
- * limits every ranking to those documents.
- * @param {{ question: string, provider: object, db: { query: Function }, signal?: AbortSignal,
- *   documentIds?: string[] | null }} args
+ * Embeds the question and runs the four rankings over one corpus, then fuses them. A non-empty
+ * `documentIds` limits every ranking to those documents.
+ * @param {{ question: string, corpus: string, provider: object, db: { query: Function },
+ *   signal?: AbortSignal, documentIds?: string[] | null }} args
  * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]> }>}
  */
-export async function retrieve({ question, provider, db, signal, documentIds = null }) {
+export async function retrieve({ question, corpus, provider, db, signal, documentIds = null }) {
+  requireCorpus(corpus);
   if (typeof provider.embedModel !== "string" || !provider.embedModel) {
     throw new Error("provider has no embedModel");
   }
@@ -102,9 +127,10 @@ export async function retrieve({ question, provider, db, signal, documentIds = n
       `provider ${provider.name} embeds ${provider.embedDim} dimensions; chunks.embedding has ${CHUNK_EMBED_DIM}`,
     );
   }
+  const scope = { corpus, documentIds };
   const [lexicalPassage, lexicalSection, vectors] = await Promise.all([
-    lexicalRanking(db, question, "passage", RANK_LIMITS.passage, documentIds),
-    lexicalRanking(db, question, "section", RANK_LIMITS.section, documentIds),
+    lexicalRanking(db, question, "passage", RANK_LIMITS.passage, scope),
+    lexicalRanking(db, question, "section", RANK_LIMITS.section, scope),
     provider.embed([question]),
   ]);
   signal?.throwIfAborted();
@@ -113,8 +139,8 @@ export async function retrieve({ question, provider, db, signal, documentIds = n
   }
   const literal = halfvecLiteral(vectors[0]);
   const [vectorPassage, vectorSection] = await Promise.all([
-    vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, documentIds),
-    vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, documentIds),
+    vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, scope),
+    vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, scope),
   ]);
   signal?.throwIfAborted();
   const rankings = { lexicalPassage, lexicalSection, vectorPassage, vectorSection };
