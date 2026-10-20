@@ -526,7 +526,8 @@ body[data-viewer="open"] .desk {
   color: var(--ink-soft);
 }
 
-.stages .elapsed {
+.stages .elapsed,
+.stages .tool {
   color: var(--ink-soft);
 }
 

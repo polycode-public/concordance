@@ -93,13 +93,13 @@ export function buildEvidence(
     if (blocks.length >= maxBlocks) break;
     if (isCovered(hit)) continue;
     if (hit.level === "section") {
-      add(fromRow(hit, hit.text), [hit.id], hit.id);
+      add(blockFromRow(hit, hit.text), [hit.id], hit.id);
       continue;
     }
     const parent = hit.parent_id;
     if (parent != null && (sectionHits.has(parent) || passagesPerSection.get(parent) > 1)) {
       const section = row(parent);
-      add(fromRow(section, section.text), [section.id], section.id);
+      add(blockFromRow(section, section.text), [section.id], section.id);
       continue;
     }
     const parts = [hit.prev_id, hit.id, hit.next_id]
@@ -108,7 +108,7 @@ export function buildEvidence(
       .filter((r) => r.id === hit.id || (r.document_id === hit.document_id && !isCovered(r)));
     const text = parts.map((r) => r.text).reduce(joinOverlapping);
     add(
-      fromRow(hit, text),
+      blockFromRow(hit, text),
       parts.map((r) => r.id),
       null,
     );
@@ -116,7 +116,8 @@ export function buildEvidence(
   return blocks;
 }
 
-function fromRow(r, text) {
+/** The evidence block fields of one chunk row, with the text the block shows. */
+export function blockFromRow(r, text) {
   if (r.locator == null || typeof r.locator !== "object" || Array.isArray(r.locator)) {
     throw new Error(`chunk ${r.id} has no locator object`);
   }
@@ -130,9 +131,15 @@ function fromRow(r, text) {
   };
 }
 
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// The pg driver reads a date column as local midnight, so its calendar day is the local one.
 const isoDate = (value) => {
   if (value == null) return null;
-  return (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10);
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
+  }
+  return String(value).slice(0, 10);
 };
 
 /**

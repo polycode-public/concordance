@@ -7,6 +7,13 @@
 
 import { parseJsonReply } from "./jsonReply.mjs";
 import { ReplyTruncatedError } from "./modelProvider.mjs";
+import {
+  LAST_ROUND_TEXT,
+  MAX_TOOL_ROUNDS,
+  addUsage,
+  answerStream,
+  runToolCall,
+} from "./toolLoop.mjs";
 
 const EMBED_CONCURRENCY = 4;
 const MAX_EMBED_CHARS = 45000;
@@ -26,6 +33,52 @@ function isThrottle(error) {
     error?.name === "TooManyRequestsException" ||
     error?.$metadata?.httpStatusCode === 429
   );
+}
+
+/**
+ * Reads one ConverseStream reply: streams its text through onText and returns its content blocks
+ * in order, with each toolUse input parsed, and the usage it reported.
+ */
+async function readReply(stream, signal, onText) {
+  const blocks = new Map();
+  let usage = null;
+  for await (const event of stream) {
+    signal?.throwIfAborted();
+    if (event.metadata?.usage) {
+      const { inputTokens, outputTokens } = event.metadata.usage;
+      usage = { inputTokens, outputTokens };
+    }
+    const index =
+      event.contentBlockStart?.contentBlockIndex ?? event.contentBlockDelta?.contentBlockIndex ?? 0;
+    const started = event.contentBlockStart?.start?.toolUse;
+    if (started) {
+      blocks.set(index, { toolUseId: started.toolUseId, name: started.name, input: "" });
+    }
+    const delta = event.contentBlockDelta?.delta;
+    if (delta?.text) {
+      const block = blocks.get(index) ?? { text: "" };
+      block.text += delta.text;
+      blocks.set(index, block);
+      onText(delta.text);
+    }
+    if (delta?.toolUse) blocks.get(index).input += delta.toolUse.input ?? "";
+  }
+  const content = [...blocks.keys()]
+    .sort((x, y) => x - y)
+    .map((k) => blocks.get(k))
+    .filter((b) => b.toolUseId || b.text)
+    .map((b) =>
+      b.toolUseId
+        ? {
+            toolUse: {
+              toolUseId: b.toolUseId,
+              name: b.name,
+              input: b.input ? JSON.parse(b.input) : {},
+            },
+          }
+        : { text: b.text },
+    );
+  return { content, usage };
 }
 
 let sdkPromise;
@@ -140,38 +193,72 @@ export function createBedrockProvider(
       return vectors;
     },
 
-    async chat({ messages, signal, temperature = 0, onToken, promptVersion = "unversioned" }) {
+    async chat({
+      messages,
+      signal,
+      temperature = 0,
+      onToken,
+      promptVersion = "unversioned",
+      tools,
+    }) {
       signal?.throwIfAborted();
       const { mod, runtime } = await connect();
       const system = messages.filter((m) => m.role === "system").map((m) => ({ text: m.content }));
-      const command = new mod.ConverseStreamCommand({
-        modelId: chatModel,
-        ...(system.length ? { system } : {}),
-        messages: messages
-          .filter((m) => m.role !== "system")
-          .map((m) => ({ role: m.role, content: [{ text: m.content }] })),
-        inferenceConfig: { temperature },
-      });
-      const response = await withRetry(
-        () => runtime.send(command, { abortSignal: signal }),
-        signal,
-      );
-      let text = "";
+      const history = messages
+        .filter((m) => m.role !== "system")
+        .map((m) => ({ role: m.role, content: [{ text: m.content }] }));
+      const toolConfig = tools?.length
+        ? {
+            tools: tools.map((t) => ({
+              toolSpec: {
+                name: t.name,
+                description: t.description,
+                inputSchema: { json: t.inputSchema },
+              },
+            })),
+          }
+        : null;
+      const answer = answerStream(onToken);
+      const toolCalls = [];
       let usage = null;
-      for await (const event of response.stream) {
-        signal?.throwIfAborted();
-        if (event.metadata?.usage) {
-          const { inputTokens, outputTokens } = event.metadata.usage;
-          usage = { inputTokens, outputTokens };
+      for (let round = 0; ; round++) {
+        const command = new mod.ConverseStreamCommand({
+          modelId: chatModel,
+          ...(system.length ? { system } : {}),
+          messages: [...history],
+          inferenceConfig: { temperature },
+          ...(toolConfig ? { toolConfig } : {}),
+        });
+        const response = await withRetry(
+          () => runtime.send(command, { abortSignal: signal }),
+          signal,
+        );
+        answer.startRound();
+        const reply = await readReply(response.stream, signal, (piece) => answer.push(piece));
+        usage = addUsage(usage, reply.usage);
+        const uses = reply.content.filter((block) => block.toolUse);
+        if (!uses.length) break;
+        if (!toolConfig)
+          throw new Error(`${chatModel} asked for a tool, and the chat offered none`);
+        if (round === MAX_TOOL_ROUNDS) {
+          throw new Error(`${chatModel} asked for a tool after ${MAX_TOOL_ROUNDS} tool rounds`);
         }
-        const piece = event.contentBlockDelta?.delta?.text;
-        if (piece) {
-          text += piece;
-          onToken?.(piece);
+        history.push({ role: "assistant", content: reply.content });
+        const results = [];
+        for (const { toolUse } of uses) {
+          const { content, call } = await runToolCall(tools, toolUse.name, toolUse.input);
+          signal?.throwIfAborted();
+          toolCalls.push(call);
+          results.push({
+            toolResult: { toolUseId: toolUse.toolUseId, content: [{ text: content }] },
+          });
         }
+        if (round + 1 === MAX_TOOL_ROUNDS) results.push({ text: LAST_ROUND_TEXT });
+        history.push({ role: "user", content: results });
       }
       signal?.throwIfAborted();
-      return { text, model: chatModel, promptVersion, usage };
+      const result = { text: answer.text, model: chatModel, promptVersion, usage };
+      return toolConfig ? { ...result, toolCalls } : result;
     },
 
     async extractJson({ prompt, schema, signal }) {

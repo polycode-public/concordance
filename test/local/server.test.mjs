@@ -204,6 +204,34 @@ describe("local server", () => {
     expect((await fetch(`${base}/fonts/missing.woff2`)).status).toBe(404);
   });
 
+  it("sends a tool frame for each tool call of the answer", async () => {
+    const stub = stubQuery();
+    const withTool = (args) =>
+      stub({
+        ...args,
+        onStage: (stage) => {
+          args.onStage(stage);
+          if (stage === "answering") args.onStage("tool", { name: "witness_claims", rows: 2 });
+        },
+      });
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 1 }), {
+      runQuery: withTool,
+    });
+    const client = await connect(app.port);
+    client.send({ type: "turn", thread: "t1", turnId: "u1", text: "What did W1 say?" });
+    await client.until((f) => f.type === "done");
+    client.ws.close();
+    const tool = client.frames.find((f) => f.type === "tool");
+    expect(tool).toEqual({
+      type: "tool",
+      thread: "t1",
+      turnId: "u1",
+      name: "witness_claims",
+      rows: 2,
+    });
+    expect(client.frames.indexOf(tool)).toBeLessThan(indexOfFrame(client.frames, "checking"));
+  });
+
   it("streams a turn through the stages and reports citation checks", async () => {
     const provider = createFakeProvider({ tokens: TOKENS, delayMs: 5 });
     app = await turnServer(provider);

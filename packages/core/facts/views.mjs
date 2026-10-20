@@ -83,6 +83,16 @@ export const VIEW_SQL = Object.freeze({
     JOIN assertions a ON a.id = c.assertion_a
     LEFT JOIN assertions b ON b.id = c.assertion_b
    WHERE (a.witness_id = $1 OR b.witness_id = $1) AND ${inCorpus("$2", "c.")}`,
+  crossContradictions: `
+  WITH latest AS (
+    SELECT DISTINCT ON (kind, assertion_a, coalesce(assertion_b, 0), coalesce(accepted_fact_id, 0))
+           ${COMPARISON_COLUMNS}
+      FROM assertion_comparisons
+     WHERE kind = 'cross' AND ${inCorpus("$1")}
+     ORDER BY kind, assertion_a, coalesce(assertion_b, 0), coalesce(accepted_fact_id, 0),
+              (model = 'operator') DESC, run_at DESC, id DESC)
+  SELECT * FROM latest
+   WHERE label = 'contradict' AND ($2::bigint IS NULL OR event_id = $2::bigint)`,
   comparison: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons
    WHERE id = $1::bigint AND ${inCorpus("$2")}`,
   event: `SELECT id, name FROM events WHERE id = $1::bigint`,
@@ -239,7 +249,7 @@ function sideOf(a, hideSentence) {
  * The pairs of some comparison rows with both sides, the accepted fact, and the identity flag.
  * Hypotheses of other users and pairs whose assertions are gone are left out.
  */
-async function resolvePairs(db, rows, userId) {
+export async function resolvePairs(db, rows, userId) {
   const chosen = latestPerPair(rows.map(comparisonFromRow));
   const assertionIds = [
     ...new Set(chosen.flatMap(({ shown }) => [shown.assertionA, shown.assertionB].filter(Boolean))),

@@ -83,6 +83,7 @@ async function stubQuery({ question, provider, signal, onStage, onEvidence, onTo
   onStage("retrieving");
   onEvidence(BLOCKS);
   onStage("answering");
+  onStage("tool", { name: "count_assertions", rows: 2 });
   const result = await provider.chat({
     messages: answerMessages(question, BLOCKS),
     signal,
@@ -394,6 +395,16 @@ describe.skipIf(!enabled)(
       await open({ width: 1280, height: 800 });
       await ask();
       expect(await evaluate(`document.querySelector(".stages").textContent`)).not.toBe("");
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll(".stages li")].map((li) => li.dataset.stage ?? li.textContent).slice(0, 5)`,
+        ),
+      ).toEqual(["rewriting", "retrieving", "answering", "count_assertions · 2 rows", "checking"]);
+      expect(
+        await evaluate(
+          `[...document.querySelectorAll(".stages li[data-state]")].every((li) => li.dataset.state === "done")`,
+        ),
+      ).toBe(true);
       expect(await evaluate(`document.querySelector(".answer").textContent`)).toContain(
         "Residents saw smoke",
       );

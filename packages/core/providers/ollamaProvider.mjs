@@ -5,6 +5,13 @@
 
 import { parseJsonReply } from "./jsonReply.mjs";
 import { ReplyTruncatedError } from "./modelProvider.mjs";
+import {
+  LAST_ROUND_TEXT,
+  MAX_TOOL_ROUNDS,
+  addUsage,
+  answerStream,
+  runToolCall,
+} from "./toolLoop.mjs";
 
 /**
  * @param {object} [options]
@@ -55,31 +62,76 @@ export function createOllamaProvider({
       return embeddings;
     },
 
-    async chat({ messages, signal, temperature = 0, onToken, promptVersion = "unversioned" }) {
-      const res = await post(
-        "/api/chat",
-        { model: chatModel, messages, stream: true, options: { temperature } },
-        signal,
-      );
-      let text = "";
+    async chat({
+      messages,
+      signal,
+      temperature = 0,
+      onToken,
+      promptVersion = "unversioned",
+      tools,
+    }) {
+      const offered = tools?.length
+        ? tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.inputSchema },
+          }))
+        : null;
+      const history = [...messages];
+      const answer = answerStream(onToken);
+      const toolCalls = [];
       let model = chatModel;
       let usage = null;
-      for await (const message of readNdjson(res.body, signal)) {
-        if (message.error) throw new Error(`ollama /api/chat: ${message.error}`);
-        if (message.model) model = message.model;
-        const piece = message.message?.content ?? "";
-        if (piece) {
-          text += piece;
-          onToken?.(piece);
-        }
-        if (message.done) {
-          if (Number.isFinite(message.prompt_eval_count) && Number.isFinite(message.eval_count)) {
-            usage = { inputTokens: message.prompt_eval_count, outputTokens: message.eval_count };
+      for (let round = 0; ; round++) {
+        const lastRound = round === MAX_TOOL_ROUNDS;
+        const res = await post(
+          "/api/chat",
+          {
+            model: chatModel,
+            messages: [...history],
+            stream: true,
+            options: { temperature },
+            ...(offered && !lastRound ? { tools: offered } : {}),
+          },
+          signal,
+        );
+        answer.startRound();
+        let content = "";
+        const calls = [];
+        for await (const message of readNdjson(res.body, signal)) {
+          if (message.error) throw new Error(`ollama /api/chat: ${message.error}`);
+          if (message.model) model = message.model;
+          const piece = message.message?.content ?? "";
+          if (piece) {
+            content += piece;
+            answer.push(piece);
           }
-          break;
+          calls.push(...(message.message?.tool_calls ?? []));
+          if (message.done) {
+            if (Number.isFinite(message.prompt_eval_count) && Number.isFinite(message.eval_count)) {
+              usage = addUsage(usage, {
+                inputTokens: message.prompt_eval_count,
+                outputTokens: message.eval_count,
+              });
+            }
+            break;
+          }
         }
+        if (!calls.length) break;
+        if (!offered) throw new Error(`${model} asked for a tool, and the chat offered none`);
+        if (lastRound) {
+          throw new Error(`${model} asked for a tool after ${MAX_TOOL_ROUNDS} tool rounds`);
+        }
+        history.push({ role: "assistant", content, tool_calls: calls });
+        for (const { function: fn } of calls) {
+          const { content: result, call } = await runToolCall(tools, fn?.name, fn?.arguments);
+          signal?.throwIfAborted();
+          toolCalls.push(call);
+          history.push({ role: "tool", tool_name: call.name, content: result });
+        }
+        if (round + 1 === MAX_TOOL_ROUNDS) history.push({ role: "user", content: LAST_ROUND_TEXT });
       }
-      return { text, model, promptVersion, usage };
+      const result = { text: answer.text, model, promptVersion, usage };
+      return offered ? { ...result, toolCalls } : result;
     },
 
     async extractJson({ prompt, schema, signal }) {

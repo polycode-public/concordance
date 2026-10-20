@@ -16,6 +16,7 @@ describe("protocol constants", () => {
     expect(CLIENT_FRAME_TYPES).toEqual(["turn", "cancel", "open", "report"]);
     expect(SERVER_FRAME_TYPES).toEqual([
       "status",
+      "tool",
       "token",
       "evidence",
       "done",
@@ -100,6 +101,24 @@ describe("serverFrame", () => {
 
   it("rejects an unknown stage", () => {
     expect(() => serverFrame.status("t", "u", "thinking")).toThrow(ProtocolError);
+  });
+});
+
+describe("the tool frame", () => {
+  it("names the tool and its row count", () => {
+    expect(serverFrame.tool("t", "u", { name: "count_assertions", rows: 3 })).toEqual({
+      type: "tool",
+      thread: "t",
+      turnId: "u",
+      name: "count_assertions",
+      rows: 3,
+    });
+  });
+
+  it("rejects a frame without a name or a whole row count", () => {
+    expect(() => serverFrame.tool("t", "u", { name: "", rows: 1 })).toThrow(ProtocolError);
+    expect(() => serverFrame.tool("t", "u", { name: "x", rows: -1 })).toThrow(ProtocolError);
+    expect(() => serverFrame.tool("t", "u", { name: "x", rows: 1.5 })).toThrow(ProtocolError);
   });
 });
 
