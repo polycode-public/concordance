@@ -43,6 +43,7 @@ async function signIn(page) {
 }
 
 async function ask(page, question) {
+  await expect(page.locator("#connection")).toHaveText("connected", { timeout: 30_000 });
   const turns = page.locator("article.turn");
   const before = await turns.count();
   await page.locator("#question").fill(question);
