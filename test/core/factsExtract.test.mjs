@@ -347,7 +347,47 @@ describe("checkAssertion claim kinds and pronoun subjects", () => {
       [],
       ["Mr Ash came in."],
     );
-    expect(row.row.claimKind).toBe("report");
+    expect(row.row).toMatchObject({ claimKind: "attribute", kindOverridden: true });
+  });
+
+  it("sets the kind to attribute when another person's tenure, age or family is stated, whatever the model said", () => {
+    const ask = (text, raw) =>
+      checkAssertion(
+        { sentence: 1, polarity: "positive", subject_kind: "person", ...raw },
+        new Map([[1, { id: "9", ordinal: 1, text }]]),
+      ).row;
+    const tenure = ask("They had lived at Grenfell Tower for over twenty years.", {
+      subject_text: "They",
+      predicate: "had lived",
+      object_text: "at Grenfell Tower for over twenty years",
+      claim_kind: "report",
+    });
+    expect(tenure).toMatchObject({ claimKind: "attribute", kindOverridden: true });
+    const daughter = ask(
+      "At the time of the fire I was 40 years old and my daughter was 6 years old",
+      {
+        subject_text: "my daughter",
+        predicate: "was",
+        object_text: "6 years old",
+        claim_kind: "report",
+      },
+    );
+    expect(daughter.claimKind).toBe("attribute");
+    const survived = ask("He survived, as he was not there on the night of the fire.", {
+      subject_text: "He",
+      predicate: "survived",
+      object_text: null,
+      claim_kind: "report",
+    });
+    expect(survived.claimKind).toBe("report");
+    const lift = ask("The lift was not working.", {
+      subject_text: "The lift",
+      subject_kind: "thing",
+      predicate: "was not working",
+      object_text: null,
+      claim_kind: "report",
+    });
+    expect(lift.claimKind).toBe("report");
   });
 
   it("asks for the name a pronoun stands for and for the claim kind", () => {
@@ -360,10 +400,10 @@ describe("checkAssertion claim kinds and pronoun subjects", () => {
       "When the target sentence names the subject by a pronoun such as he, she, they, it or 'this man', subject_text is the name or description of that person or thing, copied exactly from the target sentence or another sentence shown here. Write the pronoun only when no sentence shown here names them.",
     );
     expect(prompt).toContain(
-      "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
+      "claim_kind is attribute when the claim states the age, health, home, years of residence, family or job of the witness or of another person; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
     );
     expect(prompt).toContain(
-      "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
+      "Examples of claim_kind: 'I was 40 years old at the time of the fire' and 'I have lived in the tower for fifteen years' are attribute, and so are 'They had lived at Grenfell Tower for over twenty years' and 'my daughter was 6 years old'; 'I saw smoke coming under the door' is observation; 'The fire brigade arrived at about 1.10 am' is report.",
     );
     expect(prompt).not.toContain("resolve pronouns");
   });
@@ -604,7 +644,7 @@ describe("extractAssertions", () => {
         a.subject_entity_id,
       ]),
     ).toEqual([
-      ["11", "Witness W5", "report", cipher.id],
+      ["11", "Witness W5", "attribute", cipher.id],
       ["12", "Witness W5", "report", cipher.id],
       ["13", "He", "report", null],
     ]);

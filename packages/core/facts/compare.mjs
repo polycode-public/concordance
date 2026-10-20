@@ -29,7 +29,7 @@ import {
   rulesLabel,
 } from "./nli.mjs";
 
-export const COMPARE_PIPELINE_VERSION = "compare-v3";
+export const COMPARE_PIPELINE_VERSION = "compare-v4";
 /** A running row older than this belongs to an invocation that died; the Lambda timeout is 15. */
 export const LEASE_MINUTES = 16;
 const ASSERTION_PAGE = 400;
