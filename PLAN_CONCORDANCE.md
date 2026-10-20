@@ -10,6 +10,8 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 
 ## Operator assertions (verbatim, binding)
 
+- "To be a contraction there must be at leaste 1 contradicting fact so we don't need these zeros." (2026-10-20, on the Contradictions panel's group list; row U13)
+
 - "Please add a task to add tools or MCPs which are available to the llm for access to computations on the data for anything we can do without incurring a lot of cost and build whatn we can based on how the current data is stored and more inference based stuff using F11." (2026-10-20; rows T1 and T2)
 
 - "Please create a task to give this a domain name. I think concordance.polycode.co.uk" (2026-10-20; row A6)
