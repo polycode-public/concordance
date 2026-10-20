@@ -14,7 +14,8 @@
 //   paragraph null, located on the page where it starts.
 // - Passages and sentences inherit page and paragraph from their section. The document chunk
 //   carries page 1 and paragraph null.
-// - A document with no numbered paragraph fails, because this scheme cannot locate its text.
+// - A document with no numbered paragraph is located by page alone: one section per page or
+//   per cut of a long page, each with paragraph null.
 //
 // Library: ingestDocument() takes extracted pages, so a test needs no PDF.
 // CLI: node packages/core/ingest/run.mjs --corpus grenfell
@@ -288,17 +289,12 @@ export function documentMeta(corpus, row, source) {
 }
 
 /**
- * Splits pages into sections (numbered paragraphs), passages and sentences with their
+ * Splits pages into sections (numbered paragraphs, or pages when none is numbered), passages and sentences with their
  * locators. Passage and sentence ordinals run across the whole document.
  * @param {{ page: number, text: string }[]} pages
  */
 export function planChunks(pages) {
   const sections = splitNumberedParagraphs(pages);
-  if (!sections.some((s) => s.paragraph != null)) {
-    throw new Error(
-      "no numbered paragraph found; the page-paragraph locator cannot place the text",
-    );
-  }
   let passageOrdinal = 0;
   let sentenceOrdinal = 0;
   return sections.map((section, ordinal) => {

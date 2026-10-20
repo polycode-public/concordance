@@ -2,7 +2,10 @@
 // Copyright 2026 Polycode Limited
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { splitNumberedParagraphs } from "../../packages/core/chunking/sections.mjs";
+import {
+  MAX_SECTION_CHARS,
+  splitNumberedParagraphs,
+} from "../../packages/core/chunking/sections.mjs";
 
 describe("splitNumberedParagraphs", () => {
   it("splits numbered paragraphs and records the start page", () => {
@@ -221,6 +224,62 @@ describe("splitNumberedParagraphs", () => {
       expect(splitNumberedParagraphs(pages)).toEqual([
         { paragraph: 1, page: 1, text: "First." },
         { paragraph: 4, page: 1, text: "Fourth.", heading: "Travel" },
+      ]);
+    });
+  });
+
+  describe("statement form without numbered paragraphs", () => {
+    const pages = readFileSync(
+      new URL("../fixtures/MG11-unnumbered-pages-1-3.txt", import.meta.url),
+      "utf8",
+    )
+      .split("\f")
+      .map((text, i) => ({ page: i + 1, text }));
+
+    it("drops the marking, statement and page lines at the top of every page", () => {
+      const text = splitNumberedParagraphs(pages)
+        .map((s) => s.text)
+        .join("\n");
+      expect(text).not.toMatch(/RESTRICTED|OFFICIAL|Statement of|Page \d/);
+    });
+
+    it("records the witness name as the heading once", () => {
+      const sections = splitNumberedParagraphs(pages);
+      expect(sections.filter((s) => s.heading).map((s) => [s.page, s.heading])).toEqual([
+        [1, "ADAMS, YVONNE"],
+      ]);
+    });
+
+    it("keeps one section per page with a null paragraph", () => {
+      const sections = splitNumberedParagraphs(pages);
+      expect(sections.map((s) => [s.page, s.paragraph])).toEqual([
+        [1, null],
+        [2, null],
+        [3, null],
+      ]);
+      expect(sections[1].text).toMatch(/^the first caller .* The caller gave both\. On answering/);
+    });
+
+    it("cuts a long page at paragraph ends before sentence ends", () => {
+      const long = (word) => `${`${word} `.repeat(14).trim()}.`;
+      const paragraph = [long("alpha"), long("beta"), "A short end."].join("\n");
+      const text = Array.from({ length: 80 }, () => paragraph).join("\n");
+      const sections = splitNumberedParagraphs([{ page: 1, text }]);
+      expect(sections.length).toBeGreaterThan(1);
+      for (const s of sections) {
+        expect(s.text.length).toBeLessThanOrEqual(MAX_SECTION_CHARS);
+        expect(s.text.endsWith("A short end.")).toBe(true);
+      }
+    });
+
+    it("drops a repeated header line on a numbered statement", () => {
+      const pages = [
+        { page: 1, text: "OFFICIAL\nStatement of: DOE, JANE FormMG11(T)\nPage 1 of 2\n1. First." },
+        { page: 2, text: "OFFICIAL\nStatement of: DOE, JANE FormMG11(T)\nPage 2 of 2\n2. Second." },
+      ];
+      expect(splitNumberedParagraphs(pages)).toEqual([
+        { paragraph: 1, page: 1, text: "First.", heading: "DOE, JANE" },
+        { paragraph: 2, page: 2, text: "Second." },
       ]);
     });
   });

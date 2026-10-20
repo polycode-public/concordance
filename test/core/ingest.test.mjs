@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -198,10 +199,34 @@ describe("planChunks", () => {
     ]);
   });
 
-  it("throws when no numbered paragraph exists", () => {
-    expect(() => planChunks([{ page: 1, text: "A letter with no numbers." }])).toThrow(
-      /no numbered paragraph/,
+  it("plans the page sections of a statement with no numbered paragraph", () => {
+    const sections = planChunks(
+      readFileSync(new URL("../fixtures/MG11-unnumbered-pages-1-3.txt", import.meta.url), "utf8")
+        .split("\f")
+        .map((text, i) => ({ page: i + 1, text })),
     );
+    expect(sections.map((s) => s.locator)).toEqual([
+      { page: 1, paragraph: null },
+      { page: 2, paragraph: null },
+      { page: 3, paragraph: null },
+    ]);
+    expect(sections[0].heading).toBe("ADAMS, YVONNE");
+    expect(sections.every((s) => s.sentences.length > 0 && s.passages.length > 0)).toBe(true);
+  });
+
+  it.each([
+    ["IWS00000490-pages-1-2", "381dd14b7c9b0fd75d1fdf2310f75f5b7ba4e1b30ef16330ca4dcc9561f6ab57"],
+    ["IWS00000913-pages-3-4", "aa19877c9f945a417ffa6488960669f2e69dcb91eb5ee359bd9534837749faf4"],
+    ["IWS00000990-pages-1-2", "8099baac15b308a9039a358646ad8fd424b1b3085c373034da91602b2e1df4b7"],
+  ])("plans the numbered fixture %s unchanged", (name, sha256) => {
+    const pages = readFileSync(new URL(`../fixtures/${name}.txt`, import.meta.url), "utf8")
+      .split("\f")
+      .map((text, i) => ({ page: i + 1, text }));
+    expect(
+      createHash("sha256")
+        .update(JSON.stringify(planChunks(pages)))
+        .digest("hex"),
+    ).toBe(sha256);
   });
 });
 

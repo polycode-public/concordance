@@ -16,6 +16,14 @@ const NAME_LINE = /^[\p{L}'’-]+(?: [\p{L}'’-]+){1,3}$/u;
 const PAGE_NUMBER_LINE = /^(?:\d{1,3}|Page \d{1,3} of \d{1,3})$/;
 const SIGNATURE_LINE = /\b(?:Signed|Dated)\b/;
 const MAX_FOOTER_LINES = 3;
+// A police statement form repeats three lines at the top of each page: the marking, the
+// "Statement of: SURNAME, FORENAME FormMG11(T)" line and the page number.
+const MARKING_LINE = /^(?:RESTRICTED|OFFICIAL(?:[- ]SENSITIVE)?)$/;
+const STATEMENT_OF_LINE = /^Statement of:\s*(.*)$/;
+const FORM_SUFFIX = /\s*Form\s*MG\S*$/i;
+const HEADER_PAGE_LINE = /^Page \d{1,3} of\s?\d{1,3}$/;
+const MAX_HEADER_LINES = 3;
+const PARAGRAPH_END = /[.!?]["')\]]?$/;
 const MAX_HEADING_CHARS = 60;
 const SENTENCE_END = /[.!?]["')\]]?\s/g;
 
@@ -39,19 +47,32 @@ function cutLong(text) {
   return parts;
 }
 
-/** Splits unnumbered text at blank lines into parts of at most MAX_SECTION_CHARS. */
-function partsOfUnnumbered(lines) {
+/**
+ * Splits unnumbered text at blank lines into parts of at most MAX_SECTION_CHARS. With
+ * cutAtLineEnds, a line that ends a sentence and is shorter than the line before and the line
+ * after it also ends a block, because a form without blank lines shows a paragraph end that way.
+ */
+function partsOfUnnumbered(lines, cutAtLineEnds = false) {
   const blocks = [];
   let block = [];
-  for (const line of [...lines, ""]) {
+  const endBlock = () => {
+    const text = normalise(block.join(" "));
+    if (text) blocks.push(text);
+    block = [];
+  };
+  const all = [...lines, ""];
+  all.forEach((line, i) => {
     if (line.trim() === "") {
-      const text = normalise(block.join(" "));
-      if (text) blocks.push(text);
-      block = [];
-    } else {
-      block.push(line);
+      endBlock();
+      return;
     }
-  }
+    block.push(line);
+    if (!cutAtLineEnds || !PARAGRAPH_END.test(line.trim())) return;
+    const before = i > 0 ? all[i - 1].trim().length : 0;
+    const after = all[i + 1]?.trim().length ?? 0;
+    const length = line.trim().length;
+    if (length < before && length < after) endBlock();
+  });
   const parts = [];
   let packed = "";
   for (const text of blocks.flatMap(cutLong)) {
@@ -104,6 +125,25 @@ function dropFooter(lines, footer) {
   return lines.slice(0, start);
 }
 
+/**
+ * Drops the statement form header lines at the top of a page and returns the witness name
+ * that its "Statement of:" line gives, or null.
+ */
+function dropHeader(lines) {
+  let start = 0;
+  while (start < lines.length && lines[start].trim() === "") start++;
+  let name = null;
+  let end = start;
+  while (end < lines.length && end - start < MAX_HEADER_LINES) {
+    const text = lines[end].trim();
+    const statementOf = STATEMENT_OF_LINE.exec(text);
+    if (statementOf) name ??= statementOf[1].replace(FORM_SUFFIX, "").trim() || null;
+    else if (!MARKING_LINE.test(text) && !HEADER_PAGE_LINE.test(text)) break;
+    end++;
+  }
+  return end === start ? { lines, name } : { lines: lines.slice(end), name };
+}
+
 const isHeadingShape = (line) => {
   const text = line.trim();
   return (
@@ -122,6 +162,10 @@ const isHeadingShape = (line) => {
  * run past its first page and the next page would take it over MAX_SECTION_CHARS. Text without a paragraph number
  * (before the first, or after a paragraph was cut) becomes one section per page with
  * paragraph null; a page over MAX_SECTION_CHARS splits at blank lines, then at sentence ends.
+ * A statement with no numbered paragraph keeps one section per page, cut at paragraph ends (a
+ * short line that ends a sentence) before the sentence cuts. The header lines that a police
+ * statement form repeats at the top of each page (marking, "Statement of:", "Page n of m") are
+ * left out, and the name from "Statement of:" is the heading of the first section after it.
  * The footer of each page is left out once the first page shows its pattern. A short line
  * without end punctuation that sits right before a numbered paragraph becomes that
  * paragraph's heading; a page number, a signature line or the witness name there is dropped.
@@ -135,8 +179,11 @@ export function splitNumberedParagraphs(pageTexts) {
   }));
   const footer = pages.length ? learnFooter(pages[0].lines) : null;
   const flat = [];
+  let statementName = null;
   for (const { page, lines } of pages) {
-    const kept = dropFooter(lines, footer);
+    const header = dropHeader(lines);
+    statementName ??= header.name;
+    const kept = dropFooter(header.lines, footer);
     const chars = kept.join("\n").length;
     kept.forEach((text, i) => flat.push({ page, text, chars, first: i === 0 }));
   }
@@ -160,9 +207,12 @@ export function splitNumberedParagraphs(pageTexts) {
   const flush = () => {
     if (!current) return;
     if (current.paragraph === null) {
-      for (const text of partsOfUnnumbered(current.lines)) {
-        out.push({ paragraph: null, page: current.page, text });
-      }
+      out.push({
+        paragraph: null,
+        page: current.page,
+        lines: current.lines,
+        heading: current.heading,
+      });
     } else {
       const text = normalise(current.lines.join(" "));
       if (text) {
@@ -198,9 +248,10 @@ export function splitNumberedParagraphs(pageTexts) {
         lastPage: page,
         lines: [first],
         chars: first.length,
-        heading: pendingHeading,
+        heading: pendingHeading ?? statementName ?? undefined,
       };
       pendingHeading = null;
+      statementName = null;
       return;
     }
     if (isHeadingShape(line) || PAGE_NUMBER_LINE.test(line.trim())) {
@@ -212,10 +263,22 @@ export function splitNumberedParagraphs(pageTexts) {
         return;
       }
     }
-    current ??= { paragraph: null, page, lastPage: page, lines: [], chars: 0 };
+    if (!current) {
+      current = { paragraph: null, page, lastPage: page, lines: [], chars: 0 };
+      if (statementName) current.heading = statementName;
+      statementName = null;
+    }
     current.lines.push(line);
     current.chars += line.length + 1;
   });
   flush();
-  return out;
+  const numbered = out.some((section) => section.paragraph !== null);
+  return out.flatMap((section) => {
+    if (section.paragraph !== null) return [section];
+    return partsOfUnnumbered(section.lines, !numbered).map((text, i) => {
+      const part = { paragraph: null, page: section.page, text };
+      if (i === 0 && section.heading) part.heading = section.heading;
+      return part;
+    });
+  });
 }
