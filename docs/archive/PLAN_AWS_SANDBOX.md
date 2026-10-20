@@ -3,9 +3,12 @@
 
 # PLAN_AWS_SANDBOX: the AWS form
 
+Archived 2026-10-20: every phase landed. The live account facts are `AWS_ACCOUNT.md`; the deployed
+line is `NEXT.md`'s; the decisions below stand.
+
 The repository deploys to polycode-sandbox from `main` by GitHub OIDC, the way chat-with-diya-gl
-deploys from GitLab. The AWS form is the build (`PLAN_CONCORDANCE.md`, Phase 1); every component
-costs nothing at idle. Account facts: `AWS_ACCOUNT.md`.
+deploys from GitLab. The AWS form is the build (`../../PLAN_CONCORDANCE.md`, Phase 1); every component
+costs nothing at idle. Account facts: `../../AWS_ACCOUNT.md`.
 
 ## Deployed
 

@@ -3,7 +3,7 @@
 
 # NEXT
 
-Open work only. A row leaves this file in the same commit that closes it; completed work lives in `git log`. The plan of record is `PLAN_CONCORDANCE.md`; the AWS form is `PLAN_AWS_SANDBOX.md`; the laptop port check is `PLAN_LAPTOP_STACK.md`. Each row ends with **Size** (files touched, estimated) and **Model** (the lowest sub-agent tier that fits: Fable, Opus, Sonnet, Haiku; `operator` for a human row).
+Open work only. A row leaves this file in the same commit that closes it; completed work lives in `git log`. The plan of record is `PLAN_CONCORDANCE.md`; the AWS form is `docs/archive/PLAN_AWS_SANDBOX.md`; the laptop port check is `PLAN_LAPTOP_STACK.md`. Each row ends with **Size** (files touched, estimated) and **Model** (the lowest sub-agent tier that fits: Fable, Opus, Sonnet, Haiku; `operator` for a human row).
 
 The board runs in five sections, in this order. The section is the classification: what it takes to carry the row to completion. `machine-ask` is work a session drives with a human present to authenticate or approve (an SSO login, an AWS write outside `deploy.yml`, a GitHub setting). `human-driven` is work a person must do themselves (a decision between named alternatives, a purchase, a signature).
 

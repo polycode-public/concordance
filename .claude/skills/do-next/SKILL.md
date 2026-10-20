@@ -16,7 +16,7 @@ resequence the board. Keep going until the board has nothing a machine can start
 stops you. A green suite, a landed wave and a tidy summary are the middle of the work.
 
 The master plan is `PLAN_CONCORDANCE.md`; the others are the root's `PLAN_*.md`
-(`PLAN_LAPTOP_STACK.md`, `PLAN_AWS_SANDBOX.md`). `NEXT.md`'s shape rules are in `CLAUDE.md` and
+(`PLAN_LAPTOP_STACK.md`, `docs/archive/PLAN_AWS_SANDBOX.md`). `NEXT.md`'s shape rules are in `CLAUDE.md` and
 `test/repo/nextShape.test.mjs`.
 
 ## If cool-down is on, wake first

@@ -68,7 +68,7 @@ One Postgres (pgvector, tsvector, an assertions table) behind a provider-neutral
 | Serve  | rewrite, lexical + vector, RRF, rerank, neighbour expansion, evidence blocks, answer, resolve citations, checks (citation per sentence, entailment, quotes, numbers, abstention), WebSocket protocol with cancel and threads, raw ESM page |
 
 Every box has an AWS form and a laptop form selected by configuration. The AWS form is built and
-deployed (`PLAN_AWS_SANDBOX.md`); the laptop form exists to show the AWS form ports to a machine
+deployed (`docs/archive/PLAN_AWS_SANDBOX.md`); the laptop form exists to show the AWS form ports to a machine
 the court can run (`PLAN_LAPTOP_STACK.md`). Three seams carry the port: models through
 `packages/core/providers/modelProvider.mjs`, the store through the `{ query, close }` shape of
 `packages/core/db.mjs`, text extraction through `textTool`.
@@ -81,7 +81,7 @@ the court can run (`PLAN_LAPTOP_STACK.md`). Three seams carry the port: models t
 | Language                      | Plain JS ES modules everywhere, including CDK (`infra/*.mjs`) in the-mechanical-code-talker's structure                                                                      | CDK in TypeScript (tmct's own language); CDK in Java/Maven (the polycode house default) |
 | Package layout                | One root `package.json`; `packages/core`, `packages/aws`, `packages/local`, `packages/ui` are plain directories                                                              | npm workspaces                                                                          |
 | Vector store                  | Postgres 16, pgvector 0.8, `halfvec(1024)` with HNSW cosine; `tsvector` for lexical                                                                                          | LanceDB; OpenSearch; S3 Vectors with DynamoDB (loses SQL over assertions)               |
-| Store on AWS                  | Aurora Serverless v2, 0 ACU minimum, the RDS Data API; Lambda outside the VPC (`PLAN_AWS_SANDBOX.md`)                                                                        | RDS instance (costs at idle); Lambda in the VPC with NAT                                |
+| Store on AWS                  | Aurora Serverless v2, 0 ACU minimum, the RDS Data API; Lambda outside the VPC (`docs/archive/PLAN_AWS_SANDBOX.md`)                                                           | RDS instance (costs at idle); Lambda in the VPC with NAT                                |
 | Compute on AWS                | Lambda Node 24 arm64 zip bundles, API Gateway WebSocket and HTTP API, Step Functions, CloudFront and S3, Cognito for one user                                                | containers on ECS or App Runner                                                         |
 | Models on AWS                 | Bedrock: Titan Text Embeddings v2 (1024-dim), the `eu.` Haiku 4.5 profile for extraction and checks, the `eu.` Sonnet 4.5 profile for the turn                               | Cohere Embed v3 (marketplace subscription)                                              |
 | Provider seam                 | `bedrock` built first (C1); `laptop` (Ollama, from Phase 0) is the port check                                                                                                | laptop first                                                                            |
@@ -228,7 +228,7 @@ roadmap slide, revisited after Phase 7.
 ## Related documents
 
 - `docs/SPEC_WITNESS_RESEARCH_TOOL.md`: the specification, verbatim.
-- `PLAN_AWS_SANDBOX.md`: the AWS form of each component, the account facts, the deploy path.
+- `docs/archive/PLAN_AWS_SANDBOX.md`: the AWS form of each component, the account facts, the deploy path.
 - `PLAN_LAPTOP_STACK.md`: the laptop port check: runtime, models, measurements.
 - `AWS_ACCOUNT.md`: the account record.
 - `~/projects/polycode-public/repository0/PLAN_REPOSITORY_ZERO_REBOOT.md`: how this repository was

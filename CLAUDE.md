@@ -11,7 +11,7 @@ open work is `NEXT.md`.
 
 **The build here is the AWS path.** Bedrock for models, Aurora Serverless v2 with pgvector behind
 the RDS Data API, Lambda behind API Gateway WebSocket, CloudFront and S3 for the raw ESM page, all
-deployed from `main` by `deploy.yml` (`PLAN_AWS_SANDBOX.md`). The laptop form (Postgres in Docker,
+deployed from `main` by `deploy.yml` (`docs/archive/PLAN_AWS_SANDBOX.md`). The laptop form (Postgres in Docker,
 Ollama, `packages/local/server.mjs`) exists to show the AWS form ports to a machine the court can
 run; it is proven by the eval on both providers and never built ahead (`PLAN_LAPTOP_STACK.md`).
 
