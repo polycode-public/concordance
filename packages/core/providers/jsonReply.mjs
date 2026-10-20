@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 
+const SHOWN = 200;
 const FENCE_OPEN = /^```[A-Za-z]*[ \t]*\r?\n?/;
 
 /** The text of the first brace-balanced object in `text`, or null. Braces inside strings do not count. */
@@ -42,6 +43,10 @@ export function parseJsonReply(content, describe) {
     if (candidate === null) throw new Error("no JSON object");
     return JSON.parse(candidate);
   } catch {
-    throw new Error(`${describe} returned invalid JSON: ${content.slice(0, 200)}`);
+    const shown =
+      content.length <= 2 * SHOWN
+        ? content
+        : `${content.slice(0, SHOWN)} ... ${content.slice(-SHOWN)}`;
+    throw new Error(`${describe} returned invalid JSON: ${shown}`);
   }
 }

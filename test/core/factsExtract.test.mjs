@@ -12,6 +12,7 @@ import {
   extractPrompt,
   sentenceWindows,
 } from "../../packages/core/facts/extract.mjs";
+import { ReplyTruncatedError } from "../../packages/core/providers/modelProvider.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { createFactsStore } from "./factsFakeStore.mjs";
 
@@ -498,6 +499,100 @@ describe("extractAssertions", () => {
         log() {},
       }),
     ).rejects.toThrow("IWS1 has no sentence chunks");
+  });
+
+  describe("replies cut off at the output limit", () => {
+    const store = (count) =>
+      createFactsStore({
+        documents: [{ id: "IWS1", witness_id: "IWS1" }],
+        sentences: Array.from({ length: count }, (_, n) => ({
+          id: String(100 + n),
+          document_id: "IWS1",
+          ordinal: n,
+          text: `I saw smoke number ${n}.`,
+          header: HEADER,
+          context_line: null,
+        })),
+        witnesses: [{ id: "IWS1", cipher_only: false, aliases: [] }],
+      });
+    const ordinalsIn = (prompt) => [...prompt.matchAll(/^\[S(\d+)\]/gm)].map((m) => Number(m[1]));
+    const answer = (ordinals) => ({
+      assertions: ordinals.map((n) => ({
+        sentence: n,
+        predicate: "saw",
+        object_text: `smoke number ${n}`,
+        polarity: "positive",
+      })),
+    });
+
+    it("splits a cut-off window into halves and adds their counts", async () => {
+      const db = store(10);
+      const seen = [];
+      const lines = [];
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          seen.push(ordinals);
+          if (ordinals.length === 10) throw new ReplyTruncatedError("m", 9000);
+          return answer(ordinals);
+        },
+      });
+      const result = await extractAssertions({
+        documentId: "IWS1",
+        provider: p,
+        db,
+        window: 10,
+        log: (line) => lines.push(JSON.parse(line)),
+        now: () => 0,
+      });
+      expect(seen.map((o) => o.length)).toEqual([10, 5, 5]);
+      expect(result.counts).toMatchObject({ calls: 3, kept: 10, rejected: 0, written: 10 });
+      expect(result.windows).toEqual({ done: 1, total: 1 });
+      expect(db.tables.assertions).toHaveLength(10);
+      expect(lines.filter((l) => l.stage === "window-split")).toEqual([
+        { evidenceId: "IWS1", stage: "window-split", window: 0, depth: 1, sentences: "0-9" },
+      ]);
+    });
+
+    it("splits a half that is cut off again", async () => {
+      const seen = [];
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          seen.push(ordinals.length);
+          if (ordinals.length > 2) throw new ReplyTruncatedError("m", 9000);
+          return answer(ordinals);
+        },
+      });
+      const result = await extractAssertions({
+        documentId: "IWS1",
+        provider: p,
+        db: store(5),
+        window: 5,
+        log: () => {},
+      });
+      expect(seen).toEqual([5, 3, 2, 1, 2]);
+      expect(result.counts).toMatchObject({ calls: 5, kept: 5, written: 5 });
+    });
+
+    it("fails the document naming the window when one sentence is still cut off", async () => {
+      const db = store(4);
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          if (ordinals.includes(2)) throw new ReplyTruncatedError("m", 9000);
+          return answer(ordinals);
+        },
+      });
+      await expect(
+        extractAssertions({ documentId: "IWS1", provider: p, db, window: 2, log: () => {} }),
+      ).rejects.toThrow(/window 1, sentence 2-2: m stopped at its output limit/);
+      expect(db.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["100", "101"]);
+      expect(db.tables.provenance).toEqual([]);
+    });
   });
 
   describe("resuming across runs", () => {

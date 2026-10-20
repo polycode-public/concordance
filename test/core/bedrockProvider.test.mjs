@@ -3,7 +3,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockProvider } from "../../packages/core/providers/bedrockProvider.mjs";
 import { providerFromEnv } from "../../packages/core/providers/index.mjs";
-import { assertProvider } from "../../packages/core/providers/modelProvider.mjs";
+import {
+  ReplyTruncatedError,
+  assertProvider,
+} from "../../packages/core/providers/modelProvider.mjs";
 
 class BedrockRuntimeClient {}
 class Recorded {
@@ -144,10 +147,33 @@ describe("bedrock provider", () => {
     expect(await p.extractJson({ prompt: "extract", schema })).toEqual({ predicate: "saw" });
     const { input } = client.calls[0];
     expect(input.modelId).toBe(p.extractModel);
-    expect(input.inferenceConfig).toEqual({ temperature: 0 });
+    expect(input.inferenceConfig).toEqual({ temperature: 0, maxTokens: 8192 });
     const text = input.messages[0].content[0].text;
     expect(text.startsWith("extract")).toBe(true);
     expect(text).toContain(JSON.stringify(schema));
+  });
+
+  it("throws ReplyTruncatedError when the model stopped at its output limit", async () => {
+    const client = fakeClient({
+      ConverseCommand: () => ({
+        stopReason: "max_tokens",
+        output: { message: { content: [{ text: '```json\n{"assertions":[{"sentence":1' }] } },
+      }),
+    });
+    const p = createBedrockProvider({}, { sdk, client });
+    const error = await p.extractJson({ prompt: "x" }).catch((e) => e);
+    expect(error).toBeInstanceOf(ReplyTruncatedError);
+    expect(error).toMatchObject({ model: p.extractModel, replyLength: 36 });
+  });
+
+  it("keeps the head and the tail of a long invalid reply in the error", async () => {
+    const reply = `HEAD${"x".repeat(500)}TAIL`;
+    const client = fakeClient({ ConverseCommand: converseReply(reply) });
+    const p = createBedrockProvider({}, { sdk, client });
+    const error = await p.extractJson({ prompt: "x" }).catch((e) => e);
+    expect(error.message).toContain("HEAD");
+    expect(error.message).toContain("TAIL");
+    expect(error.message).not.toContain("x".repeat(300));
   });
 
   it("throws naming the model when the reply is not JSON", async () => {

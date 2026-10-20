@@ -13,6 +13,7 @@
 // sentence. The model never names a chunk: source_chunk_id comes from the sentence the code
 // numbered.
 
+import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
 import { sha256Text } from "../ingest/run.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
 
@@ -613,52 +614,91 @@ export async function extractAssertions({
       stopped = true;
       break;
     }
-    const w = windows[next];
-    let result;
-    try {
-      result = await provider.extractJson({
-        prompt: extractPrompt(w, events),
-        schema: ASSERTION_SCHEMA,
-        signal,
-      });
-    } catch (err) {
-      if (!signal?.aborted) throw err;
-      stopped = true;
-      break;
-    }
-    calls++;
-    if (!Array.isArray(result?.assertions)) {
-      throw new Error(
-        `${documentId}: the extraction model returned no assertions array for sentences ` +
-          `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}: ${JSON.stringify(result).slice(0, 200)}`,
-      );
-    }
     const kept = [];
-    const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
-    for (const raw of result.assertions) {
-      const checked = checkAssertion(raw, targets, events);
-      let reason = checked.ok ? null : checked.reason;
-      if (checked.ok) {
-        const k = assertionKey(checked.row);
-        if (seen.has(k)) reason = "duplicate";
-        else {
-          seen.add(k);
-          kept.push(checked.row);
-        }
-      }
-      if (reason) {
-        rejected[reason] = (rejected[reason] ?? 0) + 1;
-        log(
-          JSON.stringify({
-            evidenceId: documentId,
-            stage: "assertion-rejected",
-            sentence: raw?.sentence ?? null,
-            field: checked.field ?? null,
-            reason,
-            value: JSON.stringify(checked.value ?? raw?.predicate ?? null).slice(0, 200),
-          }),
+    const collect = (w, result) => {
+      if (!Array.isArray(result?.assertions)) {
+        throw new Error(
+          `${documentId}: the extraction model returned no assertions array for sentences ` +
+            `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}: ${JSON.stringify(result).slice(0, 200)}`,
         );
       }
+      const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
+      for (const raw of result.assertions) {
+        const checked = checkAssertion(raw, targets, events);
+        let reason = checked.ok ? null : checked.reason;
+        if (checked.ok) {
+          const k = assertionKey(checked.row);
+          if (seen.has(k)) reason = "duplicate";
+          else {
+            seen.add(k);
+            kept.push(checked.row);
+          }
+        }
+        if (reason) {
+          rejected[reason] = (rejected[reason] ?? 0) + 1;
+          log(
+            JSON.stringify({
+              evidenceId: documentId,
+              stage: "assertion-rejected",
+              sentence: raw?.sentence ?? null,
+              field: checked.field ?? null,
+              reason,
+              value: JSON.stringify(checked.value ?? raw?.predicate ?? null).slice(0, 200),
+            }),
+          );
+        }
+      }
+    };
+    // A reply cut off at the output limit is retried as two half windows, down to one sentence.
+    const extractWindow = async (w, depth) => {
+      let result;
+      try {
+        result = await provider.extractJson({
+          prompt: extractPrompt(w, events),
+          schema: ASSERTION_SCHEMA,
+          signal,
+        });
+      } catch (err) {
+        if (err instanceof ReplyTruncatedError && !signal?.aborted) {
+          calls++;
+          const sentencesIn = `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}`;
+          if (w.targets.length === 1) {
+            throw new Error(
+              `${documentId}: window ${next}, sentence ${sentencesIn}: ${err.message}`,
+              { cause: err },
+            );
+          }
+          log(
+            JSON.stringify({
+              evidenceId: documentId,
+              stage: "window-split",
+              window: next,
+              depth,
+              sentences: sentencesIn,
+            }),
+          );
+          const mid = Math.ceil(w.targets.length / 2);
+          const head = w.targets.slice(0, mid);
+          const tail = w.targets.slice(mid);
+          const halves = [
+            { before: w.before, targets: head, after: tail[0] },
+            { before: head.at(-1), targets: tail, after: w.after },
+          ];
+          for (const half of halves) {
+            if (!(await extractWindow(half, depth + 1))) return false;
+          }
+          return true;
+        }
+        if (!signal?.aborted) throw err;
+        return false;
+      }
+      calls++;
+      collect(w, result);
+      return true;
+    };
+    if (!(await extractWindow(windows[next], 1))) {
+      stopped = true;
+      break;
     }
     keptCount += kept.length;
     await writeWindow(kept, next);

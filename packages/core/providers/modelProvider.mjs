@@ -41,6 +41,20 @@
  *   Returns one JSON object from the extraction model.
  */
 
+/** The model stopped at its output limit, so its reply is cut off. */
+export class ReplyTruncatedError extends Error {
+  /**
+   * @param {string} model
+   * @param {number} replyLength  characters in the cut-off reply
+   */
+  constructor(model, replyLength) {
+    super(`${model} stopped at its output limit after ${replyLength} characters`);
+    this.name = "ReplyTruncatedError";
+    this.model = model;
+    this.replyLength = replyLength;
+  }
+}
+
 /** Names every provider must expose. */
 export const PROVIDER_METHODS = Object.freeze(["embed", "chat", "extractJson"]);
 
