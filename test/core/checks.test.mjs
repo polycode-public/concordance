@@ -8,6 +8,15 @@ import {
 } from "../../packages/core/checks/citations.mjs";
 import { verifyQuote } from "../../packages/core/checks/quotes.mjs";
 
+const RECORDED_ANSWER = [
+  "The corpus does not say when residents on floors 16 to 20 first saw smoke outside their windows.",
+  "The evidence provided covers residents from floor 16 only, and their accounts focus on smoke in the corridors and stairwells rather than outside their windows [E1][E3][E4].",
+  "One floor 16 resident looked out of windows at approximately 1.00-1.15 am and saw three fire engines below but no smoke or flames at that time [E1].",
+  "The same resident later woke around 1.30 am to a popping sound and saw an orange streak on the building's exterior, then moved to different windows to investigate, eventually seeing fire along the whole length of the building from the 19th floor down to the bottom [E1].",
+  "Another floor 16 resident saw burning debris falling from above when looking out of a window, and noted smoke coming from above and below outside the windows, but the timing of these observations is not specified [E5].",
+  "The corpus does not contain evidence about residents on floors 17 to 20, nor does it provide clear information about when floor 16 residents first observed smoke specifically outside their windows [E1][E3][E4][E5].",
+].join("\n\n");
+
 describe("citationTags", () => {
   it("extracts evidence numbers in order without repeats", () => {
     expect(citationTags("Smoke was seen at 01:15 [E3][E1] and again [E3].")).toEqual([3, 1]);
@@ -31,6 +40,35 @@ describe("splitAnswerSentences", () => {
       "Mr. Smith left [E1].",
       "Then the lift failed [E2].",
     ]);
+  });
+
+  it("counts every sentence of a Markdown answer whose tags close the paragraph", () => {
+    const result = markUnsupported(RECORDED_ANSWER);
+    expect(result.total).toBe(6);
+    expect(result.supported).toBe(5);
+  });
+
+  it("starts a sentence at a blank line, a bullet and a colon-ended lead", () => {
+    const text =
+      "Residents described leaving their flats:\n\n- One used the stairs [E1]\n- Another waited [E2]\n";
+    expect(splitAnswerSentences(text)).toEqual([
+      "Residents described leaving their flats:",
+      "One used the stairs [E1]",
+      "Another waited [E2]",
+    ]);
+    expect(markUnsupported(text).supported).toBe(2);
+  });
+
+  it("keeps a tag on its own line with the sentence above", () => {
+    expect(splitAnswerSentences("She left\n[E2]\nHe stayed [E3]")).toEqual([
+      "She left [E2]",
+      "He stayed [E3]",
+    ]);
+  });
+
+  it("does not split a time range, a clock time or a page reference", () => {
+    const text = "At 1.00-1.15 am he rang 999 at 02:10, see p.13 [E1].";
+    expect(splitAnswerSentences(text)).toEqual([text]);
   });
 });
 

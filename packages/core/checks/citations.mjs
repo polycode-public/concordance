@@ -5,21 +5,28 @@ import { splitSentences } from "../chunking/sentences.mjs";
 const TAG = /\[E(\d+(?:\s*,\s*E?\d+)*)\]/g;
 const LEADING = /^((?:\[E\d+(?:\s*,\s*E?\d+)*\]\s*)+)(.*)$/s;
 
+const BULLET = /^(?:[-*\u2022]|\d+[.)])\s+/;
+
 /**
- * Splits a model answer into sentences. Citation tags written after the full
- * stop ("... the stairs. [E3]") stay with the sentence they follow.
+ * Splits a model answer into sentences. Every line is its own run of text, so
+ * a paragraph, a bullet and a colon-ended lead each start a sentence even when
+ * the closing citation tag stands where the full stop would. Tags written after
+ * the full stop ("... the stairs. [E3]") stay with the sentence they follow.
  * @param {string} text
  * @returns {string[]}
  */
 export function splitAnswerSentences(text) {
   const out = [];
-  for (const sentence of splitSentences(text)) {
-    const leading = LEADING.exec(sentence);
-    if (leading && out.length) {
-      out[out.length - 1] += ` ${leading[1].trim()}`;
-      if (leading[2].trim()) out.push(leading[2].trim());
-    } else {
-      out.push(sentence);
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const body = line.trim().replace(BULLET, "");
+    for (const sentence of splitSentences(body)) {
+      const leading = LEADING.exec(sentence);
+      if (leading && out.length) {
+        out[out.length - 1] += ` ${leading[1].trim()}`;
+        if (leading[2].trim()) out.push(leading[2].trim());
+      } else {
+        out.push(sentence);
+      }
     }
   }
   return out;
