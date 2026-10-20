@@ -183,8 +183,14 @@ export function notesBucket(env = process.env, expiresIn = 600, parts = {}) {
 }
 
 /** Invokes the turn function asynchronously, so the WebSocket route returns at once. */
-export function turnInvoker(env = process.env) {
-  const FunctionName = requireEnv(env, "TURN_FUNCTION_NAME");
+export const turnInvoker = (env = process.env) =>
+  asyncInvoker(requireEnv(env, "TURN_FUNCTION_NAME"));
+
+/** Invokes the report function asynchronously, so the WebSocket route returns at once. */
+export const reportInvoker = (env = process.env) =>
+  asyncInvoker(requireEnv(env, "REPORT_FUNCTION_NAME"));
+
+function asyncInvoker(FunctionName) {
   const client = once(async () => new (await lambdaSdk()).LambdaClient({}));
   return async (payload) => {
     const sdk = await lambdaSdk();

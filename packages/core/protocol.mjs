@@ -4,7 +4,7 @@
 // JSON frames over the chat WebSocket. The same frames run on the local ws
 // server and on API Gateway.
 
-export const CLIENT_FRAME_TYPES = Object.freeze(["turn", "cancel", "open"]);
+export const CLIENT_FRAME_TYPES = Object.freeze(["turn", "cancel", "open", "report"]);
 export const SERVER_FRAME_TYPES = Object.freeze([
   "status",
   "token",
@@ -13,10 +13,21 @@ export const SERVER_FRAME_TYPES = Object.freeze([
   "cancelled",
   "error",
   "opened",
+  "reportStatus",
+  "reportDone",
 ]);
 export const STAGES = Object.freeze(["rewriting", "retrieving", "answering", "checking"]);
+export const REPORT_STAGES = Object.freeze(["drafting", "writing", "reviewing", "done"]);
 
 const MAX_TEXT = 8000;
+export const MAX_REPORT_DOCUMENTS = 50;
+
+export const REPORT_FILENAME = /^[a-z0-9][a-z0-9-]*\.md$/;
+export const MAX_FILENAME = 128;
+
+/** True when a value can name a stored report. */
+export const isReportFilename = (value) =>
+  typeof value === "string" && value.length <= MAX_FILENAME && REPORT_FILENAME.test(value);
 
 export class ProtocolError extends Error {
   name = "ProtocolError";
@@ -30,7 +41,9 @@ const isId = (v) => typeof v === "string" && v.length > 0 && v.length <= 128;
  * @param {string | Buffer} json
  * @returns {{ type: 'turn', thread: string, turnId: string, text: string, attachments: unknown[] }
  *   | { type: 'cancel', thread: string, turnId: string }
- *   | { type: 'open', docId: string, locator: unknown }}
+ *   | { type: 'open', docId: string, locator: unknown }
+ *   | { type: 'report', thread: string, requestId: string, topic: string, documentIds: string[],
+ *       filename: string }}
  */
 export function parseClientFrame(json) {
   let frame;
@@ -67,6 +80,35 @@ export function parseClientFrame(json) {
     case "open":
       if (!isId(frame.docId)) throw new ProtocolError("open needs a docId");
       return { type: "open", docId: frame.docId, locator: frame.locator ?? null };
+    case "report": {
+      if (!isId(frame.thread)) throw new ProtocolError("report needs a thread id");
+      if (!isId(frame.requestId)) throw new ProtocolError("report needs a requestId");
+      if (typeof frame.topic !== "string" || !frame.topic.trim()) {
+        throw new ProtocolError("report needs a non-empty topic");
+      }
+      if (frame.topic.length > MAX_TEXT)
+        throw new ProtocolError(`report topic exceeds ${MAX_TEXT}`);
+      const documentIds = frame.documentIds ?? [];
+      if (!Array.isArray(documentIds) || !documentIds.every(isId)) {
+        throw new ProtocolError("report documentIds must be an array of document ids");
+      }
+      if (documentIds.length > MAX_REPORT_DOCUMENTS) {
+        throw new ProtocolError(`report names more than ${MAX_REPORT_DOCUMENTS} documents`);
+      }
+      if (!isReportFilename(frame.filename)) {
+        throw new ProtocolError(
+          "report needs a filename of lower-case letters, digits and '-', ending .md",
+        );
+      }
+      return {
+        type: "report",
+        thread: frame.thread,
+        requestId: frame.requestId,
+        topic: frame.topic,
+        documentIds: [...new Set(documentIds)],
+        filename: frame.filename,
+      };
+    }
     default:
       throw new ProtocolError(`unknown frame type ${JSON.stringify(frame.type)}`);
   }
@@ -106,6 +148,21 @@ export const serverFrame = {
   }),
   cancelled: (thread, turnId) => ({ type: "cancelled", thread, turnId }),
   error: (message, thread, turnId) => ({ type: "error", thread, turnId, message }),
+  reportStatus: (thread, requestId, stage) => {
+    if (!REPORT_STAGES.includes(stage)) throw new ProtocolError(`unknown report stage ${stage}`);
+    return { type: "reportStatus", thread, requestId, stage };
+  },
+  reportDone: (
+    thread,
+    requestId,
+    { id, filename, version, title, citations, checks, createdAt },
+  ) => ({
+    type: "reportDone",
+    thread,
+    requestId,
+    report: { id, filename, version, title, createdAt, citations, checks },
+  }),
+  reportError: (thread, requestId, message) => ({ type: "error", thread, requestId, message }),
   opened: (docId, { url, title, page, locator }) => ({
     type: "opened",
     docId,

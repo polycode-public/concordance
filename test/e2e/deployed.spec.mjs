@@ -7,11 +7,7 @@ const SITE_URL = (process.env.SITE_URL ?? "").replace(/\/$/, "");
 const ABSTENTION = "the corpus does not say";
 const TURN_TIMEOUT_MS = 60_000;
 
-const QUESTIONS = [
-  "When did residents on floors 16 to 20 first see smoke outside their windows?",
-  "What did residents say they were told by the fire service to do about leaving their flats?",
-  "What did residents report about calling 999 from their flats?",
-];
+const PILL_LISTS = ["#suggestions", "#documents-suggestions", "#evidence-suggestions"];
 const OFF_CORPUS = "What is the capital of France?";
 
 test.skip(
@@ -42,12 +38,18 @@ async function signIn(page) {
   await expect(page.locator("#signin-message")).toHaveText("");
 }
 
-async function ask(page, question) {
+async function newConversation(page) {
+  await page.locator("#conversations-open").click();
+  await page.locator("#conversations-new").click();
+  await expect(page.locator("article.turn")).toHaveCount(0);
+}
+
+// A pill is visible only on an empty conversation, so every turn but the first starts a new one.
+async function ask(page, submit, label) {
   await expect(page.locator("#connection")).toHaveText("connected", { timeout: 30_000 });
   const turns = page.locator("article.turn");
   const before = await turns.count();
-  await page.locator("#question").fill(question);
-  await page.locator("#ask").evaluate((form) => form.requestSubmit());
+  await submit();
   await expect(turns).toHaveCount(before + 1, { timeout: 15_000 });
   const turn = turns.last();
   const states = turn.locator("ol.stages li[data-state]");
@@ -57,7 +59,7 @@ async function ask(page, question) {
         (await states.evaluateAll((items) => items.map((li) => li.dataset.state))).join(","),
       {
         timeout: TURN_TIMEOUT_MS,
-        message: `turn for "${question}" reaches done`,
+        message: `turn for "${label}" reaches done`,
       },
     )
     .toMatch(/^done(,done)*$/);
@@ -66,26 +68,42 @@ async function ask(page, question) {
   return { turn, answer, score };
 }
 
-test("signs in, asks three observation questions and one off-corpus question", async ({ page }) => {
-  test.setTimeout(10 * 60_000);
+async function typeQuestion(page, question) {
+  await page.locator("#question").fill(question);
+  await page.locator("#ask").evaluate((form) => form.requestSubmit());
+}
+
+test("signs in, clicks every pill and asks one off-corpus question", async ({ page }) => {
+  test.setTimeout(15 * 60_000);
   await page.goto(`${SITE_URL}/`);
   await signIn(page);
   await expect(page.locator("#question")).toBeVisible();
+  await expect(page.locator("#suggestions button.pill").first()).toBeVisible({ timeout: 30_000 });
 
   emit("## concordance deployed page\n");
   let firstChip = null;
+  let started = false;
 
-  for (const question of QUESTIONS) {
-    const { turn, answer, score } = await ask(page, question);
-    const chips = turn.locator("button.cite");
-    expect(await chips.count(), `citation chips for "${question}"`).toBeGreaterThan(0);
-    expect(
-      answer.toLowerCase().replace(ABSTENTION, "").trim().length,
-      `an answer beyond the abstention for "${question}"`,
-    ).toBeGreaterThan(0);
-    expect(score).toMatch(/\d+ of \d+ sentences supported/);
-    firstChip ??= chips.first();
-    report.push({ question, answer, score });
+  for (const list of PILL_LISTS) {
+    const count = await page.locator(`${list} button.pill`).count();
+    expect(count, `pills in ${list}`).toBeGreaterThan(0);
+    for (let index = 0; index < count; index += 1) {
+      if (started) await newConversation(page);
+      started = true;
+      const pill = page.locator(`${list} button.pill`).nth(index);
+      await expect(pill).toBeVisible();
+      const question = (await pill.innerText()).trim();
+      const { turn, answer, score } = await ask(page, () => pill.click(), question);
+      const chips = turn.locator("button.cite");
+      expect(await chips.count(), `citation chips for "${question}"`).toBeGreaterThan(0);
+      expect(
+        answer.toLowerCase().replace(ABSTENTION, "").trim().length,
+        `an answer beyond the abstention for "${question}"`,
+      ).toBeGreaterThan(0);
+      expect(score).toMatch(/\d+ of \d+ sentences supported/);
+      firstChip ??= chips.first();
+      report.push({ question: `${list} pill: ${question}`, answer, score });
+    }
   }
 
   await firstChip.click();
@@ -97,7 +115,8 @@ test("signs in, asks three observation questions and one off-corpus question", a
     page: (await page.locator("#viewer-page").innerText()).trim(),
   };
 
-  const off = await ask(page, OFF_CORPUS);
+  await newConversation(page);
+  const off = await ask(page, () => typeQuestion(page, OFF_CORPUS), OFF_CORPUS);
   expect(off.answer.toLowerCase()).toContain(ABSTENTION);
   report.push({ question: OFF_CORPUS, answer: off.answer, score: off.score });
 

@@ -723,6 +723,110 @@ button.icon {
 
 /* The composer */
 
+/* Generated reports */
+
+.report {
+  display: grid;
+  gap: calc(var(--unit) / 2);
+}
+
+.report .versions,
+.report .report-actions,
+.report .confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--unit) / 2);
+}
+
+.report button.small,
+.report-view button.small {
+  min-height: var(--target);
+}
+
+.report-view {
+  margin-top: var(--unit);
+  padding: var(--unit) var(--gutter);
+  border: var(--rule-width) solid var(--rule);
+  background: var(--paper-deep);
+}
+
+.report-view .answer h3,
+.report-view .answer h4 {
+  margin: var(--unit) 0 calc(var(--unit) / 2);
+  color: var(--navy);
+  font-size: var(--size-body);
+  font-weight: var(--weight-label);
+}
+
+.report-view .answer h3 {
+  font-size: var(--size-lead);
+}
+
+.report-view .answer p {
+  margin-bottom: var(--unit);
+}
+
+.report-view summary {
+  cursor: pointer;
+  font-weight: var(--weight-label);
+}
+
+.report-request {
+  margin-top: var(--unit);
+}
+
+.report-request summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: var(--weight-label);
+}
+
+.report-form {
+  display: grid;
+  gap: var(--unit);
+}
+
+.report-form textarea,
+.report-form input:not([type="checkbox"]) {
+  min-height: var(--target);
+  padding: var(--unit);
+  background: var(--paper);
+  border: var(--rule-width) solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.report-form textarea {
+  resize: vertical;
+}
+
+.report-form fieldset {
+  display: grid;
+  gap: var(--unit);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.report-form .checks {
+  display: grid;
+  gap: calc(var(--unit) / 2);
+}
+
+.report-form .check {
+  display: flex;
+  align-items: center;
+  gap: var(--unit);
+  min-height: var(--target);
+}
+
+#report-status[data-level="error"] {
+  color: var(--red-ink);
+}
+
 .ask {
   padding: var(--gutter);
   background: var(--paper);

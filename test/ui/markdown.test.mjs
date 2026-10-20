@@ -59,3 +59,17 @@ describe("renderMarkdown", () => {
     expect(render("")).toEqual([]);
   });
 });
+
+describe("renderMarkdown headings", () => {
+  it("makes h3 from # and h4 from ## and ends a paragraph at one", () => {
+    expect(render("# Title\n\n## Part [E1]\nText.")).toEqual([
+      `h3("Title")`,
+      `h4("Part " chip())`,
+      `p("Text.")`,
+    ]);
+  });
+
+  it("keeps a # with no space as text", () => {
+    expect(render("#hashtag")).toEqual([`p("#hashtag")`]);
+  });
+});

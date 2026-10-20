@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations, /export, and
-// the chat WebSocket at /ws.
+// The laptop server: static UI over HTTP, /health, /config.json, /spend, /conversations,
+// /reports, /export, and the chat WebSocket at /ws.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { createReadStream } from "node:fs";
@@ -13,6 +13,11 @@ import { WebSocketServer } from "ws";
 import { InvalidThread, NothingToExport, exportConversation, isNoteKey } from "../core/export.mjs";
 import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
+import {
+  reportScores,
+  reportsResponse,
+  requestReport as defaultRequestReport,
+} from "../core/reports.mjs";
 import {
   LAPTOP_USER,
   conversationTurns,
@@ -127,6 +132,7 @@ const blockFrame = (b) => ({
  * @param {string | null} [options.ollamaUrl]
  * @param {string} [options.corporaDir]
  * @param {typeof defaultRunQuery} [options.runQuery]
+ * @param {typeof defaultRequestReport} [options.requestReport]
  * @param {() => Date} [options.now]
  */
 export async function createServer({
@@ -138,6 +144,7 @@ export async function createServer({
   ollamaUrl = null,
   corporaDir = DEFAULT_CORPORA,
   runQuery = defaultRunQuery,
+  requestReport = defaultRequestReport,
   now = () => new Date(),
 }) {
   const root = path.resolve(staticDir);
@@ -147,6 +154,10 @@ export async function createServer({
       const { pathname } = new URL(req.url, "http://localhost");
       if (req.method === "POST" && pathname === "/export") {
         await serveExport(req, res);
+        return;
+      }
+      if (pathname === "/reports" || pathname.startsWith("/reports/")) {
+        await serveReports(req, res, pathname);
         return;
       }
       if (req.method !== "GET" && req.method !== "HEAD") {
@@ -176,6 +187,7 @@ export async function createServer({
           corpus: DEFAULT_CORPUS,
           spendUrl: "/spend",
           conversationsUrl: "/conversations",
+          reportsUrl: "/reports",
           exportUrl: "/export",
         });
         res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
@@ -247,6 +259,23 @@ export async function createServer({
       return;
     }
     json(200, conversation);
+  }
+
+  async function serveReports(req, res, pathname) {
+    const method = req.method === "HEAD" ? "GET" : req.method;
+    if (!["GET", "DELETE"].includes(method)) {
+      res.writeHead(405, { allow: "GET, HEAD, DELETE" }).end();
+      return;
+    }
+    if (!db) {
+      res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_DATABASE);
+      return;
+    }
+    const filename =
+      pathname === "/reports" ? undefined : decodeURIComponent(pathname.slice("/reports/".length));
+    const { status, body } = await reportsResponse(db, { method, filename, userId: LAPTOP_USER });
+    res.writeHead(status, { "content-type": MIME[".json"], "cache-control": "no-store" });
+    res.end(req.method === "HEAD" ? undefined : JSON.stringify(body));
   }
 
   const notePath = (key) => path.join(path.resolve(corporaDir), DEFAULT_CORPUS.id, key);
@@ -408,6 +437,10 @@ export async function createServer({
         openDocument(frame);
         return;
       }
+      if (frame.type === "report") {
+        runReportRequest(frame);
+        return;
+      }
       const previous = threads.get(frame.thread);
       if (previous) cancel(frame.thread, previous.turnId);
       runTurn(frame);
@@ -435,6 +468,33 @@ export async function createServer({
         );
       } catch (err) {
         send(serverFrame.error(err.message));
+      }
+    }
+
+    // A closed socket stops the frames and never the report, as on AWS; the page lists it from
+    // /reports when it comes back.
+    async function runReportRequest(frame) {
+      const { thread, requestId } = frame;
+      try {
+        if (!db) throw new Error(NO_DATABASE);
+        await sessionWritten;
+        const stored = await requestReport({
+          db,
+          provider,
+          userId: LAPTOP_USER,
+          sessionId,
+          request: frame,
+          onStage: (stage) => send(serverFrame.reportStatus(thread, requestId, stage)),
+        });
+        send(serverFrame.reportStatus(thread, requestId, "done"));
+        send(
+          serverFrame.reportDone(thread, requestId, {
+            ...stored,
+            checks: reportScores(stored.checks),
+          }),
+        );
+      } catch (err) {
+        send(serverFrame.reportError(thread, requestId, err.message));
       }
     }
 

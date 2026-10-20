@@ -9,6 +9,7 @@ import { createServer } from "../../packages/local/server.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { PROMPT_VERSION, SYSTEM_PROMPT, answerMessages } from "../../packages/core/prompt.mjs";
 import { checkAnswer } from "../../packages/core/query.mjs";
+import { createReportsStore } from "../core/reportsFakeStore.mjs";
 
 const TOKENS = ["The stairs were dark ", "[E1]. ", "Nobody ", "came."];
 
@@ -152,6 +153,7 @@ describe("local server", () => {
       corpus: { id: "grenfell", title: "Grenfell Tower Inquiry", subtitle: "witness statements" },
       spendUrl: "/spend",
       conversationsUrl: "/conversations",
+      reportsUrl: "/reports",
       exportUrl: "/export",
     });
   });
@@ -615,5 +617,126 @@ describe("local server", () => {
       });
       expect(error.message).toMatch(/no original PDF for IWS2/);
     });
+  });
+});
+
+describe("generated reports on the laptop", () => {
+  const OUTLINE = {
+    title: "Smoke on the stairs",
+    sections: [
+      { heading: "The stairs", evidence: [1] },
+      { heading: "The lift", evidence: [2] },
+    ],
+  };
+  /** A fake provider whose chat answers each section in turn, for every report it writes. */
+  const reportProvider = () => {
+    let n = 0;
+    const texts = ["The stairs were dark [E1].", "The lift stopped [E2]."];
+    return {
+      ...createFakeProvider({ tokens: [], delayMs: 0, embedDim: 1024, extractJson: () => OUTLINE }),
+      chat: (args) =>
+        createFakeProvider({ tokens: [texts[n++ % texts.length]], delayMs: 0 }).chat(args),
+    };
+  };
+  const request = (extra = {}) => ({
+    type: "report",
+    thread: "t1",
+    requestId: "r1",
+    topic: "The stairs and the lift",
+    documentIds: ["IWS1", "IWS2"],
+    filename: "stairs.md",
+    ...extra,
+  });
+
+  it("streams the report stages, stores it and answers reportDone", async () => {
+    const db = createReportsStore();
+    app = await createServer({ provider: reportProvider(), db });
+    const client = await connect(app.port);
+    client.send(request());
+    const done = await client.until((f) => f.type === "reportDone");
+    expect(client.frames.filter((f) => f.type === "reportStatus").map((f) => f.stage)).toEqual([
+      "drafting",
+      "writing",
+      "reviewing",
+      "done",
+    ]);
+    expect(done).toMatchObject({
+      thread: "t1",
+      requestId: "r1",
+      report: {
+        filename: "stairs.md",
+        version: 1,
+        title: "Smoke on the stairs",
+        citations: [
+          { evidence: 1, locator: { document: "IWS1", page: 3, paragraph: 11 } },
+          { evidence: 2, locator: { document: "IWS2", page: 2, paragraph: 4 } },
+        ],
+        checks: { sentences: 2, supported: 2 },
+      },
+    });
+    expect(db.reports[0]).toMatchObject({ user_id: "laptop", document_ids: ["IWS1", "IWS2"] });
+    client.ws.close();
+  });
+
+  it("stores an edit as version 2, lists, reads and deletes the report over HTTP", async () => {
+    const db = createReportsStore();
+    app = await createServer({ provider: reportProvider(), db });
+    const client = await connect(app.port);
+    client.send(request());
+    await client.until((f) => f.type === "reportDone" && f.requestId === "r1");
+    client.send(request({ requestId: "r2", topic: "Say more about the lift.", documentIds: [] }));
+    const second = await client.until((f) => f.type === "reportDone" && f.requestId === "r2");
+    expect(second.report.version).toBe(2);
+    client.ws.close();
+
+    const base = `http://127.0.0.1:${app.port}/reports`;
+    const list = await fetch(base);
+    expect(list.headers.get("cache-control")).toBe("no-store");
+    expect(await list.json()).toEqual({
+      reports: [
+        {
+          filename: "stairs.md",
+          title: "Smoke on the stairs",
+          versions: [1, 2],
+          updatedAt: expect.any(String),
+        },
+      ],
+    });
+    const { versions } = await (await fetch(`${base}/stairs.md`)).json();
+    expect(versions.map((v) => [v.version, v.changePrompt])).toEqual([
+      [1, null],
+      [2, "Say more about the lift."],
+    ]);
+    expect(versions[1].documentIds).toEqual(["IWS1", "IWS2"]);
+    expect(versions[1].bodyMarkdown).toMatch(/^# Smoke on the stairs\n\n## The stairs\n\n/);
+
+    expect((await fetch(`${base}/Stairs.md`)).status).toBe(400);
+    expect((await fetch(`${base}/stairs.md`, { method: "POST" })).status).toBe(405);
+    const deleted = await fetch(`${base}/stairs.md`, { method: "DELETE" });
+    expect(await deleted.json()).toEqual({ filename: "stairs.md", deleted: 2 });
+    expect((await fetch(`${base}/stairs.md`)).status).toBe(404);
+  });
+
+  it("answers a report with an error frame when no database is configured", async () => {
+    app = await createServer({ provider: reportProvider() });
+    const client = await connect(app.port);
+    client.send(request());
+    expect(await client.until((f) => f.type === "error")).toEqual({
+      type: "error",
+      thread: "t1",
+      requestId: "r1",
+      message: "the database is not configured",
+    });
+    expect((await fetch(`http://127.0.0.1:${app.port}/reports`)).status).toBe(503);
+    client.ws.close();
+  });
+
+  it("refuses a report frame whose filename is not a lower-case .md name", async () => {
+    app = await createServer({ provider: reportProvider(), db: createReportsStore() });
+    const client = await connect(app.port);
+    client.send(request({ filename: "Stairs.MD" }));
+    const error = await client.until((f) => f.type === "error");
+    expect(error.message).toMatch(/filename/);
+    client.ws.close();
   });
 });

@@ -3,9 +3,9 @@
 
 /**
  * Suggested questions by corpus id. `panel` names the page panel a pill belongs to
- * ("documents" or "evidence", shown while that panel is empty), or null for the pills above the
+ * ("documents", "evidence" or "reports", shown while that panel is empty), or null for the pills above the
  * prompt box.
- * @type {Record<string, { text: string, panel: string | null }[]>}
+ * @type {Record<string, { text: string, panel: string | null, filename?: string }[]>}
  */
 export const SUGGESTIONS = {
   grenfell: [
@@ -18,6 +18,11 @@ export const SUGGESTIONS = {
     { text: "What advice did the fire service give to residents who called?", panel: null },
     { text: "List the statements in the corpus", panel: "documents" },
     { text: "Show the evidence about smoke in the stairwell", panel: "evidence" },
+    {
+      text: "Write me a report on how residents first became aware of the fire",
+      panel: "reports",
+      filename: "first-awareness.md",
+    },
   ],
 };
 

@@ -53,9 +53,12 @@ describe("AppStack", () => {
       "$connect",
       "$default",
       "$disconnect",
+      "DELETE /reports/{filename}",
       "GET /conversations",
       "GET /conversations/{id}",
       "GET /doc/{id}",
+      "GET /reports",
+      "GET /reports/{filename}",
       "GET /spend",
       "POST /export",
     ]);
@@ -65,6 +68,9 @@ describe("AppStack", () => {
       "GET /spend",
       "GET /conversations",
       "GET /conversations/{id}",
+      "GET /reports",
+      "GET /reports/{filename}",
+      "DELETE /reports/{filename}",
       "POST /export",
     ]) {
       expect(routes.find((r) => r.RouteKey === key).AuthorizationType).toBe("JWT");
@@ -107,7 +113,7 @@ describe("AppStack", () => {
       ProtocolType: "HTTP",
       CorsConfiguration: {
         AllowHeaders: ["authorization", "content-type"],
-        AllowMethods: ["GET", "POST"],
+        AllowMethods: ["GET", "POST", "DELETE"],
         AllowOrigins: [Match.anyValue()],
       },
     });
@@ -155,11 +161,11 @@ describe("AppStack", () => {
     ]);
   });
 
-  it("runs seven arm64 Node 24 functions, the turn function for ten minutes", () => {
+  it("runs nine arm64 Node 24 functions, the turn function for ten minutes", () => {
     const fns = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .filter((p) => p.Runtime === "nodejs24.x" && p.Environment);
-    expect(fns).toHaveLength(7);
+    expect(fns).toHaveLength(9);
     for (const p of fns) expect(p.Architectures).toEqual(["arm64"]);
     const turn = fns.find((p) => p.Timeout === 600);
     expect(turn.MemorySize).toBe(1024);
@@ -169,9 +175,68 @@ describe("AppStack", () => {
       DB_SECRET_ARN: SECRET,
       DB_NAME: "concordance",
     });
-    template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
-      MaximumRetryAttempts: 0,
+    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 2);
+    for (const config of Object.values(template.findResources("AWS::Lambda::EventInvokeConfig")))
+      expect(config.Properties.MaximumRetryAttempts).toBe(0);
+  });
+
+  const functionNamed = (prefix) =>
+    Object.entries(template.findResources("AWS::Lambda::Function")).find(([id]) =>
+      id.startsWith(prefix),
+    );
+  const roleStatements = (fn) => {
+    const role = fn.Role["Fn::GetAtt"][0];
+    return Object.values(template.findResources("AWS::IAM::Policy"))
+      .filter((r) => r.Properties.Roles.some((ref) => ref.Ref === role))
+      .flatMap((r) => r.Properties.PolicyDocument.Statement);
+  };
+
+  it("runs a report for up to fifteen minutes with the turn's store, Bedrock and connections", () => {
+    const [reportId, { Properties: fn }] = functionNamed("ReportFunction");
+    expect(fn.Timeout).toBe(900);
+    expect(fn.MemorySize).toBe(1024);
+    expect(fn.Environment.Variables).toMatchObject({
+      MODEL_PROVIDER: "bedrock",
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
     });
+    const actions = roleStatements(fn).flatMap((s) => [s.Action].flat());
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "execute-api:ManageConnections",
+        "rds-data:ExecuteStatement",
+        "secretsmanager:GetSecretValue",
+      ]),
+    );
+    const routes = functionNamed("WsRoutesFunction")[1].Properties;
+    expect(routes.Environment.Variables.REPORT_FUNCTION_NAME).toEqual({ Ref: reportId });
+    const invoke = roleStatements(routes).filter((s) =>
+      [s.Action].flat().includes("lambda:InvokeFunction"),
+    );
+    expect(JSON.stringify(invoke)).toContain(reportId);
+  });
+
+  it("gives the reports routes' function the database and nothing else", () => {
+    const fn = functionNamed("ReportsFunction")[1].Properties;
+    expect(fn.Environment.Variables).toEqual({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+    });
+    expect(
+      roleStatements(fn)
+        .flatMap((s) => [s.Action].flat())
+        .sort(),
+    ).toEqual([
+      "rds-data:BeginTransaction",
+      "rds-data:CommitTransaction",
+      "rds-data:ExecuteStatement",
+      "rds-data:RollbackTransaction",
+      "secretsmanager:GetSecretValue",
+    ]);
   });
 
   it("lets the turn function call Bedrock and manage the connections", () => {
@@ -226,6 +291,8 @@ describe("AppStack", () => {
     );
     const exportMarker = /"exportUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
     expect(markers[`<<marker:0xbaba:${exportMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/export"');
+    const reportsMarker = /"reportsUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
+    expect(markers[`<<marker:0xbaba:${reportsMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/reports"');
   });
 
   it("lets the export function write and read notes/ and nothing else in the bucket", () => {

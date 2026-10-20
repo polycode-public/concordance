@@ -2,6 +2,7 @@
 // Copyright 2026 Polycode Limited
 import { TAG, tagNumbers } from "./tags.mjs";
 
+const HEADING = /^(#{1,2})\s+(.*\S)\s*$/;
 const BULLET = /^\s*[-*]\s+(.*)$/;
 const BOLD = /\*\*(.+?)\*\*/g;
 
@@ -49,7 +50,7 @@ function paragraph(lines, inline) {
 
 /**
  * Builds DOM nodes for paragraphs (blank-line separated, single newlines as line breaks),
- * `-` bullet lists and **bold**. Every run of text goes through `inline`, which makes text
+ * `-` bullet lists, `#` and `##` headings (as h3 and h4, below the page's own headings) and **bold**. Every run of text goes through `inline`, which makes text
  * nodes, so model text never becomes markup.
  * @param {string} text
  * @param {(run: string) => Node[]} inline
@@ -77,7 +78,14 @@ export function renderMarkdown(text, inline) {
   };
   for (const line of text.split("\n")) {
     const bullet = BULLET.exec(line);
-    if (bullet) {
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flushLines();
+      flushItems();
+      const h = document.createElement(heading[1].length === 1 ? "h3" : "h4");
+      h.append(...inlineNodes(heading[2], inline));
+      blocks.push(h);
+    } else if (bullet) {
       flushLines();
       items.push(bullet[1]);
     } else if (line.trim() === "") {

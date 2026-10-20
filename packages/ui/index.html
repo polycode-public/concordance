@@ -143,6 +143,49 @@
             hidden
           ></ul>
         </section>
+        <section id="reports-panel" aria-labelledby="reports-title">
+          <h2 id="reports-title">
+            Generated reports<span id="reports-count" class="count"></span>
+          </h2>
+          <ol id="reports-list"></ol>
+          <p id="reports-empty" class="empty small">No report generated yet.</p>
+          <p id="reports-message" class="message small" role="status"></p>
+          <ul
+            id="reports-suggestions"
+            class="suggestions"
+            aria-label="Suggested reports"
+            hidden
+          ></ul>
+          <div id="report-view" class="report-view" role="region" hidden></div>
+          <details id="report-request" class="report-request">
+            <summary class="small">Request a report</summary>
+            <form id="report-form" class="report-form">
+              <label for="report-topic">Topic or change request</label>
+              <textarea id="report-topic" rows="3" maxlength="8000" required></textarea>
+              <fieldset>
+                <legend class="small">Documents (none ticked: the whole corpus)</legend>
+                <div id="report-documents" class="checks" hidden></div>
+                <label for="report-other-ids" class="small"
+                  >Other document ids, comma separated</label
+                >
+                <input id="report-other-ids" autocomplete="off" />
+              </fieldset>
+              <label for="report-filename">Filename</label>
+              <input
+                id="report-filename"
+                maxlength="128"
+                pattern="[a-z0-9][a-z0-9\-]*\.md"
+                autocomplete="off"
+                required
+              />
+              <p class="small soft">
+                A filename you already have asks for a new version; the topic is then the change.
+              </p>
+              <button type="submit" id="report-submit">Write the report</button>
+            </form>
+          </details>
+          <p id="report-status" class="small" role="status"></p>
+        </section>
       </aside>
     </div>
   </body>

@@ -2,8 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // The WebSocket API routes: $connect, $disconnect and $default. A Lambda integration answers
-// within 29 seconds, so a turn runs in the turn function, invoked asynchronously; cancel is
-// a flag in the cancel table that the turn function polls.
+// within 29 seconds, so a turn runs in the turn function and a report in the report function,
+// each invoked asynchronously; cancel is a flag in the cancel table that the turn function polls.
 
 import { ProtocolError, parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { cancelKey } from "./clients.mjs";
@@ -14,6 +14,7 @@ const TTL_SECONDS = 3600;
 /**
  * @param {object} deps
  * @param {(payload: object) => Promise<void>} deps.invokeTurn
+ * @param {(payload: object) => Promise<void>} deps.invokeReport
  * @param {{ start: Function, cancel: Function }} deps.cancels
  * @param {(target: object, frame: object) => Promise<void>} deps.postToConnection
  * @param {() => Promise<{ query: Function, close?: Function }>} deps.openDb
@@ -22,6 +23,7 @@ const TTL_SECONDS = 3600;
  */
 export function createHandler({
   invokeTurn,
+  invokeReport,
   cancels,
   postToConnection,
   openDb,
@@ -77,6 +79,9 @@ export function createHandler({
       await cancels.start(cancelKey(connectionId, frame.thread), frame.turnId, ttl);
       const userId = event.requestContext.authorizer?.principalId;
       await invokeTurn({ frame, connectionId, domainName, stage, userId });
+    } else if (frame.type === "report") {
+      const userId = event.requestContext.authorizer?.principalId;
+      await invokeReport({ frame, connectionId, domainName, stage, userId });
     } else if (frame.type === "cancel") {
       const flagged = await cancels.cancel(cancelKey(connectionId, frame.thread), frame.turnId);
       if (!flagged) await send(serverFrame.cancelled(frame.thread, frame.turnId));
@@ -90,10 +95,17 @@ export function createHandler({
 let realHandler;
 export async function handler(event) {
   if (!realHandler) {
-    const { cancelTable, connectionPoster, openDatabase, originalsBucket, turnInvoker } =
-      await import("./clients.mjs");
+    const {
+      cancelTable,
+      connectionPoster,
+      openDatabase,
+      originalsBucket,
+      reportInvoker,
+      turnInvoker,
+    } = await import("./clients.mjs");
     realHandler = createHandler({
       invokeTurn: turnInvoker(),
+      invokeReport: reportInvoker(),
       cancels: cancelTable(),
       postToConnection: connectionPoster(),
       openDb: () => openDatabase(),
