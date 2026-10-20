@@ -2,16 +2,20 @@
 // Copyright 2026 Polycode Limited
 //
 // Alignment: the candidate pairs of assertions that may be about the same matter. A pair needs a
-// claim similar enough by embedding and, below a stronger similarity, an anchor it shares (the
-// event, the object or place entity, or the normalised predicate). The same witness across two
-// documents is a self pair, ordered by statement date; two witnesses make a cross pair; a witness
-// assertion against an accepted fact makes an accepted pair. Every bound is a constant here.
+// claim similar enough by embedding and an anchor it shares. The same witness across two documents
+// is a self pair, ordered by statement date; its anchors are the event, the subject, the object or
+// place entity and the normalised predicate, and above a stronger similarity it needs none. Two
+// witnesses make a cross pair, which always needs an anchor, and only the event, a person, group or
+// thing as the shared subject, or a shared object entity of kind place, vehicle or unit anchor it:
+// two witnesses who each went to bed are two events, so a shared predicate is no anchor. Two
+// first-person claims of two witnesses pair only on a shared event. A witness assertion against an
+// accepted fact makes an accepted pair. Every bound is a constant here.
 
 import { normaliseSpan } from "./registers.mjs";
 
 /** Cosine at or above which an anchored pair is a candidate. */
 export const ALIGN_SIMILARITY = 0.6;
-/** Cosine at or above which a pair with no shared anchor is a candidate. */
+/** Cosine at or above which a self pair with no shared anchor is a candidate. */
 export const ALIGN_SIMILARITY_ALONE = 0.85;
 /** Assertions below this confidence are stored but not compared; a null confidence is compared. */
 export const MIN_CONFIDENCE = 0.5;
@@ -21,6 +25,9 @@ export const MAX_PARTNERS = 8;
 export const MAX_PAIRS_PER_GROUP = 120;
 /** The most witness assertions compared against one accepted fact. */
 export const MAX_PAIRS_PER_FACT = 40;
+
+/** The object entity kinds that anchor a cross pair. */
+export const CROSS_OBJECT_KINDS = Object.freeze(["place", "vehicle", "unit"]);
 
 const LEADING_WORDS = new Set([
   "i",
@@ -63,8 +70,30 @@ const normaliseObject = (text) =>
     .toLowerCase()
     .replace(/^(the|a|an|my|our|his|her|their) /, "");
 
-/** The text a claim is embedded by: the predicate and its object. */
-export const claimText = (a) => [a.predicate, a.objectText].filter(Boolean).join(" ");
+/** True when the witness is the subject of the claim (I, we, me). */
+export const firstPerson = (a) => a.subjectKind === "witness";
+
+/**
+ * The text a claim is embedded by: a subject other than the witness, the predicate and its object.
+ */
+export const claimText = (a) =>
+  [firstPerson(a) ? null : a.subjectText, a.predicate, a.objectText].filter(Boolean).join(" ");
+
+/**
+ * True when two assertions have one subject: the same witness in the first person, or the same
+ * words for a person, group or thing. An assertion with no recorded subject shares none.
+ */
+export function sameSubject(a, b) {
+  if (!a.subjectKind || !b.subjectKind) return false;
+  if (firstPerson(a) || firstPerson(b)) {
+    return firstPerson(a) && firstPerson(b) && a.witnessId === b.witnessId;
+  }
+  const subject = normaliseObject(a.subjectText);
+  return subject !== "" && subject === normaliseObject(b.subjectText);
+}
+
+/** True when two assertions name one event. */
+export const sameEvent = (a, b) => Boolean(a.eventId) && a.eventId === b.eventId;
 
 /** True when two assertions are about the same object: the same entity, or the same words. */
 export function sameObject(a, b) {
@@ -78,15 +107,27 @@ export function samePlace(a, b) {
   return normaliseObject(a.placeText) === normaliseObject(b.placeText);
 }
 
-/** The anchors two assertions share, by name. */
+/** The anchors two assertions share, by name: those of a self pair or of a cross pair. */
 export function sharedAnchors(a, b) {
   const out = [];
-  if (a.eventId && a.eventId === b.eventId) out.push("event");
-  if (a.objectEntityId && a.objectEntityId === b.objectEntityId) out.push("object");
+  if (sameEvent(a, b)) out.push("event");
+  const sameObjectEntity = Boolean(a.objectEntityId) && a.objectEntityId === b.objectEntityId;
+  if (a.witnessId !== b.witnessId) {
+    if (firstPerson(a) && firstPerson(b)) return out;
+    if (sameSubject(a, b)) out.push("subject");
+    if (sameObjectEntity && CROSS_OBJECT_KINDS.includes(a.objectEntityKind)) out.push("object");
+    return out;
+  }
+  if (sameSubject(a, b)) out.push("subject");
+  if (sameObjectEntity) out.push("object");
   if (a.placeEntityId && a.placeEntityId === b.placeEntityId) out.push("place");
   if (normalisePredicate(a.predicate) === normalisePredicate(b.predicate)) out.push("predicate");
   return out;
 }
+
+/** True when a pair with these anchors and this similarity is a candidate. */
+const anchored = (a, b, anchors, s, alone) =>
+  anchors.length > 0 || (a.witnessId === b.witnessId && s >= alone);
 
 export const eligible = (a) =>
   Boolean(a.witnessId) &&
@@ -172,7 +213,7 @@ export function alignAssertions(
       const s = dot(x.v, y.v);
       if (s < similarity) continue;
       const anchors = sharedAnchors(x.a, y.a);
-      if (!anchors.length && s < alone) continue;
+      if (!anchored(x.a, y.a, anchors, s, alone)) continue;
       const [a, b] = [x.a, y.a].sort(byStatement);
       const kind = a.witnessId === b.witnessId ? "self" : "cross";
       candidates.push({ kind, a, b, fact: null, similarity: s, anchors, ...groupOf(a, b) });
@@ -240,7 +281,7 @@ export function alignFacts(
       const s = dot(fv, vectors.get(claimText(a)));
       if (s < similarity) continue;
       const anchors = source ? sharedAnchors(a, source) : [];
-      if (source && !anchors.length && s < alone) continue;
+      if (source && !anchored(a, source, anchors, s, alone)) continue;
       found.push({
         kind: "accepted",
         a,

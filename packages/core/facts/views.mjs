@@ -76,8 +76,9 @@ export const VIEW_SQL = Object.freeze({
   comparison: `SELECT ${COMPARISON_COLUMNS} FROM assertion_comparisons WHERE id = $1::bigint`,
   event: `SELECT id, name FROM events WHERE id = $1::bigint`,
   assertions: `
-  SELECT a.id, a.witness_id, w.cipher_only, a.event_id, a.predicate, a.object_text, a.time_text,
-         a.place_text, a.polarity, a.modality, a.source_chunk_id, c.document_id,
+  SELECT a.id, a.witness_id, w.cipher_only, a.event_id, a.subject_text, a.subject_kind,
+         a.predicate, a.object_text, a.time_text, a.place_text, a.polarity, a.modality,
+         a.source_chunk_id, c.document_id,
          c.text AS sentence, c.locator, to_char(d.statement_date, 'YYYY-MM-DD') AS statement_date
     FROM assertions a
     JOIN chunks c ON c.id = a.source_chunk_id
@@ -97,8 +98,9 @@ export const VIEW_SQL = Object.freeze({
   SELECT id, to_char(statement_date, 'YYYY-MM-DD') AS statement_date FROM documents
    WHERE witness_id = $1 ORDER BY statement_date NULLS LAST, id`,
   timeline: `
-  SELECT a.id, a.witness_id, a.event_id, a.predicate, a.object_text, a.time_text, a.polarity,
-         a.modality, a.source_chunk_id, c.document_id, c.locator
+  SELECT a.id, a.witness_id, a.event_id, a.subject_text, a.subject_kind, a.predicate,
+         a.object_text, a.time_text, a.polarity, a.modality, a.source_chunk_id, c.document_id,
+         c.locator
     FROM assertions a JOIN chunks c ON c.id = a.source_chunk_id
    WHERE a.time_text IS NOT NULL
      AND ($1::bigint IS NULL OR a.event_id = $1::bigint)
@@ -205,6 +207,8 @@ function sideOf(a, hideSentence) {
     chunkId: str(a.source_chunk_id),
     locator: a.locator ?? {},
     sentence: hideSentence ? null : a.sentence,
+    subjectText: a.subject_text ?? null,
+    subjectKind: a.subject_kind ?? null,
     predicate: a.predicate,
     objectText: a.object_text ?? null,
     timeText: a.time_text ?? null,
@@ -426,6 +430,8 @@ export async function factsTimeline(db, { eventId = null, witnessId = null } = {
       documentId: r.document_id,
       chunkId: str(r.source_chunk_id),
       locator: r.locator ?? {},
+      subjectText: r.subject_text ?? null,
+      subjectKind: r.subject_kind ?? null,
       predicate: r.predicate,
       objectText: r.object_text ?? null,
       timeText: r.time_text,

@@ -35,7 +35,12 @@ const reference = (point) => {
 /** The text of one point: who, the window, the claim and the witness's own time words. */
 export function pointText(point) {
   const { startClock, endClock } = point.window;
-  const claim = [point.polarity === "negative" ? "not" : null, point.predicate, point.objectText]
+  const claim = [
+    point.subjectKind === "witness" ? null : point.subjectText,
+    point.polarity === "negative" ? "not" : null,
+    point.predicate,
+    point.objectText,
+  ]
     .filter(Boolean)
     .join(" ");
   return `${startClock}–${endClock} ${point.witnessId}: ${claim} ("${point.timeText}")`;

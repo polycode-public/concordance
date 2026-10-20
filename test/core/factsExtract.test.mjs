@@ -5,6 +5,7 @@ import {
   ASSERTION_SCHEMA,
   EXTRACT_PIPELINE_VERSION,
   EXTRACT_PROMPT_VERSION,
+  SHARED_EVENTS,
   byteBatches,
   checkAssertion,
   extractAssertions,
@@ -33,6 +34,8 @@ const seed = (extra = {}) => ({
 
 const A0 = {
   sentence: 0,
+  subject_text: "I",
+  subject_kind: "witness",
   predicate: "saw",
   object_text: "smoke",
   object_kind: null,
@@ -45,6 +48,8 @@ const A0 = {
 };
 const A1 = {
   sentence: 1,
+  subject_text: "I",
+  subject_kind: "person",
   predicate: "did not see",
   object_text: "firefighters",
   object_kind: "unit",
@@ -123,6 +128,18 @@ describe("extractPrompt", () => {
     expect(prompt).toContain("Context before: Before.\nHeader: " + HEADER);
     expect(prompt).toContain("Paragraph context: Ctx.\n[S4] A.\n[S5] B.\nContext after: (none)");
     expect(prompt.match(/Header:/g)).toHaveLength(1);
+    expect(prompt).not.toContain("event_text is a label");
+  });
+
+  it("names the corpus's shared events as the labels to prefer", () => {
+    const prompt = extractPrompt(
+      { before: null, targets: [{ ordinal: 0, text: "A." }], after: null },
+      SHARED_EVENTS.grenfell,
+    );
+    expect(prompt).toContain(
+      "event_text is a label. When the claim is about one of these events, copy its name exactly: 'the fire starting in Flat 16'; 'the first 999 calls'; 'the fire brigade arriving'; 'smoke in the lobby'; 'smoke in the stairs'; 'the advice to stay put'; 'the advice changing to leave'. Use the sentence's own words only when none of them fits",
+    );
+    expect(prompt).toContain("subject_kind is witness when subject_text is I, we or me");
   });
 });
 
@@ -136,6 +153,8 @@ describe("checkAssertion", () => {
       row: {
         sentence: 1,
         sourceChunkId: "12",
+        subject_text: "I",
+        subjectKind: "witness",
         predicate: "did not see",
         object_text: "firefighters",
         event_text: "the fire",
@@ -159,9 +178,86 @@ describe("checkAssertion", () => {
     [{ ...A1, object_kind: "idea" }, "object_kind", "not-an-entity-kind"],
     [{ ...A1, object_text: null }, "object_kind", "kind-without-object"],
     [{ ...A1, confidence: 2 }, "confidence", "not-in-0-to-1"],
+    [
+      { ...A1, subject_text: "the brigade", subject_kind: "group" },
+      "subject_text",
+      "not-in-sentence",
+    ],
+    [
+      { ...A1, subject_text: "firefighters", subject_kind: "witness" },
+      "subject_kind",
+      "witness-not-first-person",
+    ],
+    [
+      { ...A1, subject_text: "firefighters", subject_kind: null },
+      "subject_kind",
+      "subject-without-kind",
+    ],
+    [{ ...A1, subject_text: null, subject_kind: "group" }, "subject_kind", "kind-without-subject"],
+    [{ ...A1, subject_text: "W5", subject_kind: "crowd" }, "subject_kind", "not-a-subject-kind"],
+    [{ ...A1, event_text: "the blaze" }, "event_text", "not-shared-or-in-sentence"],
     ["text", null, "not-an-object"],
   ])("rejects %j at %s as %s", (raw, field, reason) => {
     expect(checkAssertion(raw, targets)).toMatchObject({ ok: false, field, reason });
+  });
+});
+
+describe("checkAssertion subjects and events", () => {
+  const targets = new Map([
+    [1, { id: "12", ordinal: 1, text: S1 }],
+    [2, { id: "13", ordinal: 2, text: "The fire spread quickly up the building." }],
+    [3, { id: "14", ordinal: 3, text: "We were told to stay in the flat by the 999 operator." }],
+  ]);
+  const check = (raw) => checkAssertion(raw, targets, SHARED_EVENTS.grenfell);
+
+  it("maps I, we and me to the witness whatever kind the model gave", () => {
+    expect(check({ ...A1, subject_kind: "group" }).row).toMatchObject({
+      subject_text: "I",
+      subjectKind: "witness",
+    });
+    expect(check({ ...A1, subject_text: "me", subject_kind: null }).row.subjectKind).toBe(
+      "witness",
+    );
+    const we = { sentence: 3, subject_text: "We", predicate: "were told", polarity: "positive" };
+    expect(check(we).row).toMatchObject({ subject_text: "We", subjectKind: "witness" });
+  });
+
+  it("keeps a group or thing subject that is a span of its sentence", () => {
+    const operator = {
+      sentence: 3,
+      subject_text: "the 999 operator",
+      subject_kind: "group",
+      predicate: "told",
+      polarity: "positive",
+    };
+    expect(check(operator).row).toMatchObject({
+      subject_text: "the 999 operator",
+      subjectKind: "group",
+    });
+    const fire = { sentence: 2, subject_text: "The fire", subject_kind: "thing" };
+    expect(check({ ...fire, predicate: "spread", polarity: "positive" }).row.subjectKind).toBe(
+      "thing",
+    );
+  });
+
+  it("rejects a first-person subject that is not a word of its sentence", () => {
+    const raw = { sentence: 2, subject_text: "I", predicate: "spread", polarity: "positive" };
+    expect(check(raw)).toMatchObject({
+      ok: false,
+      field: "subject_text",
+      reason: "not-in-sentence",
+    });
+  });
+
+  it("takes a shared event in its own spelling, or a span of the sentence, as the event", () => {
+    expect(check({ ...A1, event_text: "Smoke in  the Lobby" }).row.event_text).toBe(
+      "smoke in the lobby",
+    );
+    expect(check({ ...A1, event_text: "the fire" }).row.event_text).toBe("the fire");
+    expect(check({ ...A1, event_text: "x".repeat(81) })).toMatchObject({
+      field: "event_text",
+      reason: "too-long",
+    });
   });
 });
 
@@ -225,6 +321,8 @@ describe("extractAssertions", () => {
         witness_id: "IWS1",
         source_chunk_id: "11",
         event_id: eventId,
+        subject_text: "I",
+        subject_kind: "witness",
         predicate: "saw",
         object_text: "smoke",
         object_entity_id: null,
@@ -250,6 +348,8 @@ describe("extractAssertions", () => {
         object_text: "W5",
         object_entity_id: cipher.id,
         event_id: null,
+        subject_text: null,
+        subject_kind: null,
       }),
     ]);
     expect(provenance).toEqual([
@@ -264,6 +364,19 @@ describe("extractAssertions", () => {
       },
     ]);
     expect(store.statements.some((s) => /accepted_facts/.test(s.text))).toBe(false);
+  });
+
+  it("offers the shared events of the document's corpus and stores the shared name", async () => {
+    const store = createFactsStore(
+      seed({ documents: [{ id: "IWS1", witness_id: "IWS1", corpus: "grenfell" }] }),
+    );
+    const { prompts } = await run(store, {
+      0: [{ ...A0, event_text: "The fire starting in Flat 16" }],
+    });
+    expect(prompts[0]).toContain("'the fire brigade arriving'");
+    expect(store.tables.events).toEqual([
+      { id: expect.any(String), name: "the fire starting in Flat 16" },
+    ]);
   });
 
   it("creates a place entity once when two sentences name it", async () => {

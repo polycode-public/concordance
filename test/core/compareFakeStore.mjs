@@ -9,7 +9,7 @@ import { VIEW_SQL, comparisonFromRow, latestPerPair } from "../../packages/core/
 
 /**
  * @param {{ witnesses?: object[], documents?: object[], chunks?: object[], assertions?: object[],
- *   events?: object[], facts?: object[], sessions?: object[], identityPairs?: object[] }} seed
+ *   events?: object[], entities?: object[], facts?: object[], sessions?: object[], identityPairs?: object[] }} seed
  */
 export function createCompareStore(seed = {}) {
   let nextId = 5000;
@@ -20,6 +20,7 @@ export function createCompareStore(seed = {}) {
     chunks: seed.chunks ?? [],
     assertions: seed.assertions ?? [],
     events: seed.events ?? [],
+    entities: seed.entities ?? [],
     accepted_facts: seed.facts ?? [],
     sessions: seed.sessions ?? [],
     identity_revealing_pairs: seed.identityPairs ?? [],
@@ -53,6 +54,8 @@ export function createCompareStore(seed = {}) {
           .slice(0, limit)
           .map(({ a, c, d }) => ({
             ...a,
+            object_entity_kind:
+              t.entities.find((e) => e.id === asId(a.object_entity_id))?.kind ?? null,
             document_id: c.document_id,
             sentence: c.text,
             statement_date: d.statement_date ?? null,

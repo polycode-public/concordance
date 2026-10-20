@@ -29,7 +29,7 @@ import {
   rulesLabel,
 } from "./nli.mjs";
 
-export const COMPARE_PIPELINE_VERSION = "compare-v1";
+export const COMPARE_PIPELINE_VERSION = "compare-v2";
 /** A running row older than this belongs to an invocation that died; the Lambda timeout is 15. */
 export const LEASE_MINUTES = 16;
 const ASSERTION_PAGE = 400;
@@ -37,13 +37,15 @@ const LABELLED_PAGE = 2000;
 
 export const RUN_SQL = Object.freeze({
   assertions: `
-  SELECT a.id, a.witness_id, a.source_chunk_id, a.event_id, a.predicate, a.object_text,
-         a.object_entity_id, a.time_text, a.place_text, a.place_entity_id, a.polarity,
-         a.modality, a.confidence, c.document_id, c.text AS sentence,
+  SELECT a.id, a.witness_id, a.source_chunk_id, a.event_id, a.subject_text, a.subject_kind,
+         a.predicate, a.object_text, a.object_entity_id, oe.kind AS object_entity_kind,
+         a.time_text, a.place_text, a.place_entity_id, a.polarity, a.modality, a.confidence,
+         c.document_id, c.text AS sentence,
          to_char(d.statement_date, 'YYYY-MM-DD') AS statement_date
     FROM assertions a
     JOIN chunks c ON c.id = a.source_chunk_id
     JOIN documents d ON d.id = c.document_id
+    LEFT JOIN entities oe ON oe.id = a.object_entity_id
    WHERE d.corpus = $1 AND a.id > $2::bigint
    ORDER BY a.id LIMIT $3`,
   facts: `SELECT id, assertion_id, text, is_hypothesis FROM accepted_facts ORDER BY id`,
@@ -91,9 +93,12 @@ export function assertionFromRow(r) {
     statementDate: r.statement_date ?? null,
     chunkId: id(r.source_chunk_id),
     eventId: id(r.event_id),
+    subjectText: r.subject_text ?? null,
+    subjectKind: r.subject_kind ?? null,
     predicate: r.predicate,
     objectText: r.object_text ?? null,
     objectEntityId: id(r.object_entity_id),
+    objectEntityKind: r.object_entity_kind ?? null,
     timeText: r.time_text ?? null,
     placeText: r.place_text ?? null,
     placeEntityId: id(r.place_entity_id),
@@ -149,9 +154,12 @@ export function inputHash(assertions, facts) {
         a.witnessId,
         a.chunkId,
         a.eventId,
+        a.subjectText,
+        a.subjectKind,
         a.predicate,
         a.objectText,
         a.objectEntityId,
+        a.objectEntityKind,
         a.timeText,
         a.placeText,
         a.placeEntityId,
