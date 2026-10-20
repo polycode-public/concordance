@@ -202,7 +202,7 @@ model-size finding, recorded in `PLAN_LAPTOP_STACK.md`.
 
 ## Scope held back (decisions, with the phase that revisits them)
 
-Video face blurring, multilingual embeddings, entity resolution across corpora, the second corpus (Bloody Sunday, then the Afghanistan inquiry for cipher mode): the
+Video face blurring, multilingual embeddings, entity resolution across corpora, the second corpus (the Undercover Policing Inquiry's witness statements are the candidate, evaluated 2026-10-20: `HN`-ciphered officers with cover names beside the statements of the people they reported on, so cipher mode, the identity-revealing pairing flag and the contradiction engine are all exercised; numbered-paragraph PDFs with `UCPI0000…` references; the site blocks fetchers, so files arrive by browser download; the Tranche 1 interim report (June 2023) is the gold source; the licence line is unverified. Bloody Sunday and the Afghanistan inquiry remain alternatives): the
 roadmap slide, revisited after Phase 7.
 
 ## Open questions
