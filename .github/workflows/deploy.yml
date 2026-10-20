@@ -61,8 +61,16 @@ jobs:
       - name: CDK synth
         run: npx cdk synth --quiet
 
+      # The custom domain is optional: without both variables the site keeps its CloudFront name.
       - name: CDK deploy
-        run: npx cdk deploy --all --require-approval never
+        env:
+          DOMAIN_NAME: ${{ vars.CONCORDANCE_DOMAIN_NAME }}
+          CERTIFICATE_ARN: ${{ vars.CONCORDANCE_CERTIFICATE_ARN }}
+        run: |
+          set -euo pipefail
+          npx cdk deploy --all --require-approval never \
+            --context "domainName=${DOMAIN_NAME}" \
+            --context "certificateArn=${CERTIFICATE_ARN}"
 
       - name: List the deployed stacks
         run: |

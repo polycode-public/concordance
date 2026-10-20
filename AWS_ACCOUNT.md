@@ -10,10 +10,10 @@ One account, no ci/prod split: polycode-sandbox. The account's own record is
 | Fact            | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Account         | polycode-sandbox, `687443513271`, Workloads OU of the polycode organisation `o-d4gyqlg7o0` (management account `541134664601`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Workload region | eu-west-2; us-east-1 only for a CloudFront certificate (none yet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Workload region | eu-west-2; us-east-1 only for the CloudFront certificate of `concordance.polycode.co.uk` (see "The domain")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | SSO profile     | `polycode-sandbox` (`aws sso login --profile polycode-sandbox`), AdministratorAccess                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Contact email   | `polycodelimited+aws-polycode-sandbox@gmail.com`; the project budget alerts go here too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| DNS             | `aws-sandbox.polycode.co.uk` hosted zone (`Z03251741HJWW3M3SBQ95`); this project uses none yet                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| DNS             | `aws-sandbox.polycode.co.uk` hosted zone (`Z03251741HJWW3M3SBQ95`), unused here. The site's name `concordance.polycode.co.uk` is a record in the zone `polycode.co.uk` (`Z2981ZT3I1K2HT`) of the management account `541134664601`, profile `polycode-management`                                                                                                                                                                                                                                                                                                                                                  |
 | Cost guardrails | Budgets in the management account: `polycode-sandbox-daily` $10 alert, `polycode-sandbox-monthly-cap` $500 (raised from $300 by the operator on 2026-10-19 at about 17:35 UTC) with the freeze SCP `p-8q03vynu`, which the budget action attached to the account at 04:44 UTC on 2026-10-19 at $315 month-to-date (other tenants' Macie, DynamoDB and Bedrock spend) and the operator detached at about 07:52 UTC the same day; while attached every role in the account is denied. Amazon Macie was removed from the account on 2026-10-19 (`word-team-datapipeline` !32). This project's own budget: $25 a month |
 | Bedrock         | Inference profile ids `eu.anthropic.*` in eu-west-2. Answering: Haiku 4.5, Sonnet 4.5 and 4.6, Opus 4.5 and 4.6. Denied: Opus 4.7 and later, Sonnet 5, Fable 5, Opus 5.x, Sonnet 5.5                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Other tenants   | `chat-with-diya-gl-gitlab-deploy` and three `word-team-*-gitlab-deploy` roles, all through the `gitlab.com` OIDC provider                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -37,6 +37,76 @@ same role for their AWS reads, the kill switch and Bedrock.
 `infra/provision-github-oidc.sh` creates the provider, the role and both policies, idempotently;
 `bash scripts/bootstrap-sandbox.sh` prints the whole one-time sequence. Provisioned on 2026-10-18,
 with the `project` cost allocation tag activated in the management account the same day.
+
+## The domain
+
+The site answers on `https://concordance.polycode.co.uk` when the repository variables
+`CONCORDANCE_DOMAIN_NAME` and `CONCORDANCE_CERTIFICATE_ARN` are both set. `deploy.yml` passes them
+to `cdk deploy` as the context values `domainName` and `certificateArn`. Without them the app stack
+serves on its CloudFront name only. With them the distribution carries the name and the
+certificate, the `SiteUrl` output and `config.json`'s `siteUrl` are the domain, and the HTTP API's
+allowed origins and the Cognito client's callback and logout URLs list the domain beside the
+CloudFront name. The output `DistributionDomainName` keeps the CloudFront name.
+
+| Piece         | Value                                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| Zone          | `polycode.co.uk`, `Z2981ZT3I1K2HT`, in the management account `541134664601` (`polycode-management`) |
+| Certificate   | ACM in `us-east-1` of the sandbox account, DNS validation; CloudFront reads certificates from there  |
+| Alias target  | the distribution `d1j45li8u6vyol.cloudfront.net`; CloudFront's alias zone id is `Z2FDTNDATAQYW2`     |
+| Repo variable | `CONCORDANCE_DOMAIN_NAME` = `concordance.polycode.co.uk`; `CONCORDANCE_CERTIFICATE_ARN` = the ARN    |
+
+The operator runs these once. Each AWS command is a write. The alias record goes in before the
+variables, because the deploy that follows them smokes the `SiteUrl` output, which is then the
+domain. The alias points at the CloudFront name, which exists already.
+
+1. Request the certificate and keep its ARN:
+
+   ```bash
+   aws acm request-certificate --profile polycode-sandbox --region us-east-1 \
+     --domain-name concordance.polycode.co.uk --validation-method DNS \
+     --tags Key=project,Value=concordance Key=env,Value=sandbox \
+     --query CertificateArn --output text
+   ```
+
+2. Read the validation record (its `Name` and `Value`):
+
+   ```bash
+   aws acm describe-certificate --profile polycode-sandbox --region us-east-1 \
+     --certificate-arn <certificate-arn> \
+     --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
+   ```
+
+3. Write the validation record in the management account's zone:
+
+   ```bash
+   aws route53 change-resource-record-sets --profile polycode-management \
+     --hosted-zone-id Z2981ZT3I1K2HT \
+     --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"<Name>","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"<Value>"}]}}]}'
+   ```
+
+4. Wait until the certificate is issued:
+
+   ```bash
+   aws acm wait certificate-validated --profile polycode-sandbox --region us-east-1 \
+     --certificate-arn <certificate-arn>
+   ```
+
+5. Write the alias records (IPv4 and IPv6) in the management account's zone:
+
+   ```bash
+   aws route53 change-resource-record-sets --profile polycode-management \
+     --hosted-zone-id Z2981ZT3I1K2HT \
+     --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"concordance.polycode.co.uk","Type":"A","AliasTarget":{"HostedZoneId":"Z2FDTNDATAQYW2","DNSName":"d1j45li8u6vyol.cloudfront.net","EvaluateTargetHealth":false}}},{"Action":"UPSERT","ResourceRecordSet":{"Name":"concordance.polycode.co.uk","Type":"AAAA","AliasTarget":{"HostedZoneId":"Z2FDTNDATAQYW2","DNSName":"d1j45li8u6vyol.cloudfront.net","EvaluateTargetHealth":false}}}]}'
+   ```
+
+6. Set the two repository variables:
+
+   ```bash
+   gh variable set CONCORDANCE_DOMAIN_NAME --repo polycode-public/concordance --body concordance.polycode.co.uk
+   gh variable set CONCORDANCE_CERTIFICATE_ARN --repo polycode-public/concordance --body <certificate-arn>
+   ```
+
+7. The next `deploy.yml` run on `main` attaches the name and the certificate to the distribution.
 
 ## Stacks
 

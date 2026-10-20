@@ -6,11 +6,14 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppStack } from "../../infra/lib/appStack.mjs";
+import { AppStack, siteDomain } from "../../infra/lib/appStack.mjs";
 
 const env = { account: "111111111111", region: "eu-west-2" };
 const CLUSTER = "arn:aws:rds:eu-west-2:111111111111:cluster:concordance";
 const SECRET = "arn:aws:secretsmanager:eu-west-2:111111111111:secret:concordance-db-AbCdEf";
+const DOMAIN = "concordance.polycode.co.uk";
+const CERTIFICATE =
+  "arn:aws:acm:us-east-1:111111111111:certificate/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d";
 
 let template;
 let dataTemplate;
@@ -472,5 +475,116 @@ describe("AppStack", () => {
           dbName: "concordance",
         }),
     ).toThrow(/budgetName/);
+  });
+
+  it("serves on the CloudFront name alone when no domain is given", () => {
+    const config = template.findResources("AWS::CloudFront::Distribution");
+    const distribution = Object.values(config)[0].Properties.DistributionConfig;
+    expect(distribution.Aliases).toBeUndefined();
+    expect(distribution.ViewerCertificate).toBeUndefined();
+    expect(template.findOutputs("SiteUrl").SiteUrl.Value).toEqual({
+      "Fn::Join": ["", ["https://", { "Fn::GetAtt": [expect.any(String), "DomainName"] }]],
+    });
+    template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      CallbackURLs: ["https://example.com"],
+    });
+  });
+});
+
+describe("AppStack with a domain", () => {
+  let domainTemplate;
+  let domainAssembly;
+
+  beforeAll(() => {
+    const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+    const data = new Stack(app, "Data", { env });
+    const stack = new AppStack(app, "App", {
+      env,
+      corpusBucket: new s3.Bucket(data, "CorpusBucket"),
+      dbResourceArn: CLUSTER,
+      dbSecretArn: SECRET,
+      dbName: "concordance",
+      budgetName: "concordance-sandbox-monthly",
+      domainName: DOMAIN,
+      certificateArn: CERTIFICATE,
+    });
+    domainTemplate = Template.fromStack(stack);
+    domainAssembly = app.synth();
+  }, 120000);
+
+  const origins = (t) =>
+    Object.values(t.findResources("AWS::ApiGatewayV2::Api")).find(
+      (r) => r.Properties.ProtocolType === "HTTP",
+    ).Properties.CorsConfiguration.AllowOrigins;
+
+  it("answers on the domain with the us-east-1 certificate over SNI", () => {
+    domainTemplate.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: Match.objectLike({
+        Aliases: [DOMAIN],
+        ViewerCertificate: Match.objectLike({
+          AcmCertificateArn: CERTIFICATE,
+          SslSupportMethod: "sni-only",
+        }),
+      }),
+    });
+  });
+
+  it("names the domain as the site URL and keeps the CloudFront name as an output", () => {
+    expect(domainTemplate.findOutputs("SiteUrl").SiteUrl.Value).toBe(`https://${DOMAIN}`);
+    expect(
+      domainTemplate.findOutputs("DistributionDomainName").DistributionDomainName.Value,
+    ).toEqual({ "Fn::GetAtt": [expect.any(String), "DomainName"] });
+  });
+
+  it("lets the page call the HTTP API from the domain and from the CloudFront name", () => {
+    const allowed = origins(domainTemplate);
+    expect(allowed).toHaveLength(2);
+    expect(allowed[0]).toBe(`https://${DOMAIN}`);
+    expect(JSON.stringify(allowed[1])).toContain("DomainName");
+  });
+
+  it("adds the domain's origin to the client's callback and logout URLs", () => {
+    const client = Object.values(domainTemplate.findResources("AWS::Cognito::UserPoolClient"))[0]
+      .Properties;
+    for (const urls of [client.CallbackURLs, client.LogoutURLs]) {
+      expect(urls).toHaveLength(2);
+      expect(urls[0]).toBe(`https://${DOMAIN}`);
+      expect(JSON.stringify(urls[1])).toContain("DomainName");
+    }
+    expect(client.ExplicitAuthFlows).toContain("ALLOW_USER_PASSWORD_AUTH");
+  });
+
+  it("writes the domain into config.json as the site URL", () => {
+    const configs = readdirSync(domainAssembly.directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("asset."))
+      .map((entry) => path.join(domainAssembly.directory, entry.name, "config.json"))
+      .filter((file) => existsSync(file))
+      .map((file) => readFileSync(file, "utf8"));
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toContain(`"siteUrl":"https://${DOMAIN}"`);
+  });
+});
+
+describe("siteDomain", () => {
+  it("is null without either value", () => {
+    expect(siteDomain({})).toBeNull();
+    expect(siteDomain({ domainName: "", certificateArn: undefined })).toBeNull();
+  });
+
+  it("refuses one value without the other", () => {
+    expect(() => siteDomain({ domainName: DOMAIN })).toThrow(/both/);
+    expect(() => siteDomain({ certificateArn: CERTIFICATE })).toThrow(/both/);
+  });
+
+  it("refuses a certificate outside us-east-1 and a name that is not a host", () => {
+    expect(() =>
+      siteDomain({
+        domainName: DOMAIN,
+        certificateArn: CERTIFICATE.replace("us-east-1", "eu-west-2"),
+      }),
+    ).toThrow(/us-east-1/);
+    expect(() =>
+      siteDomain({ domainName: "https://x.example", certificateArn: CERTIFICATE }),
+    ).toThrow(/host name/);
   });
 });

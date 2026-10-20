@@ -75,5 +75,11 @@ answer; the 5.x tier is denied. The provider names `eu.anthropic.*` inference pr
 - Cancel is a flag in DynamoDB read by the token loop, because a running Lambda cannot be aborted
   from outside; the laptop server aborts in-process through `AbortSignal`, and both sit behind the
   same `signal` argument of `runQuery`.
+- The site's own name, `concordance.polycode.co.uk`, is optional context on the app stack
+  (`domainName`, `certificateArn`) from two repository variables. The certificate is requested
+  once by CLI in `us-east-1`, the region CloudFront reads, and validated by a record in the
+  management account's `polycode.co.uk` zone; the stack imports it by ARN, so the deploy never
+  waits on a certificate and a cross-region stack is not needed. The operator commands are in
+  `AWS_ACCOUNT.md`, "The domain".
 - The SDK clients load behind dynamic imports inside the AWS factories, so `packages/core/` stays
   loadable offline and on the laptop without the AWS SDK.
