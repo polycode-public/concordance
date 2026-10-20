@@ -163,7 +163,7 @@ describe("toHalfvecLiteral", () => {
 describe("planChunks", () => {
   it("locates each level by the start page and paragraph of its section", () => {
     const sections = planChunks([
-      { page: 1, text: "WITNESS STATEMENT\n1. I lived on floor 18. I lived alone.\n2. I woke" },
+      { page: 1, text: "Witness A, flat 18.\n1. I lived on floor 18. I lived alone.\n2. I woke" },
       { page: 2, text: "at 01:00. I smelt smoke." },
     ]);
     expect(sections.map((s) => s.locator)).toEqual([
