@@ -196,6 +196,46 @@ const contrast = (a, b) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
+/**
+ * Starts headless Chrome and waits for its DevTools port. A runner under load sometimes gives no
+ * port within the wait, so the launch is tried three times, each with a fresh profile.
+ */
+async function launchChrome(chromeBin) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const profile = await mkdtemp(path.join(tmpdir(), "concordance-browser-"));
+    const chrome = spawn(
+      chromeBin,
+      [
+        "--headless=new",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "--no-first-run",
+        "--no-sandbox",
+        "--hide-scrollbars",
+        "about:blank",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    chrome.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const portFile = path.join(profile, "DevToolsActivePort");
+    let port;
+    for (let i = 0; i < 300 && !port && chrome.exitCode === null; i++) {
+      if (existsSync(portFile)) port = (await readFile(portFile, "utf8")).split("\n")[0];
+      else await sleep(100);
+    }
+    if (port) return { chrome, profile, port };
+    chrome.kill("SIGKILL");
+    lastError = new Error(
+      `Chrome did not publish a DevTools port (attempt ${attempt}): ${stderr.slice(-400)}`,
+    );
+  }
+  throw lastError;
+}
+
 describe.skipIf(!enabled)(
   "the page in headless Chrome (CONCORDANCE_BROWSER_TESTS=1)",
   { timeout: 30_000 },
@@ -295,27 +335,8 @@ describe.skipIf(!enabled)(
         requestReport: stubRequestReport,
       });
       base = `http://127.0.0.1:${app.port}`;
-      profile = await mkdtemp(path.join(tmpdir(), "concordance-browser-"));
-      chrome = spawn(
-        chromeBin,
-        [
-          "--headless=new",
-          "--remote-debugging-port=0",
-          `--user-data-dir=${profile}`,
-          "--no-first-run",
-          "--no-sandbox",
-          "--hide-scrollbars",
-          "about:blank",
-        ],
-        { stdio: "ignore" },
-      );
-      const portFile = path.join(profile, "DevToolsActivePort");
       let port;
-      for (let i = 0; i < 200 && !port; i++) {
-        if (existsSync(portFile)) port = (await readFile(portFile, "utf8")).split("\n")[0];
-        else await sleep(100);
-      }
-      if (!port) throw new Error("Chrome did not publish a DevTools port");
+      ({ chrome, profile, port } = await launchChrome(chromeBin));
       let target;
       for (let i = 0; i < 50 && !target; i++) {
         try {
