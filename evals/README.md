@@ -27,12 +27,13 @@ One JSON object per line in `evals/<corpus>/gold.jsonl`:
 }
 ```
 
-| Field           | Type                    | Meaning                                                        |
-| --------------- | ----------------------- | -------------------------------------------------------------- |
-| `id`            | string                  | Stable row id.                                                 |
-| `question`      | string                  | The question as a user types it.                               |
-| `gold_locators` | array                   | The locators a correct answer cites; empty for an abstain row. |
-| `expected`      | `"answer"`, `"abstain"` | `abstain` when the corpus does not cover the question.         |
+| Field           | Type                    | Meaning                                                                                               |
+| --------------- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `id`            | string                  | Stable row id.                                                                                        |
+| `question`      | string                  | The question as a user types it.                                                                      |
+| `gold_locators` | array                   | The locators a correct answer cites; empty for an abstain row.                                        |
+| `expected`      | `"answer"`, `"abstain"` | `abstain` when the corpus does not cover the question.                                                |
+| `report`        | object, optional        | The inquiry report finding the row comes from: `{ volume, paragraph, quote }`; the runner ignores it. |
 
 ## Where gold comes from
 

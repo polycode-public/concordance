@@ -106,7 +106,7 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
       MODEL_PROVIDER: kind,
     });
   const provider = await providerFor(args.provider);
-  openDb ??= async () => (await import("../packages/core/db.mjs")).createDb();
+  openDb ??= async () => (await import("../packages/core/db.mjs")).openDbFromEnv();
   const owned = db ? null : await openDb();
   try {
     const scored = [];
