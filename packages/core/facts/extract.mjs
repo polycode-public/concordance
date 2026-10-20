@@ -47,7 +47,6 @@ export const SHARED_EVENTS = Object.freeze({
     "smoke in the stairs",
     "the advice to stay put",
     "the advice changing to leave",
-    "leaving the building",
   ]),
 });
 

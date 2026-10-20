@@ -124,6 +124,15 @@ describe("splitStatements", () => {
       expect(alter).toContain(part);
   });
 
+  it("splits 0008_accepted_fact_sources.sql into one change that detaches a fact from its source on delete", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0008_accepted_fact_sources.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/^ALTER TABLE accepted_facts/);
+    expect(statements[0]).toContain("DROP CONSTRAINT accepted_facts_assertion_id_fkey");
+    expect(statements[0]).toContain("REFERENCES assertions (id) ON DELETE SET NULL");
+  });
+
   it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
     const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
     const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));

@@ -137,7 +137,7 @@ describe("extractPrompt", () => {
       SHARED_EVENTS.grenfell,
     );
     expect(prompt).toContain(
-      "event_text is a label. When the claim is about one of these events, copy its name exactly: 'the fire starting in Flat 16'; 'the first 999 calls'; 'the fire brigade arriving'; 'smoke in the lobby'; 'smoke in the stairs'; 'the advice to stay put'; 'the advice changing to leave'; 'leaving the building'. Use the sentence's own words only when none of them fits",
+      "event_text is a label. When the claim is about one of these events, copy its name exactly: 'the fire starting in Flat 16'; 'the first 999 calls'; 'the fire brigade arriving'; 'smoke in the lobby'; 'smoke in the stairs'; 'the advice to stay put'; 'the advice changing to leave'. Use the sentence's own words only when none of them fits",
     );
     expect(prompt).toContain("subject_kind is witness when subject_text is I, we or me");
   });
