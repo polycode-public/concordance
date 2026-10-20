@@ -13,6 +13,7 @@ import {
 } from "../../packages/core/tools/shared.mjs";
 import { WITNESS_CLAIMS_SQL } from "../../packages/core/tools/witnessClaims.mjs";
 import { HISTORY_SQL } from "../../packages/core/spend.mjs";
+import { toNamedParameters } from "../../packages/core/db.mjs";
 import { createCompareStore } from "./compareFakeStore.mjs";
 import { toolStore } from "./toolsFakeStore.mjs";
 import { compareProvider, compareSeed } from "./compareFixture.mjs";
@@ -206,6 +207,21 @@ describe("count_assertions", () => {
     expect(countSql("witness")).toMatch(/WHERE c\.corpus = \$1/);
     expect(countSql("event")).toMatch(/GROUP BY 1/);
     await expect(count.run({ groupBy: "colour" })).rejects.toThrow(/groupBy is one of/);
+  });
+
+  it("writes no colon the Data API would read as a parameter name", () => {
+    const statements = [
+      countSql("witness"),
+      countSql("predicate"),
+      countSql("event"),
+      WITNESS_CLAIMS_SQL,
+      DOCUMENT_FACTS_SQL,
+      HISTORY_SQL,
+    ];
+    for (const sql of statements) {
+      const named = toNamedParameters(sql);
+      expect(named.replace(/::/g, "").replace(/:p\d+/g, "")).not.toMatch(/:/);
+    }
   });
 });
 

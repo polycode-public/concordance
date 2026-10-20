@@ -23,7 +23,7 @@ const KEY = { witness: "a.witness_id", predicate: "a.predicate", event: "e.name"
 
 export const countSql = (groupBy) => `
   SELECT ${KEY[groupBy]} AS key, count(*)::int AS n, sum(count(*)) OVER ()::int AS total,
-         array_to_string((array_agg(a.source_chunk_id ORDER BY a.id))[1:${EXAMPLES}], ',') AS chunk_ids
+         string_agg(a.source_chunk_id::text, ',' ORDER BY a.id) AS chunk_ids
     FROM assertions a
     JOIN chunks c ON c.id = a.source_chunk_id
     LEFT JOIN events e ON e.id = a.event_id
@@ -117,7 +117,7 @@ export const countAssertions = {
       groups = rows.map((r) => ({
         key: r.key ?? null,
         n: Number(r.n),
-        chunkIds: r.chunk_ids ? String(r.chunk_ids).split(",") : [],
+        chunkIds: r.chunk_ids ? String(r.chunk_ids).split(",").slice(0, EXAMPLES) : [],
       }));
     }
     const shown = groups.slice(0, MAX_TOOL_ROWS).map((g) => ({
