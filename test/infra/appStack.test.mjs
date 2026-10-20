@@ -57,10 +57,17 @@ describe("AppStack", () => {
       "GET /conversations",
       "GET /conversations/{id}",
       "GET /doc/{id}",
+      "GET /facts/groups",
+      "GET /facts/matrix",
+      "GET /facts/timeline",
+      "GET /facts/witness/{id}",
       "GET /reports",
       "GET /reports/{filename}",
       "GET /spend",
       "POST /export",
+      "POST /facts/accept",
+      "POST /facts/hypothesis",
+      "POST /facts/override",
     ]);
     expect(routes.find((r) => r.RouteKey === "$connect").AuthorizationType).toBe("CUSTOM");
     expect(routes.find((r) => r.RouteKey === "GET /doc/{id}").AuthorizationType).toBe("JWT");
@@ -72,6 +79,13 @@ describe("AppStack", () => {
       "GET /reports/{filename}",
       "DELETE /reports/{filename}",
       "POST /export",
+      "GET /facts/groups",
+      "GET /facts/matrix",
+      "GET /facts/timeline",
+      "GET /facts/witness/{id}",
+      "POST /facts/override",
+      "POST /facts/accept",
+      "POST /facts/hypothesis",
     ]) {
       expect(routes.find((r) => r.RouteKey === key).AuthorizationType).toBe("JWT");
     }
@@ -161,11 +175,11 @@ describe("AppStack", () => {
     ]);
   });
 
-  it("runs nine arm64 Node 24 functions, the turn function for ten minutes", () => {
+  it("runs eleven arm64 Node 24 functions, the turn function for ten minutes", () => {
     const fns = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .filter((p) => p.Runtime === "nodejs24.x" && p.Environment);
-    expect(fns).toHaveLength(9);
+    expect(fns).toHaveLength(11);
     for (const p of fns) expect(p.Architectures).toEqual(["arm64"]);
     const turn = fns.find((p) => p.Timeout === 600);
     expect(turn.MemorySize).toBe(1024);
@@ -239,6 +253,54 @@ describe("AppStack", () => {
     ]);
   });
 
+  it("gives the facts routes' function the database and nothing else", () => {
+    const fn = functionNamed("FactsFunction")[1].Properties;
+    expect(fn.Environment.Variables).toEqual({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+    });
+    expect(
+      roleStatements(fn)
+        .flatMap((s) => [s.Action].flat())
+        .sort(),
+    ).toEqual([
+      "rds-data:BeginTransaction",
+      "rds-data:CommitTransaction",
+      "rds-data:ExecuteStatement",
+      "rds-data:RollbackTransaction",
+      "secretsmanager:GetSecretValue",
+    ]);
+  });
+
+  it("runs a comparison for up to fifteen minutes on one vCPU with the store and Bedrock", () => {
+    const [compareId, { Properties: fn }] = functionNamed("CompareFunction");
+    expect(fn.Timeout).toBe(900);
+    expect(fn.MemorySize).toBe(1769);
+    expect(fn.Environment.Variables).toEqual({
+      MODEL_PROVIDER: "bedrock",
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+    });
+    expect(
+      roleStatements(fn)
+        .flatMap((s) => [s.Action].flat())
+        .sort(),
+    ).toEqual([
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+      "rds-data:BeginTransaction",
+      "rds-data:CommitTransaction",
+      "rds-data:ExecuteStatement",
+      "rds-data:RollbackTransaction",
+      "secretsmanager:GetSecretValue",
+    ]);
+    expect(template.findOutputs("CompareFunctionName").CompareFunctionName.Value).toEqual({
+      Ref: compareId,
+    });
+  });
+
   it("lets the turn function call Bedrock and manage the connections", () => {
     const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
       (r) => r.Properties.PolicyDocument.Statement,
@@ -293,6 +355,8 @@ describe("AppStack", () => {
     expect(markers[`<<marker:0xbaba:${exportMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/export"');
     const reportsMarker = /"reportsUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
     expect(markers[`<<marker:0xbaba:${reportsMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/reports"');
+    const factsMarker = /"factsUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
+    expect(markers[`<<marker:0xbaba:${factsMarker}>>`]["Fn::Join"][1].at(-1)).toBe('/facts"');
   });
 
   it("lets the export function write and read notes/ and nothing else in the bucket", () => {
@@ -373,6 +437,7 @@ describe("AppStack", () => {
         "UserPoolId",
         "UserPoolClientId",
         "DemoUserName",
+        "CompareFunctionName",
       ]),
     );
   });

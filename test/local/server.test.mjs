@@ -10,6 +10,9 @@ import { createFakeProvider } from "../../packages/core/providers/fakeProvider.m
 import { PROMPT_VERSION, SYSTEM_PROMPT, answerMessages } from "../../packages/core/prompt.mjs";
 import { checkAnswer } from "../../packages/core/query.mjs";
 import { createReportsStore } from "../core/reportsFakeStore.mjs";
+import { runComparison } from "../../packages/core/facts/compare.mjs";
+import { createCompareStore } from "../core/compareFakeStore.mjs";
+import { compareProvider, compareSeed } from "../core/compareFixture.mjs";
 
 const TOKENS = ["The stairs were dark ", "[E1]. ", "Nobody ", "came."];
 
@@ -154,6 +157,7 @@ describe("local server", () => {
       spendUrl: "/spend",
       conversationsUrl: "/conversations",
       reportsUrl: "/reports",
+      factsUrl: "/facts",
       exportUrl: "/export",
     });
   });
@@ -738,5 +742,69 @@ describe("generated reports on the laptop", () => {
     const error = await client.until((f) => f.type === "error");
     expect(error.message).toMatch(/filename/);
     client.ws.close();
+  });
+});
+
+describe("the facts routes on the laptop", () => {
+  async function factsServer() {
+    const db = createCompareStore(compareSeed());
+    await runComparison({
+      corpus: "grenfell",
+      db,
+      provider: compareProvider().provider,
+      log: () => {},
+    });
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }), db });
+    return { db, base: `http://127.0.0.1:${app.port}` };
+  }
+  const post = (url, body) =>
+    fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  it("answers the groups, the matrix, the timeline and a witness", async () => {
+    const { base } = await factsServer();
+    const groups = await fetch(`${base}/facts/groups`);
+    expect(groups.headers.get("cache-control")).toBe("no-store");
+    expect((await groups.json()).groups[0]).toMatchObject({ eventId: "7", contradictions: 4 });
+    const matrix = await (await fetch(`${base}/facts/matrix?event=7`)).json();
+    expect(matrix.witnesses.map((w) => w.id)).toEqual(["C123", "IWS-A", "IWS-B"]);
+    const topic = await (await fetch(`${base}/facts/matrix?topic=dark`)).json();
+    expect(topic.pairs).toHaveLength(1);
+    expect((await (await fetch(`${base}/facts/timeline?event=7`)).json()).points).toHaveLength(4);
+    expect((await (await fetch(`${base}/facts/witness/IWS-A`)).json()).self).toHaveLength(1);
+    expect((await fetch(`${base}/facts/witness/NOBODY`)).status).toBe(404);
+  });
+
+  it("stores a relabel and a promotion as the laptop user", async () => {
+    const { db, base } = await factsServer();
+    const id = db.tables.assertion_comparisons.find((c) => c.assertion_a === "4").id;
+    const override = await post(`${base}/facts/override`, {
+      comparisonId: id,
+      label: "agree",
+      reason: "The same alarm.",
+    });
+    expect(override.status).toBe(201);
+    expect((await override.json()).comparison).toMatchObject({ decidedBy: "laptop" });
+    const accept = await post(`${base}/facts/accept`, {
+      assertionId: "1",
+      sourceCitation: "fixture paragraph",
+    });
+    expect(accept.status).toBe(201);
+    expect(db.tables.accepted_facts[0]).toMatchObject({ promoted_by: "laptop", assertion_id: "1" });
+  });
+
+  it("refuses a body that is not JSON, one over the limit, and the wrong method", async () => {
+    const { base } = await factsServer();
+    expect((await post(`${base}/facts/accept`, "{")).status).toBe(400);
+    expect((await post(`${base}/facts/accept`, { text: "x".repeat(9000) })).status).toBe(413);
+    expect((await fetch(`${base}/facts/accept`)).status).toBe(405);
+  });
+
+  it("answers 503 when no database is configured", async () => {
+    app = await createServer({ provider: createFakeProvider({ tokens: [] }) });
+    expect((await fetch(`http://127.0.0.1:${app.port}/facts/groups`)).status).toBe(503);
   });
 });
