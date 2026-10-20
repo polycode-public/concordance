@@ -12,6 +12,7 @@ import {
   extractPrompt,
   sentenceWindows,
 } from "../../packages/core/facts/extract.mjs";
+import { InvalidReplyError } from "../../packages/core/providers/jsonReply.mjs";
 import { ReplyTruncatedError } from "../../packages/core/providers/modelProvider.mjs";
 import { CLAIM_KINDS } from "../../packages/core/facts/align.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
@@ -653,7 +654,14 @@ describe("extractAssertions", () => {
       expect(result.windows).toEqual({ done: 1, total: 1 });
       expect(db.tables.assertions).toHaveLength(10);
       expect(lines.filter((l) => l.stage === "window-split")).toEqual([
-        { evidenceId: "IWS1", stage: "window-split", window: 0, depth: 1, sentences: "0-9" },
+        {
+          evidenceId: "IWS1",
+          stage: "window-split",
+          window: 0,
+          depth: 1,
+          sentences: "0-9",
+          reason: "truncated",
+        },
       ]);
     });
 
@@ -694,6 +702,58 @@ describe("extractAssertions", () => {
       ).rejects.toThrow(/window 1, sentence 2-2: m stopped at its output limit/);
       expect(db.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["100", "101"]);
       expect(db.tables.provenance).toEqual([]);
+    });
+
+    it("splits a window whose reply is not valid JSON and logs the reason", async () => {
+      const db = store(10);
+      const lines = [];
+      const seen = [];
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          seen.push(ordinals.length);
+          if (ordinals.length === 10) throw new InvalidReplyError("m returned invalid JSON: {");
+          return answer(ordinals);
+        },
+      });
+      const result = await extractAssertions({
+        documentId: "IWS1",
+        provider: p,
+        db,
+        window: 10,
+        log: (line) => lines.push(JSON.parse(line)),
+      });
+      expect(seen).toEqual([10, 5, 5]);
+      expect(result.counts).toMatchObject({ calls: 3, kept: 10, written: 10 });
+      expect(lines.filter((l) => l.stage === "window-split")).toEqual([
+        {
+          evidenceId: "IWS1",
+          stage: "window-split",
+          window: 0,
+          depth: 1,
+          sentences: "0-9",
+          reason: "invalid",
+        },
+      ]);
+    });
+
+    it("fails the document naming the sentence and the reply when one sentence is still invalid", async () => {
+      const db = store(4);
+      const p = createFakeProvider({
+        tokens: [],
+        extractJson: ({ prompt }) => {
+          const ordinals = ordinalsIn(prompt);
+          if (ordinals.includes(2)) {
+            throw new InvalidReplyError('m returned invalid JSON: {"assertions": [ ... ]]');
+          }
+          return answer(ordinals);
+        },
+      });
+      await expect(
+        extractAssertions({ documentId: "IWS1", provider: p, db, window: 2, log: () => {} }),
+      ).rejects.toThrow(/window 1, sentence 2-2: m returned invalid JSON: \{"assertions"/);
+      expect(db.tables.assertions.map((a) => a.source_chunk_id)).toEqual(["100", "101"]);
     });
   });
 

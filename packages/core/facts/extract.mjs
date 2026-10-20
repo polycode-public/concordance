@@ -16,6 +16,7 @@
 // sentence the code numbered.
 
 import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
+import { InvalidReplyError } from "../providers/jsonReply.mjs";
 import { sha256Text } from "../ingest/run.mjs";
 import { CLAIM_KINDS, PRONOUN_SUBJECTS, pronounSubject } from "./align.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
@@ -692,7 +693,8 @@ export async function extractAssertions({
         }
       }
     };
-    // A reply cut off at the output limit is retried as two half windows, down to one sentence.
+    // A reply cut off at the output limit, or one that is not valid JSON, is retried as two half
+    // windows, down to one sentence.
     const extractWindow = async (w, depth) => {
       let result;
       try {
@@ -702,7 +704,13 @@ export async function extractAssertions({
           signal,
         });
       } catch (err) {
-        if (err instanceof ReplyTruncatedError && !signal?.aborted) {
+        const splitReason =
+          err instanceof ReplyTruncatedError
+            ? "truncated"
+            : err instanceof InvalidReplyError
+              ? "invalid"
+              : null;
+        if (splitReason && !signal?.aborted) {
           calls++;
           const sentencesIn = `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}`;
           if (w.targets.length === 1) {
@@ -718,6 +726,7 @@ export async function extractAssertions({
               window: next,
               depth,
               sentences: sentencesIn,
+              reason: splitReason,
             }),
           );
           const mid = Math.ceil(w.targets.length / 2);
