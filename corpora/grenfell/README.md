@@ -51,6 +51,17 @@ records), keeps open PDF records, reads flat, floor and kind from each descripti
 and any floor outside the range, and makes one details call per statement for the date.
 It rewrites the same `sources.json` on every run.
 
+## Fire brigade statements
+
+The London Fire Brigade statements are catalogued in the same series as police-provided records:
+titles `MET<digits>.pdf`, descriptions `Witness Statement - LFB - <name> Evidence provided by:
+Metropolitan Police Service.` (dash and capitalisation vary; some carry a bracketed note).
+`discovery.mjs` runs a second search, `Witness Statement LFB`, and keeps the records that match
+that shape. The floor range does not filter them: their `floor` and `flat` are null and `role`
+is `London Fire Brigade`, with the rank added when the name carries one. `roles.json` maps an
+evidence id to a role from the Phase 1 report's account and replaces the default. The operator
+orders them the same way as the resident statements, in orders of 10.
+
 ## Downloads
 
 The catalogue serves a PDF only to a download link that comes from an order. The operator places

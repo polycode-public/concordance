@@ -5,9 +5,11 @@ import {
   buildSources,
   classify,
   floorOfFlat,
+  isFireBrigadeRecord,
   isoDate,
   openPdfRecords,
   parseDescription,
+  parseFireBrigadeDescription,
   parseRobots,
   politeClient,
   searchAll,
@@ -301,5 +303,99 @@ describe("buildSources", () => {
       return JSON.stringify((await buildSources(client, 16, 20)).entries);
     };
     expect(await run()).toBe(await run());
+  });
+});
+
+describe("parseFireBrigadeDescription", () => {
+  const TAIL = " Evidence provided by: Metropolitan Police Service.";
+
+  it("reads the name from each dash and capitalisation used", () => {
+    for (const head of [
+      "Witness Statement - LFB - ",
+      "Witness statement - LFB - ",
+      "Witness Statement \u2013 LFB - ",
+    ]) {
+      expect(parseFireBrigadeDescription(`${head}Ann O'Example${TAIL}`)).toMatchObject({
+        witness: "Ann O'Example",
+        kind: "statement",
+        floor: null,
+        flat: null,
+        role: "London Fire Brigade",
+      });
+    }
+  });
+
+  it("drops a bracketed note from the name", () => {
+    const p = parseFireBrigadeDescription(
+      `Witness Statement - LFB - Ann Example (references to MET00000001 are to a duplicate statement)${TAIL}`,
+    );
+    expect(p.witness).toBe("Ann Example");
+  });
+
+  it("moves a leading rank into the role", () => {
+    const p = parseFireBrigadeDescription(
+      `Witness statement - LFB - Station Manager Ann Example${TAIL}`,
+    );
+    expect(p).toMatchObject({
+      witness: "Ann Example",
+      role: "London Fire Brigade, Station Manager",
+    });
+  });
+});
+
+describe("isFireBrigadeRecord", () => {
+  it("accepts the catalogue shape and refuses other records that mention the brigade", () => {
+    const pdf = (description, title = "MET00000001.pdf") => ({ title, description });
+    expect(
+      isFireBrigadeRecord(pdf("Witness Statement - LFB - Ann Example Evidence provided by: M.")),
+    ).toBe(true);
+    expect(isFireBrigadeRecord(pdf("Witness statement\u2014LFB\u2014Ann Example"))).toBe(true);
+    expect(
+      isFireBrigadeRecord(pdf("Witness statement - non-resident - Ann Example. Refers to the LFB")),
+    ).toBe(false);
+    expect(isFireBrigadeRecord(pdf("Witness Statement - LFB - Ann Example", "notes.doc"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("buildSources with fire brigade statements", () => {
+  const brigade = (n, over = {}) => ({
+    id: `fb${n}`,
+    reference: `GTI 2/B${n}/Z`,
+    title: `MET${String(n).padStart(8, "0")}.pdf`,
+    description:
+      "Witness Statement - LFB - Ann Example Evidence provided by: Metropolitan Police Service.",
+    closureStatus: "O",
+    ...over,
+  });
+
+  it("keeps them without a floor, prefers the /Z/1 copy and applies a role override", async () => {
+    const pages = [
+      [
+        record(1),
+        brigade(7),
+        brigade(7, { id: "fb7_1", reference: "GTI 2/B7/Z/1" }),
+        brigade(2, { description: "Witness statement - LFB - Ben Other Evidence provided by: M." }),
+      ],
+    ];
+    const { fetchFn } = fakeHost(pages);
+    const client = politeClient({ fetch: fetchFn, delayMs: 0 });
+    await client.init();
+    const { entries } = await buildSources(client, 16, 20, {
+      roles: { MET00000002: "London Fire Brigade, watch manager; floor 16" },
+    });
+    expect(entries.map((e) => e.file)).toEqual([
+      "IWS00000001.pdf",
+      "MET00000002.pdf",
+      "MET00000007.pdf",
+    ]);
+    expect(entries[1]).toMatchObject({
+      witness: "Ben Other",
+      role: "London Fire Brigade, watch manager; floor 16",
+      floor: null,
+      flat: null,
+    });
+    expect(entries[2]).toMatchObject({ discovery_id: "fb7_1", role: "London Fire Brigade" });
   });
 });

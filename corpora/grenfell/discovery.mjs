@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 import { realpathSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export const HOST = "https://discovery.nationalarchives.gov.uk";
@@ -180,6 +180,50 @@ export function roleOf(p) {
     : `resident, floor ${p.floor}`;
 }
 
+const RANKS =
+  "(?:Firefighter|Crew Manager|Watch Manager|Station Manager|Group Manager|Area Manager|Deputy Assistant Commissioner|Assistant Commissioner|Deputy Commissioner|Commissioner|Sub Officer|Control Room Officer|Fire Control Officer|FF|CM|WM|SM|GM|DAC|AC)";
+const RANK_PREFIX = new RegExp(`^(${RANKS})\\s+(?=\\S+\\s+\\S)`, "i");
+
+const FIRE_BRIGADE_SEARCH = "Witness Statement LFB";
+const FIRE_BRIGADE_ROLE = "London Fire Brigade";
+
+/** True for a catalogue record whose description reads "Witness Statement - LFB - <name>". */
+export function isFireBrigadeRecord(record) {
+  return (
+    /\.pdf$/i.test(record.title ?? "") &&
+    /^witness statement\s*[-\u2013\u2014]\s*LFB\s*[-\u2013\u2014]\s*\S/i.test(
+      stripHtml(record.description ?? ""),
+    )
+  );
+}
+
+/**
+ * Reads the description of a London Fire Brigade statement, such as
+ * "Witness Statement - LFB - Ann Example (note) Evidence provided by: Metropolitan Police Service."
+ * A leading rank stays out of the name and goes into the role.
+ * @param {string} html
+ */
+export function parseFireBrigadeDescription(html) {
+  const description = stripHtml(html);
+  const afterPrefix = description
+    .replace(/\s*Evidence provided by:.*$/i, "")
+    .replace(/^.*?\bLFB\b\s*[-\u2013\u2014:]?\s*/i, "")
+    .replace(/^witness statement\s*[-\u2013\u2014:]?\s*(?:LFB\s*[-\u2013\u2014:]?\s*)?/i, "");
+  const unbracketed = afterPrefix.replace(/\s*\(.*$/, "").trim();
+  const rank = RANK_PREFIX.exec(unbracketed)?.[1] ?? null;
+  const name = (rank ? unbracketed.slice(rank.length).trim() : unbracketed) || null;
+  return {
+    witness: name,
+    flat: null,
+    flat_as_written: null,
+    floor_as_written: null,
+    floor: null,
+    kind: "statement",
+    role: rank ? `${FIRE_BRIGADE_ROLE}, ${rank}` : FIRE_BRIGADE_ROLE,
+    description,
+  };
+}
+
 /** Same as parseDescription's kind with the exhibit and no-floor checks callers need. */
 export function classify(description) {
   return parseDescription(description).kind;
@@ -204,12 +248,12 @@ export function isoDate(covering) {
  * @param {ReturnType<typeof politeClient>} client
  * @param {{ onPage?: (page: number, total: number) => void }} [options]
  */
-export async function searchAll(client, { onPage } = {}) {
+export async function searchAll(client, { onPage, query = "IWS*" } = {}) {
   const byId = new Map();
   let rows = 0;
   for (let page = 1; ; page++) {
     const q = new URLSearchParams({
-      "sps.searchQuery": "IWS*",
+      "sps.searchQuery": query,
       "sps.recordSeries": "GTI 2",
       "sps.resultsPageSize": "100",
       "sps.sortByOption": "TITLE_ASCENDING",
@@ -237,12 +281,14 @@ export function openPdfRecords(records) {
 }
 
 /**
- * Builds the sources.json entries for statements on floors lo to hi.
+ * Builds the sources.json entries for statements on floors lo to hi, then the London Fire
+ * Brigade statements, which the floor range does not filter. `roles` maps an evidence id to the
+ * role that replaces the one read from the description.
  * @param {ReturnType<typeof politeClient>} client
  * @param {number} lo
  * @param {number} hi
  */
-export async function buildSources(client, lo, hi, { onPage, include = [] } = {}) {
+export async function buildSources(client, lo, hi, { onPage, include = [], roles = {} } = {}) {
   const { records, rows } = await searchAll(client, { onPage });
   const open = openPdfRecords(records);
   const picked = [];
@@ -252,6 +298,10 @@ export async function buildSources(client, lo, hi, { onPage, include = [] } = {}
     if (p.kind === "exhibit" || p.floor == null) continue;
     if (!kept && (p.floor < lo || p.floor > hi)) continue;
     picked.push({ r, p });
+  }
+  const brigade = await searchAll(client, { query: FIRE_BRIGADE_SEARCH });
+  for (const r of openPdfRecords(brigade.records.filter(isFireBrigadeRecord))) {
+    picked.push({ r, p: parseFireBrigadeDescription(r.description ?? "") });
   }
   const entries = [];
   for (const { r, p } of picked) {
@@ -265,7 +315,7 @@ export async function buildSources(client, lo, hi, { onPage, include = [] } = {}
       reference: r.reference,
       witness_id: evidenceId,
       witness: p.witness,
-      role: roleOf(p),
+      role: roles[evidenceId] ?? p.role ?? roleOf(p),
       kind: p.kind,
       floor: p.floor,
       flat: p.flat,
@@ -280,16 +330,26 @@ export async function buildSources(client, lo, hi, { onPage, include = [] } = {}
     entries.push(entry);
   }
   entries.sort(
-    (a, b) => a.floor - b.floor || (a.flat ?? 0) - (b.flat ?? 0) || a.file.localeCompare(b.file),
+    (a, b) =>
+      (a.floor == null) - (b.floor == null) ||
+      (a.floor ?? 0) - (b.floor ?? 0) ||
+      (a.flat ?? 0) - (b.flat ?? 0) ||
+      a.file.localeCompare(b.file),
   );
   return { entries, rows, unique: records.length, open: open.length };
 }
 
 function parseArgs(argv) {
-  const args = { floors: null, out: "corpora/grenfell/sources.json", include: [] };
+  const args = {
+    floors: null,
+    out: "corpora/grenfell/sources.json",
+    roles: "corpora/grenfell/roles.json",
+    include: [],
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--floors") args.floors = argv[++i];
     else if (argv[i] === "--out") args.out = argv[++i];
+    else if (argv[i] === "--roles") args.roles = argv[++i];
     else if (argv[i] === "--include") args.include = argv[++i].split(",").filter(Boolean);
     else throw new Error(`unknown argument ${argv[i]}`);
   }
@@ -306,12 +366,15 @@ async function main() {
   await client.init();
   const { entries, rows, unique, open } = await buildSources(client, args.lo, args.hi, {
     include: args.include,
+    roles: JSON.parse(await readFile(args.roles, "utf8")),
     onPage: (page, total) => console.log(`search page ${page} (${total} rows)`),
   });
   await writeFile(args.out, JSON.stringify(entries, null, 2) + "\n");
+  const brigade = entries.filter((e) => e.floor == null).length;
   console.log(
     `${rows} result rows, ${unique} unique records, ${open} open PDF records, ` +
-      `${entries.length} statements on floors ${args.lo}-${args.hi} written to ${args.out}`,
+      `${entries.length - brigade} statements on floors ${args.lo}-${args.hi} and ` +
+      `${brigade} fire brigade statements written to ${args.out}`,
   );
 }
 

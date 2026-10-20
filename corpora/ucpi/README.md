@@ -8,8 +8,11 @@ conversation, a report or an accepted fact made with it selected belongs to it, 
 reads only its chunks.
 
 - **Source**: the evidence pages of the Undercover Policing Inquiry, <https://www.ucpi.org.uk>.
-- **Content of the first slice**: witness statements as PDF, referenced `UCPI0000…` (the
-  inquiry's own evidence numbers, used as the document id). The slice holds two kinds of witness:
+- **Content**: witness statements as PDF, referenced `UCPI0000…` or `MPS-…` (the inquiry's own
+  evidence numbers, used as the document id). The first slice held three statements; the second
+  adds ten around HN43: two Special Demonstration Squad managers, two officers of the same unit,
+  and six people the unit reported on, one with two statements. The slice holds two kinds of
+  witness:
   - undercover officers of the Special Demonstration Squad and the National Public Order
     Intelligence Unit, named by an `HN` cipher (`HN1`, `HN10`, …) and by the cover name they used;
   - the people they reported on or who knew them under the cover name.
