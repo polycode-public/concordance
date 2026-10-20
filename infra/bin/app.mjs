@@ -46,7 +46,7 @@ const storeStack = new StoreStack(app, stackName("store"), {
 
 const corpora = corporaContext(optionalContext("corpora")) ?? DEFAULT_CORPORA;
 
-new AppStack(app, stackName("app"), {
+const appStack = new AppStack(app, stackName("app"), {
   env,
   corpusBucket: dataStack.bucket,
   dbResourceArn: storeStack.cluster.clusterArn,
@@ -59,7 +59,7 @@ new AppStack(app, stackName("app"), {
   description: `${PROJECT} ${envName}: the chat WebSocket, the document route and the page on CloudFront`,
 });
 
-new IngestStack(app, stackName("ingest"), {
+const ingestStack = new IngestStack(app, stackName("ingest"), {
   env,
   corpusBucket: dataStack.bucket,
   corpora: corpora.map((corpus) => corpus.id),
@@ -70,13 +70,15 @@ new IngestStack(app, stackName("ingest"), {
   description: `${PROJECT} ${envName}: the ingest state machine over a corpus manifest, one Lambda per document`,
 });
 
-new GuardrailsStack(app, stackName("guardrails"), {
+const guardrailsStack = new GuardrailsStack(app, stackName("guardrails"), {
   env,
   envName,
   project: PROJECT,
   budgetEmail: BUDGET_EMAIL,
   description: `${PROJECT} ${envName}: the project cost budget and the agent kill switch`,
 });
+appStack.addDependency(guardrailsStack);
+ingestStack.addDependency(guardrailsStack);
 
 Tags.of(app).add("project", PROJECT);
 Tags.of(app).add("env", envName);
