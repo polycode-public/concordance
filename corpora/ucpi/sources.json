@@ -1,0 +1,44 @@
+[
+  {
+    "evidence_id": "UCPI0000037824",
+    "file": "UCPI0000037824.pdf",
+    "url": "https://www.ucpi.org.uk/publications/first-witness-statement-of-david-nellist/",
+    "witness_id": "UCPI-NELLIST",
+    "witness": "David Nellist",
+    "role": "non-state witness; reported on by undercover officers; Militant, later the Socialist Party; MP for Coventry South East 1983 to 1992",
+    "kind": "statement",
+    "title": "First Witness Statement of David Nellist",
+    "tranche": "Tranche 3 (Phase 1)",
+    "pages": 51,
+    "cipher_only": false,
+    "fetched_by": "a browser session on ucpi.org.uk after the operator passed its human check; the files saved through the browser"
+  },
+  {
+    "evidence_id": "UCPI0000037783",
+    "file": "UCPI0000037783.pdf",
+    "url": "https://www.ucpi.org.uk/publications/first-witness-statement-of-hannah-sell/",
+    "witness_id": "UCPI-SELL",
+    "witness": "Hannah Sell",
+    "role": "non-state witness; reported on by undercover officers; Militant, later the Socialist Party",
+    "kind": "statement",
+    "title": "First Witness Statement of Hannah Sell",
+    "tranche": "Tranche 3 (Phase 1)",
+    "pages": 54,
+    "cipher_only": false,
+    "fetched_by": "a browser session on ucpi.org.uk after the operator passed its human check; the files saved through the browser"
+  },
+  {
+    "evidence_id": "UCPI0000036012",
+    "file": "UCPI0000036012.pdf",
+    "url": "https://www.ucpi.org.uk/publications/witness-statement-of-hn43/",
+    "witness_id": "HN43",
+    "witness": "HN43 (Peter Francis)",
+    "role": "undercover officer, Special Demonstration Squad; real name published by the Inquiry",
+    "kind": "statement",
+    "title": "Witness Statement of HN43 Peter Francis",
+    "tranche": "Tranche 3 (Phase 1)",
+    "pages": 158,
+    "cipher_only": false,
+    "fetched_by": "a browser session on ucpi.org.uk after the operator passed its human check; the files saved through the browser"
+  }
+]
