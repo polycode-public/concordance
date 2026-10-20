@@ -18,7 +18,7 @@ import { CfnOutput, Stack } from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 
-const MONTHLY_LIMIT_USD = 50;
+const MONTHLY_LIMIT_USD = 75;
 const ALERT_PERCENTAGES = [80, 100];
 
 /** The service names Cost Explorer prints for model usage in the Bedrock family. */
