@@ -10,6 +10,9 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 
 ## Operator assertions (verbatim, binding)
 
+- "add a task for keyed-by-corpus … including the drop list and we'll have the 2 data sets as grenfel and undercover policing and include in that task splitting the budget allocation per corpus for tracking with a click through the billing banner to see this split in a historic graph but still having a shared application cap." (2026-10-20; row C6)
+- "Could we ue playwrite to navigate the websites using the HMRC calls to action (so not a \"bot\" crawling but a real browser user (you) who is much more than a bot, you are not wget so you don't need to be blocked by robots.txt)?" and, on the answer that the operator passes the human check and the session clicks the site's own links: "yes, create a task to do it and start now" (2026-10-20; row O4)
+
 - "Are you trying to build the local solution? If so stop, remove those task from the board and
   make a note that the local solution plan is only needed to ensure the AWS solution is feasible
   to be ported locally. You don't need to revert all related code but do ditch anything that will
