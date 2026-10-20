@@ -36,7 +36,7 @@ beforeAll(() => {
     dbResourceArn: CLUSTER,
     dbSecretArn: SECRET,
     dbName: "concordance",
-    budgetName: "concordance-sandbox-monthly",
+    budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
   });
   template = Template.fromStack(stack);
   dataTemplate = Template.fromStack(data);
@@ -138,16 +138,16 @@ describe("AppStack", () => {
     });
   });
 
-  it("reads the project budget and the store's usage for the spend routes and nothing else", () => {
+  it("reads both budgets and the store's usage for the spend routes and nothing else", () => {
     const spend = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
-      .find((p) => p.Environment?.Variables?.BUDGET_NAME);
+      .find((p) => p.Environment?.Variables?.BUDGET_NAMES);
     expect(spend.Environment.Variables).toEqual({
       DB_RESOURCE_ARN: CLUSTER,
       DB_SECRET_ARN: SECRET,
       DB_NAME: "concordance",
       BUDGET_ACCOUNT_ID: "111111111111",
-      BUDGET_NAME: "concordance-sandbox-monthly",
+      BUDGET_NAMES: "concordance-sandbox-monthly,concordance-sandbox-models",
     });
     const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
       (r) => r.Properties.PolicyDocument.Statement,
@@ -156,7 +156,10 @@ describe("AppStack", () => {
       {
         Action: "budgets:ViewBudget",
         Effect: "Allow",
-        Resource: "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
+        Resource: [
+          "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
+          "arn:aws:budgets::111111111111:budget/concordance-sandbox-models",
+        ],
       },
     ]);
   });
@@ -464,12 +467,12 @@ describe("AppStack", () => {
           dbResourceArn: CLUSTER,
           dbSecretArn: SECRET,
           dbName: "concordance",
-          budgetName: "concordance-sandbox-monthly",
+          budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
         }),
     ).toThrow(/CORS/);
   });
 
-  it("refuses a stack without the budget name", () => {
+  it("refuses a stack without the budget names", () => {
     const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
     const data = new Stack(app, "Data2", { env });
     expect(
@@ -481,7 +484,7 @@ describe("AppStack", () => {
           dbSecretArn: SECRET,
           dbName: "concordance",
         }),
-    ).toThrow(/budgetName/);
+    ).toThrow(/budgetNames/);
   });
 
   it("gives the document route the store, to read a document's corpus", () => {
@@ -522,7 +525,7 @@ describe("AppStack with a domain", () => {
       dbResourceArn: CLUSTER,
       dbSecretArn: SECRET,
       dbName: "concordance",
-      budgetName: "concordance-sandbox-monthly",
+      budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
       domainName: DOMAIN,
       certificateArn: CERTIFICATE,
     });

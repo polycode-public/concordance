@@ -52,7 +52,7 @@ new AppStack(app, stackName("app"), {
   dbResourceArn: storeStack.cluster.clusterArn,
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
-  budgetName: `${PROJECT}-${envName}-monthly`,
+  budgetNames: budgetNamesFor({ project: PROJECT, envName }),
   corpora,
   domainName: optionalContext("domainName"),
   certificateArn: optionalContext("certificateArn"),
