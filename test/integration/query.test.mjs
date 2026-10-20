@@ -149,7 +149,12 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
   });
 
   it("fuses the lexical and vector rankings with the near passage first", async () => {
-    const result = await runQuery({ question: "dark stairs", provider: testProvider(), db });
+    const result = await runQuery({
+      corpus: "grenfell",
+      question: "dark stairs",
+      provider: testProvider(),
+      db,
+    });
     expect(result.retrievedIds[0]).toBe(ids.p2);
     expect(result.retrievedIds).toEqual(expect.arrayContaining([ids.p3, ids.s2]));
     expect(result.retrievedIds).not.toContain(ids.p1);
@@ -160,6 +165,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
     let sent;
     const tokens = [];
     const result = await runQuery({
+      corpus: "grenfell",
       question: "dark stairs",
       provider: testProvider(),
       db,
@@ -188,7 +194,12 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
   });
 
   it("resolves [En] to document, page and paragraph and drops unknown tags", async () => {
-    const result = await runQuery({ question: "dark stairs", provider: testProvider(), db });
+    const result = await runQuery({
+      corpus: "grenfell",
+      question: "dark stairs",
+      provider: testProvider(),
+      db,
+    });
     expect(result.citations).toEqual([
       { evidence: 1, locator: { document: "IWS9", page: 1, paragraph: 2 } },
       { evidence: 2, locator: { document: "IWS9", page: 2, paragraph: 5 } },
@@ -209,7 +220,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
       ...testProvider(),
       embedModel: "another-embed",
     };
-    const result = await runQuery({ question: "helicopter", provider, db });
+    const result = await runQuery({ corpus: "grenfell", question: "helicopter", provider, db });
     expect(result.evidenceBlocks).toEqual([]);
     expect(result.abstained).toBe(true);
     expect(result.answer).toBe("The corpus does not say.");
@@ -232,7 +243,15 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
           if (frame.type === "done" || frame.type === "error") resolve(frame);
         }),
       );
-      ws.send(JSON.stringify({ type: "turn", thread: "t", turnId: "u", text: "dark stairs" }));
+      ws.send(
+        JSON.stringify({
+          type: "turn",
+          thread: "t",
+          turnId: "u",
+          text: "dark stairs",
+          corpus: "grenfell",
+        }),
+      );
       const last = await done;
       ws.close();
       expect(last.type).toBe("done");

@@ -69,7 +69,11 @@ async function seed(db) {
     );
   }
   for (const x of s.sessions) {
-    await db.query("INSERT INTO sessions (id, user_id) VALUES ($1, $2)", [x.id, x.user_id]);
+    await db.query("INSERT INTO sessions (id, user_id, corpus) VALUES ($1, $2, $3)", [
+      x.id,
+      x.user_id,
+      x.corpus ?? "grenfell",
+    ]);
   }
   for (const p of s.identityPairs) {
     await db.query(
@@ -126,7 +130,7 @@ describe.skipIf(!enabled)("the comparison run and facts views (CONCORDANCE_DB_TE
   const request =
     (method, path, { query = {}, body, userId = "sub-1" } = {}) =>
     (store) =>
-      factsResponse(store, { method, path, query, body, userId });
+      factsResponse(store, { method, path, query: { corpus: "grenfell", ...query }, body, userId });
 
   it("labels the fixture, then skips the rerun and writes nothing", async () => {
     expect((await both(run)).status).toBe("complete");
@@ -155,12 +159,14 @@ describe.skipIf(!enabled)("the comparison run and facts views (CONCORDANCE_DB_TE
     const real = await factsResponse(db, {
       method: "POST",
       path: "/facts/override",
+      query: { corpus: "grenfell" },
       body: { ...body, comparisonId: String(realId) },
       userId: "sub-1",
     });
     await factsResponse(fake, {
       method: "POST",
       path: "/facts/override",
+      query: { corpus: "grenfell" },
       body: { ...body, comparisonId: fakeId },
       userId: "sub-1",
     });

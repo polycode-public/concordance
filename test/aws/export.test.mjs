@@ -22,7 +22,9 @@ function fakeDb({ owner = "sub-1", turns = 1 } = {}) {
   const db = {
     closed: 0,
     query: async (text, params) => {
-      if (/FROM sessions/.test(text)) return { rows: params[1] === owner ? [{}] : [] };
+      if (/FROM sessions/.test(text)) {
+        return { rows: params[1] === owner && params[2] === "grenfell" ? [{}] : [] };
+      }
       return {
         rows: Array.from({ length: turns }, () => ({
           thread: "main",
@@ -50,13 +52,16 @@ function setup({ db = fakeDb(), put } = {}) {
   const handler = createHandler({
     openDb: async () => db,
     notes,
-    corpus: { id: "grenfell", title: "Grenfell Tower Inquiry" },
+    corpora: [
+      { id: "grenfell", name: "Grenfell Tower Inquiry" },
+      { id: "ucpi", name: "Undercover Policing Inquiry" },
+    ],
     now: () => NOW,
   });
   const call = (body, sub = "sub-1") =>
     handler({
       requestContext: { authorizer: { jwt: { claims: sub ? { sub } : {} } } },
-      body: typeof body === "string" ? body : JSON.stringify(body),
+      body: typeof body === "string" ? body : JSON.stringify({ corpus: "grenfell", ...body }),
     });
   return { db, notes, call };
 }
@@ -87,6 +92,10 @@ describe("export route", () => {
     expect((await call({ sessionId: "x", thread: "main" })).statusCode).toBe(400);
     expect((await call({ sessionId: SESSION, thread: "../x" })).statusCode).toBe(400);
     expect((await call({ sessionId: SESSION, thread: "main" }, "sub-2")).statusCode).toBe(404);
+    expect((await call({ sessionId: SESSION, thread: "main", corpus: "x" })).statusCode).toBe(400);
+    expect((await call({ sessionId: SESSION, thread: "main", corpus: "ucpi" })).statusCode).toBe(
+      404,
+    );
     expect(
       (await setup({ db: fakeDb({ turns: 0 }) }).call({ sessionId: SESSION, thread: "main" }))
         .statusCode,

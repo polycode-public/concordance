@@ -33,8 +33,11 @@ const BLOCKS = [
   },
 ];
 
+const queried = [];
+
 /** A runQuery that reads its evidence from the db and answers with the provider. */
-async function stubQuery({ question, provider, db, signal, onStage, onEvidence, onToken }) {
+async function stubQuery({ question, corpus, provider, db, signal, onStage, onEvidence, onToken }) {
+  queried.push(corpus);
   onStage("rewriting");
   onStage("retrieving");
   const { rows: blocks } = await db.query("SELECT evidence");
@@ -73,6 +76,7 @@ function fakeDb() {
         db.writes.push({ text, params });
         return { rows: [] };
       }
+      if (/DISTINCT corpus FROM documents/.test(text)) return { rows: [{ corpus: "grenfell" }] };
       return { rows: BLOCKS };
     },
     close: async () => {
@@ -125,6 +129,7 @@ const EVENT = {
     turnId: "u1",
     text: "Were the stairs dark?",
     attachments: [],
+    corpus: "grenfell",
   },
   connectionId: "c1",
   domainName: "abc.execute-api.eu-west-2.amazonaws.com",
@@ -191,10 +196,12 @@ describe("turn function", () => {
   it("writes the session and the turn with every frame it posted at done", async () => {
     const { handler, db, frames } = setup();
     await handler(EVENT);
-    const sessionId = sessionIdFor("c1");
+    const sessionId = sessionIdFor("c1", "grenfell");
+    expect(frames.at(-1).sessionId).toBe(sessionId);
+    expect(queried.at(-1)).toBe("grenfell");
     expect(db.writes).toHaveLength(2);
     expect(db.writes[0].text).toMatch(/^INSERT INTO sessions/);
-    expect(db.writes[0].params).toEqual([sessionId, "sub-1"]);
+    expect(db.writes[0].params).toEqual([sessionId, "sub-1", "grenfell"]);
     expect(db.writes[1].text).toMatch(/^INSERT INTO session_turns/);
     const [session, thread, turnId, userText, promptVersion, modelId, rawOutput, checks, stored] =
       db.writes[1].params;
@@ -272,6 +279,21 @@ describe("turn function", () => {
     expect(posts).toBe(5);
     expect(provider.calls).toHaveLength(1);
     expect(db.closed).toBe(true);
+  });
+
+  it("refuses a corpus with no documents before it asks the model", async () => {
+    const { handler, frames, provider, db } = setup();
+    const before = queried.length;
+    await handler({ ...EVENT, frame: { ...EVENT.frame, corpus: "ucpi" } });
+    expect(frames.at(-1)).toEqual({
+      type: "error",
+      thread: "t1",
+      turnId: "u1",
+      message: "The corpus ucpi has no documents yet.",
+    });
+    expect(queried.length).toBe(before);
+    expect(provider.calls).toHaveLength(0);
+    expect(db.writes[0].params).toEqual([sessionIdFor("c1", "ucpi"), "sub-1", "ucpi"]);
   });
 
   it("posts an error frame when the turn fails", async () => {

@@ -6,7 +6,7 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AppStack, siteDomain } from "../../infra/lib/appStack.mjs";
+import { AppStack, pageCorpora, siteDomain } from "../../infra/lib/appStack.mjs";
 
 const env = { account: "111111111111", region: "eu-west-2" };
 const CLUSTER = "arn:aws:rds:eu-west-2:111111111111:cluster:concordance";
@@ -67,6 +67,7 @@ describe("AppStack", () => {
       "GET /reports",
       "GET /reports/{filename}",
       "GET /spend",
+      "GET /spend/history",
       "POST /export",
       "POST /facts/accept",
       "POST /facts/hypothesis",
@@ -76,6 +77,7 @@ describe("AppStack", () => {
     expect(routes.find((r) => r.RouteKey === "GET /doc/{id}").AuthorizationType).toBe("JWT");
     for (const key of [
       "GET /spend",
+      "GET /spend/history",
       "GET /conversations",
       "GET /conversations/{id}",
       "GET /reports",
@@ -136,11 +138,14 @@ describe("AppStack", () => {
     });
   });
 
-  it("reads the project budget for the spend route and nothing else", () => {
+  it("reads the project budget and the store's usage for the spend routes and nothing else", () => {
     const spend = Object.values(template.findResources("AWS::Lambda::Function"))
       .map((r) => r.Properties)
       .find((p) => p.Environment?.Variables?.BUDGET_NAME);
     expect(spend.Environment.Variables).toEqual({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
       BUDGET_ACCOUNT_ID: "111111111111",
       BUDGET_NAME: "concordance-sandbox-monthly",
     });
@@ -341,12 +346,12 @@ describe("AppStack", () => {
     template.resourceCountIs("Custom::CDKBucketDeployment", 1);
   });
 
-  it("writes the corpus into config.json", () => {
+  it("writes the corpora of the drop list into config.json", () => {
     const configs = assetFiles("config.json").map((file) => readFileSync(file, "utf8"));
     expect(configs).toHaveLength(1);
-    expect(configs[0]).toContain('"corpus":{"id":"grenfell"');
-    expect(configs[0]).toContain('"title":"Grenfell Tower Inquiry"');
-    expect(configs[0]).toContain('"subtitle":"witness statements"');
+    expect(configs[0]).toContain(
+      '"corpora":[{"id":"grenfell","name":"Grenfell Tower Inquiry"},{"id":"ucpi","name":"Undercover Policing Inquiry"}]',
+    );
     const marker = /"spendUrl":<<marker:0xbaba:(\d+)>>/.exec(configs[0])[1];
     const deployment = Object.values(template.findResources("Custom::CDKBucketDeployment"))[0];
     const markers = deployment.Properties.SourceMarkers.find((m) => Object.keys(m).length);
@@ -371,8 +376,10 @@ describe("AppStack", () => {
       DB_RESOURCE_ARN: CLUSTER,
       DB_SECRET_ARN: SECRET,
       DB_NAME: "concordance",
-      CORPUS_ID: "grenfell",
-      CORPUS_TITLE: "Grenfell Tower Inquiry",
+      CORPORA: JSON.stringify([
+        { id: "grenfell", name: "Grenfell Tower Inquiry" },
+        { id: "ucpi", name: "Undercover Policing Inquiry" },
+      ]),
     });
     const role = fn.Role["Fn::GetAtt"][0];
     const statements = Object.values(template.findResources("AWS::IAM::Policy"))
@@ -475,6 +482,17 @@ describe("AppStack", () => {
           dbName: "concordance",
         }),
     ).toThrow(/budgetName/);
+  });
+
+  it("gives the document route the store, to read a document's corpus", () => {
+    const fn = functionNamed("DocFunction")[1].Properties;
+    expect(fn.Environment.Variables).toMatchObject({
+      DB_RESOURCE_ARN: CLUSTER,
+      DB_SECRET_ARN: SECRET,
+      DB_NAME: "concordance",
+    });
+    const actions = roleStatements(fn).flatMap((s) => [s.Action].flat());
+    expect(actions).toEqual(expect.arrayContaining(["rds-data:ExecuteStatement", "s3:GetObject*"]));
   });
 
   it("serves on the CloudFront name alone when no domain is given", () => {
@@ -586,5 +604,22 @@ describe("siteDomain", () => {
     expect(() =>
       siteDomain({ domainName: "https://x.example", certificateArn: CERTIFICATE }),
     ).toThrow(/host name/);
+  });
+});
+
+describe("pageCorpora", () => {
+  it("keeps the drop list in order and refuses a malformed one", () => {
+    expect(pageCorpora([{ id: "ucpi", name: " Undercover Policing Inquiry " }])).toEqual([
+      { id: "ucpi", name: "Undercover Policing Inquiry" },
+    ]);
+    expect(() => pageCorpora([])).toThrow(/at least one/);
+    expect(() => pageCorpora([{ id: "Bad/x", name: "x" }])).toThrow(/invalid/);
+    expect(() => pageCorpora([{ id: "ucpi", name: "" }])).toThrow(/no name/);
+    expect(() =>
+      pageCorpora([
+        { id: "ucpi", name: "a" },
+        { id: "ucpi", name: "b" },
+      ]),
+    ).toThrow(/twice/);
   });
 });

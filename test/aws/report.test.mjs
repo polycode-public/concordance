@@ -19,6 +19,7 @@ const FRAME = {
   topic: "The stairs and the lift",
   documentIds: [],
   filename: "stairs.md",
+  corpus: "grenfell",
 };
 
 const OUTLINE = {
@@ -92,10 +93,10 @@ describe("the report function", () => {
       },
     });
     expect(done.report.checks.marks).toBeUndefined();
-    expect(db.sessions.get(sessionIdFor("c1"))).toBe("sub-1");
+    expect(db.sessions.get(sessionIdFor("c1", "grenfell"))).toBe("sub-1");
     expect(db.reports).toHaveLength(1);
     expect(db.reports[0]).toMatchObject({
-      session_id: sessionIdFor("c1"),
+      session_id: sessionIdFor("c1", "grenfell"),
       user_id: "sub-1",
       version: 1,
     });
@@ -140,6 +141,19 @@ describe("the report function", () => {
     await run(handler);
     expect(calls).toEqual(["reportStatus"]);
     expect(db.reports).toHaveLength(1);
+  });
+
+  it("refuses a corpus with no documents and stores nothing", async () => {
+    const { handler, db, posted } = setup();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await run(handler, { ...FRAME, corpus: "ucpi" });
+    error.mockRestore();
+    expect(posted.at(-1).frame).toMatchObject({
+      type: "error",
+      message: "The corpus ucpi has no documents yet.",
+    });
+    expect(db.reports).toEqual([]);
+    expect(db.sessions.size).toBe(0);
   });
 
   it("refuses a request without a user", async () => {

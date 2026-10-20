@@ -30,7 +30,7 @@ export function createHandler({
   originals,
   now = Date.now,
 }) {
-  async function openDocument(send, { docId, locator }) {
+  async function openDocument(send, { docId, locator, corpus: chosen }) {
     try {
       if (!isSafeId(docId)) throw new Error(`unsafe document id ${JSON.stringify(docId)}`);
       const db = await openDb();
@@ -43,6 +43,7 @@ export function createHandler({
       if (!rows.length) throw new Error(`no original PDF for ${docId}`);
       const { corpus, title } = rows[0];
       if (!isSafeId(corpus)) throw new Error(`document ${docId} has an unsafe corpus name`);
+      if (corpus !== chosen) throw new Error(`${docId} is not a document of ${chosen}`);
       const key = originalKey(corpus, docId);
       if (!(await originals.exists(key))) throw new Error(`no original PDF for ${docId}`);
       const page = Number.isInteger(locator?.page) && locator.page > 0 ? locator.page : 1;

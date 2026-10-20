@@ -2,7 +2,8 @@
 // Copyright 2026 Polycode Limited
 //
 // GET /reports, GET /reports/{filename} and DELETE /reports/{filename} on the HTTP API: the
-// signed-in user's reports, every version of one, and the removal of every version. The
+// signed-in user's reports in the corpus of ?corpus=, every version of one, and the removal of
+// every version. The
 // gateway's JWT authorizer checks the Cognito id token before this runs; its `sub` names the user.
 
 import { reportsResponse } from "../core/reports.mjs";
@@ -29,7 +30,12 @@ export function createHandler({ openDb }) {
     let db;
     try {
       db = await openDb();
-      const { status, body } = await reportsResponse(db, { method, filename, userId });
+      const { status, body } = await reportsResponse(db, {
+        method,
+        filename,
+        userId,
+        corpus: event.queryStringParameters?.corpus,
+      });
       return json(status, body);
     } catch (err) {
       console.error("reports: the request failed", err);

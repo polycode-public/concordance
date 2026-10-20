@@ -26,7 +26,9 @@ function fakeDb({ owner = "sub-1", fail } = {}) {
           ],
         };
       }
-      if (/FROM sessions/.test(text)) return { rows: params[1] === owner ? [{}] : [] };
+      if (/FROM sessions/.test(text)) {
+        return { rows: params[1] === owner && params[2] === "grenfell" ? [{}] : [] };
+      }
       return {
         rows: [
           {
@@ -48,10 +50,10 @@ function fakeDb({ owner = "sub-1", fail } = {}) {
   return db;
 }
 
-const event = ({ id, thread, sub = "sub-1" } = {}) => ({
+const event = ({ id, thread, sub = "sub-1", corpus = "grenfell" } = {}) => ({
   routeKey: id ? "GET /conversations/{id}" : "GET /conversations",
   pathParameters: id ? { id } : undefined,
-  queryStringParameters: thread ? { thread } : undefined,
+  queryStringParameters: { ...(thread && { thread }), ...(corpus && { corpus }) },
   requestContext: { authorizer: sub ? { jwt: { claims: { sub } } } : undefined },
 });
 
@@ -61,7 +63,7 @@ const setup = (options) => {
 };
 
 describe("conversations handler", () => {
-  it("lists the signed-in user's conversations", async () => {
+  it("lists the signed-in user's conversations in the corpus", async () => {
     const { handler, db } = setup();
     const res = await handler(event());
     expect(res.statusCode).toBe(200);
@@ -77,7 +79,7 @@ describe("conversations handler", () => {
         },
       ],
     });
-    expect(db.calls[0].params).toEqual(["sub-1"]);
+    expect(db.calls[0].params).toEqual(["sub-1", "grenfell"]);
     expect(db.closed).toBe(1);
   });
 
@@ -107,7 +109,10 @@ describe("conversations handler", () => {
     const { handler, db } = setup();
     expect((await handler(event({ id: "c1" }))).statusCode).toBe(400);
     expect((await handler(event({ sub: null }))).statusCode).toBe(401);
+    expect((await handler(event({ corpus: null }))).statusCode).toBe(400);
+    expect((await handler(event({ corpus: "../raw" }))).statusCode).toBe(400);
     expect(db.calls).toEqual([]);
+    expect((await handler(event({ id: SESSION, corpus: "ucpi" }))).statusCode).toBe(404);
   });
 
   it("answers 500 with a message when the read fails", async () => {

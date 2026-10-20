@@ -75,6 +75,10 @@ export function createReportsStore({ chunks = CHUNK_ROWS, documents = DOCUMENT_R
           .map((c) => ({ id: c.id })),
       );
     }
+    if (text === "SELECT DISTINCT corpus FROM documents ORDER BY corpus") {
+      const corpora = [...new Set(chunks.map((c) => c.corpus ?? "grenfell"))].sort();
+      return rows(corpora.map((corpus) => ({ corpus })));
+    }
     if (/FROM chunks WHERE id = ANY/.test(text)) {
       return rows(chunks.filter((c) => params[0].includes(c.id)));
     }

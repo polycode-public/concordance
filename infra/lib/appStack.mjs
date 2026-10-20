@@ -45,6 +45,35 @@ export const STAGE_NAME = "prod";
 const REQUIRE_BANNER =
   "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);";
 
+/** The corpora the page lists, in drop-list order; the first is the default. */
+export const DEFAULT_CORPORA = Object.freeze([
+  Object.freeze({ id: "grenfell", name: "Grenfell Tower Inquiry" }),
+  Object.freeze({ id: "ucpi", name: "Undercover Policing Inquiry" }),
+]);
+
+const CORPUS_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * Checks the corpora the page lists: at least one, each a corpus id and a display name, no id
+ * twice.
+ * @param {unknown} corpora
+ * @returns {{ id: string, name: string }[]}
+ */
+export function pageCorpora(corpora) {
+  if (!Array.isArray(corpora) || corpora.length === 0) {
+    throw new Error("AppStack needs at least one corpus");
+  }
+  const ids = new Set();
+  return corpora.map((c) => {
+    if (!CORPUS_ID.test(c?.id ?? ""))
+      throw new Error(`corpus id ${JSON.stringify(c?.id)} is invalid`);
+    if (typeof c.name !== "string" || !c.name.trim()) throw new Error(`corpus ${c.id} has no name`);
+    if (ids.has(c.id)) throw new Error(`corpus ${c.id} is listed twice`);
+    ids.add(c.id);
+    return { id: c.id, name: c.name.trim() };
+  });
+}
+
 const CERTIFICATE_ARN = /^arn:aws:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]+$/;
 const DOMAIN_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -75,18 +104,14 @@ export class AppStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string, budgetName: string, corpusId?: string,
-   *   corpusTitle?: string, corpusSubtitle?: string, domainName?: string,
+   *   dbSecretArn: string, dbName: string, budgetName: string,
+   *   corpora?: { id: string, name: string }[], domainName?: string,
    *   certificateArn?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
     const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetName } = props;
-    const {
-      corpusId = "grenfell",
-      corpusTitle = "Grenfell Tower Inquiry",
-      corpusSubtitle = "witness statements",
-    } = props;
+    const corpora = pageCorpora(props.corpora ?? DEFAULT_CORPORA);
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
@@ -211,7 +236,14 @@ export class AppStack extends Stack {
         REPORT_FUNCTION_NAME: reportFn.functionName,
       },
     });
-    const docFn = fn("doc", { environment: { CORPUS_BUCKET: corpusBucket.bucketName } });
+    const storeEnv = {
+      DB_RESOURCE_ARN: dbResourceArn,
+      DB_SECRET_ARN: dbSecretArn,
+      DB_NAME: dbName,
+    };
+    const docFn = fn("doc", {
+      environment: { ...storeEnv, CORPUS_BUCKET: corpusBucket.bucketName },
+    });
     const conversationsFn = fn("conversations", {
       environment: { DB_RESOURCE_ARN: dbResourceArn, DB_SECRET_ARN: dbSecretArn, DB_NAME: dbName },
     });
@@ -241,12 +273,11 @@ export class AppStack extends Stack {
         DB_SECRET_ARN: dbSecretArn,
         DB_NAME: dbName,
         CORPUS_BUCKET: corpusBucket.bucketName,
-        CORPUS_ID: corpusId,
-        CORPUS_TITLE: corpusTitle,
+        CORPORA: JSON.stringify(corpora),
       },
     });
     const spendFn = fn("spend", {
-      environment: { BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
+      environment: { ...storeEnv, BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
     });
     spendFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -296,6 +327,8 @@ export class AppStack extends Stack {
       factsFn,
       compareFn,
       exportFn,
+      docFn,
+      spendFn,
     ]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
@@ -361,12 +394,15 @@ export class AppStack extends Stack {
       integration: new HttpLambdaIntegration("DocIntegration", docFn),
       authorizer: userAuthorizer,
     });
-    httpApi.addRoutes({
-      path: "/spend",
-      methods: [apigwv2.HttpMethod.GET],
-      integration: new HttpLambdaIntegration("SpendIntegration", spendFn),
-      authorizer: userAuthorizer,
-    });
+    const spendIntegration = new HttpLambdaIntegration("SpendIntegration", spendFn);
+    for (const routePath of ["/spend", "/spend/history"]) {
+      httpApi.addRoutes({
+        path: routePath,
+        methods: [apigwv2.HttpMethod.GET],
+        integration: spendIntegration,
+        authorizer: userAuthorizer,
+      });
+    }
     httpApi.addRoutes({
       path: "/export",
       methods: [apigwv2.HttpMethod.POST],
@@ -448,7 +484,7 @@ export class AppStack extends Stack {
             userPoolId: userPool.userPoolId,
             clientId: client.userPoolClientId,
           },
-          corpus: { id: corpusId, title: corpusTitle, subtitle: corpusSubtitle },
+          corpora,
         }),
       ],
       distribution,

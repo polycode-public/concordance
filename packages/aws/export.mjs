@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// POST /export on the HTTP API: renders one thread of the signed-in user's session as
-// Markdown and writes it to notes/ in the corpus bucket. The gateway's JWT authorizer checks
-// the Cognito id token before this runs; its `sub` names the user.
+// POST /export on the HTTP API: renders one thread of the signed-in user's session in the
+// request's corpus as Markdown and writes it to notes/ in the corpus bucket. The gateway's JWT
+// authorizer checks the Cognito id token before this runs; its `sub` names the user.
 
 import { InvalidThread, NothingToExport, exportConversation } from "../core/export.mjs";
 import { isUuid } from "../core/sessions.mjs";
@@ -17,9 +17,9 @@ const json = (statusCode, body) => ({
 /**
  * @param {{ openDb: () => Promise<{ query: Function, close?: Function }>,
  *   notes: { put: (key: string, body: string) => Promise<void>, presign: (key: string) => Promise<string> },
- *   corpus: { id: string, title: string }, now?: () => Date }} deps
+ *   corpora: { id: string, name: string }[], now?: () => Date }} deps
  */
-export function createHandler({ openDb, notes, corpus, now = () => new Date() }) {
+export function createHandler({ openDb, notes, corpora, now = () => new Date() }) {
   return async function handler(event) {
     const userId = event.requestContext?.authorizer?.jwt?.claims?.sub;
     if (!userId) return json(401, { message: "The request has no signed-in user." });
@@ -32,6 +32,9 @@ export function createHandler({ openDb, notes, corpus, now = () => new Date() })
     if (!isUuid(body?.sessionId) || typeof body?.thread !== "string") {
       return json(400, { message: "The request needs a sessionId (UUID) and a thread." });
     }
+    const named = corpora.find((c) => c.id === body.corpus);
+    if (!named) return json(400, { message: "The request needs a corpus the page lists." });
+    const corpus = { id: named.id, title: named.name };
     let db;
     try {
       db = await openDb();
@@ -64,7 +67,7 @@ export async function handler(event) {
     realHandler = createHandler({
       openDb: () => openDatabase(),
       notes: notesBucket(),
-      corpus: { id: process.env.CORPUS_ID, title: process.env.CORPUS_TITLE },
+      corpora: JSON.parse(process.env.CORPORA),
     });
   }
   return realHandler(event);

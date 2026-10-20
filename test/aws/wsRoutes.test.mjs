@@ -68,13 +68,26 @@ describe("WebSocket routes", () => {
   it("records the turn on its thread and invokes the turn function with the frame", async () => {
     const { handler, invoked, started, posted } = setup();
     const res = await handler(
-      event("$default", { type: "turn", thread: "t1", turnId: "u1", text: "Dark?" }),
+      event("$default", {
+        type: "turn",
+        thread: "t1",
+        turnId: "u1",
+        text: "Dark?",
+        corpus: "grenfell",
+      }),
     );
     expect(res).toEqual({ statusCode: 200 });
     expect(started).toEqual([{ pk: "c1#t1", turnId: "u1", ttl: NOW / 1000 + 3600 }]);
     expect(invoked).toEqual([
       {
-        frame: { type: "turn", thread: "t1", turnId: "u1", text: "Dark?", attachments: [] },
+        frame: {
+          type: "turn",
+          thread: "t1",
+          turnId: "u1",
+          text: "Dark?",
+          attachments: [],
+          corpus: "grenfell",
+        },
         ...TARGET,
         userId: "sub-1",
       },
@@ -91,6 +104,7 @@ describe("WebSocket routes", () => {
       topic: "The stairs",
       documentIds: ["IWS1"],
       filename: "stairs.md",
+      corpus: "ucpi",
     };
     expect(await handler(event("$default", frame))).toEqual({ statusCode: 200 });
     expect(reports).toEqual([{ frame, ...TARGET, userId: "sub-1" }]);
@@ -116,7 +130,12 @@ describe("WebSocket routes", () => {
   it("answers an open frame with a presigned URL, the title and the page", async () => {
     const { handler, posted, closed, invoked } = setup();
     await handler(
-      event("$default", { type: "open", docId: "IWS1", locator: { page: 3, paragraph: 11 } }),
+      event("$default", {
+        type: "open",
+        docId: "IWS1",
+        locator: { page: 3, paragraph: 11 },
+        corpus: "grenfell",
+      }),
     );
     expect(posted).toEqual([
       {
@@ -137,11 +156,22 @@ describe("WebSocket routes", () => {
 
   it("answers an open frame for a document without an original with an error frame", async () => {
     const { handler, posted } = setup();
-    await handler(event("$default", { type: "open", docId: "IWS2", locator: null }));
-    await handler(event("$default", { type: "open", docId: "NOPE", locator: null }));
+    const open = (docId) => ({ type: "open", docId, locator: null, corpus: "grenfell" });
+    await handler(event("$default", open("IWS2")));
+    await handler(event("$default", open("NOPE")));
     expect(posted.map((p) => p.frame)).toEqual([
       { type: "error", message: "no original PDF for IWS2" },
       { type: "error", message: "no original PDF for NOPE" },
+    ]);
+  });
+
+  it("refuses to open a document of another corpus than the page's", async () => {
+    const { handler, posted } = setup();
+    await handler(
+      event("$default", { type: "open", docId: "IWS1", locator: null, corpus: "ucpi" }),
+    );
+    expect(posted.map((p) => p.frame)).toEqual([
+      { type: "error", message: "IWS1 is not a document of ucpi" },
     ]);
   });
 
