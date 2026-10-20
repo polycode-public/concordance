@@ -50,6 +50,20 @@ export function parseGold(text, source = "gold") {
   return rows;
 }
 
+/**
+ * A gold locator with a paragraph matches a citation of the same document and paragraph, whatever
+ * page the citation names (a paragraph can start on the page before); one without a paragraph
+ * matches any citation of the same document and page.
+ */
+export function locatorMatches(gold, cited) {
+  if (typeof gold === "string" || typeof cited === "string") return gold === cited;
+  if (gold.document !== cited.document) return false;
+  if (gold.paragraph !== null && gold.paragraph !== undefined) {
+    return gold.paragraph === cited.paragraph;
+  }
+  return gold.page === cited.page;
+}
+
 const locatorKey = (l) => (typeof l === "string" ? l : JSON.stringify(l));
 
 /**
@@ -66,12 +80,14 @@ export function score(scored) {
   let unsupported = 0;
   let abstainCorrect = 0;
   for (const { row, result } of scored) {
-    const goldKeys = new Set(row.gold_locators.map(locatorKey));
-    const citedKeys = new Set(result.citations.map((c) => locatorKey(c.locator)));
-    cited += citedKeys.size;
-    for (const key of citedKeys) if (goldKeys.has(key)) citedCorrect++;
-    gold += goldKeys.size;
-    for (const key of goldKeys) if (citedKeys.has(key)) goldFound++;
+    const golds = row.gold_locators;
+    const citations = [
+      ...new Map(result.citations.map((c) => [locatorKey(c.locator), c.locator])).values(),
+    ];
+    cited += citations.length;
+    for (const c of citations) if (golds.some((g) => locatorMatches(g, c))) citedCorrect++;
+    gold += golds.length;
+    for (const g of golds) if (citations.some((c) => locatorMatches(g, c))) goldFound++;
     sentences += result.checks.sentences;
     unsupported += result.checks.sentences - result.checks.supported;
     if (result.abstained === (row.expected === "abstain")) abstainCorrect++;
