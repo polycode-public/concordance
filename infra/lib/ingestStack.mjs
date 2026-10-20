@@ -32,7 +32,7 @@ export class IngestStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: import('aws-cdk-lib/aws-s3').IBucket,
-   *   dbResourceArn: string, dbSecretArn: string, dbName: string, budgetName: string,
+   *   dbResourceArn: string, dbSecretArn: string, dbName: string, budgetNames: string[],
    *   corpora?: string[] }} props
    */
   constructor(scope, id, props) {
@@ -42,12 +42,12 @@ export class IngestStack extends Stack {
       dbResourceArn,
       dbSecretArn,
       dbName,
-      budgetName,
+      budgetNames,
       corpora = ["grenfell"],
     } = props;
-    if (!corpusBucket || !dbResourceArn || !dbSecretArn || !dbName || !budgetName) {
+    if (!corpusBucket || !dbResourceArn || !dbSecretArn || !dbName || !budgetNames?.length) {
       throw new Error(
-        "IngestStack needs corpusBucket, dbResourceArn, dbSecretArn, dbName and budgetName",
+        "IngestStack needs corpusBucket, dbResourceArn, dbSecretArn, dbName and budgetNames",
       );
     }
 
@@ -77,7 +77,13 @@ export class IngestStack extends Stack {
       });
 
     const checkBudgetFn = fn("checkBudget", {
-      environment: { BUDGET_NAME: budgetName, BUDGET_ACCOUNT_ID: this.account },
+      environment: {
+        BUDGET_NAMES: budgetNames.join(","),
+        BUDGET_ACCOUNT_ID: this.account,
+        DB_RESOURCE_ARN: dbResourceArn,
+        DB_SECRET_ARN: dbSecretArn,
+        DB_NAME: dbName,
+      },
     });
     const listManifestFn = fn("listManifest", {
       environment: { CORPUS_BUCKET: corpusBucket.bucketName },
@@ -108,7 +114,7 @@ export class IngestStack extends Stack {
     checkBudgetFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["budgets:ViewBudget"],
-        resources: [`arn:aws:budgets::${this.account}:budget/${budgetName}`],
+        resources: budgetNames.map((name) => `arn:aws:budgets::${this.account}:budget/${name}`),
       }),
     );
     for (const f of [listManifestFn, ingestDocumentFn]) {
@@ -126,7 +132,7 @@ export class IngestStack extends Stack {
         }),
       );
     }
-    for (const f of [ingestDocumentFn, extractAssertionsFn]) {
+    for (const f of [checkBudgetFn, ingestDocumentFn, extractAssertionsFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -144,6 +150,8 @@ export class IngestStack extends Stack {
           resources: [dbSecretArn],
         }),
       );
+    }
+    for (const f of [ingestDocumentFn, extractAssertionsFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock:InvokeModel"],

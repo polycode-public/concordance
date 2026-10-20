@@ -22,7 +22,7 @@ beforeAll(() => {
     dbResourceArn: CLUSTER,
     dbSecretArn: SECRET,
     dbName: "concordance",
-    budgetName: "concordance-sandbox-monthly",
+    budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
     corpora: ["grenfell", "ucpi"],
   });
   template = Template.fromStack(stack);
@@ -127,13 +127,43 @@ describe("IngestStack", () => {
     });
   });
 
-  it("lets the budget function view the one budget", () => {
+  it("lets the budget function view both budgets", () => {
     expect(statements()).toContainEqual(
       expect.objectContaining({
         Action: "budgets:ViewBudget",
-        Resource: "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
+        Resource: [
+          "arn:aws:budgets::111111111111:budget/concordance-sandbox-monthly",
+          "arn:aws:budgets::111111111111:budget/concordance-sandbox-models",
+        ],
       }),
     );
+  });
+
+  it("gives the budget function both budget names and the store environment", () => {
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: {
+          BUDGET_NAMES: "concordance-sandbox-monthly,concordance-sandbox-models",
+          BUDGET_ACCOUNT_ID: "111111111111",
+          DB_RESOURCE_ARN: CLUSTER,
+          DB_SECRET_ARN: SECRET,
+          DB_NAME: "concordance",
+        },
+      },
+    });
+  });
+
+  it("lets the budget function read the store and keeps model invocation off it", () => {
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const budgetPolicy = policies.find((p) =>
+      JSON.stringify(p.Properties.PolicyDocument).includes("budgets:ViewBudget"),
+    );
+    const actions = budgetPolicy.Properties.PolicyDocument.Statement.flatMap((st) =>
+      [st.Action].flat(),
+    );
+    expect(actions).toContain("rds-data:ExecuteStatement");
+    expect(actions).toContain("secretsmanager:GetSecretValue");
+    expect(actions).not.toContain("bedrock:InvokeModel");
   });
 
   it("lets the manifest and ingest functions read every corpus's objects in the bucket", () => {

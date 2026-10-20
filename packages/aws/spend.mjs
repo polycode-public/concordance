@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 //
-// GET /spend on the HTTP API: the project budget's month-to-date spend and its limit, for the
+// GET /spend on the HTTP API: the month-to-date spend and limit of the budget closest to its limit (the tagged resources or the
+// model services), with every budget's own figures, for the
 // spend strip under the page header. AWS refreshes a budget's spend up to three times a day,
 // so one DescribeBudget call per page load is enough; the call is free. GET /spend/history: the
 // store's model use by corpus and day at list prices, an estimate the budget cannot split.
@@ -16,13 +17,13 @@ const json = (statusCode, body) => ({
 
 /**
  * @param {{ describeBudget: (input: { AccountId: string, BudgetName: string }) => Promise<object>,
- *   accountId: string, budgetName: string,
+ *   accountId: string, budgetNames: string[],
  *   openDb: () => Promise<{ query: Function, close?: Function }>, now?: () => Date }} deps
  */
 export function createHandler({
   describeBudget,
   accountId,
-  budgetName,
+  budgetNames,
   openDb,
   now = () => new Date(),
 }) {
@@ -50,16 +51,29 @@ export function createHandler({
     const path = event.rawPath ?? event.routeKey?.split(" ")[1] ?? "/spend";
     if (path.replace(/\/+$/, "") === "/spend/history") return history(event);
     try {
-      if (!accountId || !budgetName) throw new Error("the account id and budget name are required");
-      const { Budget } = await describeBudget({ AccountId: accountId, BudgetName: budgetName });
-      const actual = Number(Budget?.CalculatedSpend?.ActualSpend?.Amount);
-      const limit = Number(Budget?.BudgetLimit?.Amount);
-      if (!Number.isFinite(actual) || !Number.isFinite(limit)) {
-        throw new Error(`budget ${budgetName} has no actual spend or limit amount`);
+      if (!accountId || !budgetNames?.length) {
+        throw new Error("the account id and budget names are required");
       }
-      const unit = Budget.BudgetLimit.Unit;
-      if (!unit) throw new Error(`budget ${budgetName} has no limit unit`);
-      return json(200, { actual, limit, unit, asOf: now().toISOString() });
+      const readings = [];
+      for (const name of budgetNames) {
+        const { Budget } = await describeBudget({ AccountId: accountId, BudgetName: name });
+        const actual = Number(Budget?.CalculatedSpend?.ActualSpend?.Amount);
+        const limit = Number(Budget?.BudgetLimit?.Amount);
+        if (!Number.isFinite(actual) || !Number.isFinite(limit)) {
+          throw new Error(`budget ${name} has no actual spend or limit amount`);
+        }
+        const unit = Budget.BudgetLimit.Unit;
+        if (!unit) throw new Error(`budget ${name} has no limit unit`);
+        readings.push({ name, actual, limit, unit });
+      }
+      const top = readings.reduce((a, b) => (b.actual / b.limit > a.actual / a.limit ? b : a));
+      return json(200, {
+        actual: top.actual,
+        limit: top.limit,
+        unit: top.unit,
+        asOf: now().toISOString(),
+        budgets: readings.map(({ name, actual, limit }) => ({ name, actual, limit })),
+      });
     } catch (err) {
       console.error("spend: DescribeBudget failed", err);
       return json(500, { message: `The spend could not be read: ${err.message}` });
@@ -75,6 +89,6 @@ export const handler = createHandler({
     return client.send(new sdk.DescribeBudgetCommand(input));
   },
   accountId: process.env.BUDGET_ACCOUNT_ID,
-  budgetName: process.env.BUDGET_NAME,
+  budgetNames: (process.env.BUDGET_NAMES ?? "").split(",").filter(Boolean),
   openDb: async () => (await import("./clients.mjs")).openDatabase(),
 });

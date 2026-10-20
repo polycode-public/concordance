@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DAYS,
   HISTORY_SQL,
+  MONTH_SQL,
   SpendInputError,
   historyDays,
+  readMonthEstimate,
   readSpendHistory,
   spendHistory,
 } from "../../packages/core/spend.mjs";
@@ -110,5 +112,26 @@ describe("the spend history", () => {
       series: [],
       unpriced: [],
     });
+  });
+});
+
+describe("the month's estimate", () => {
+  it("prices this month's tokens over every corpus and skips unpriced models", async () => {
+    const calls = [];
+    const db = {
+      query: async (text, params) => {
+        calls.push({ text, params });
+        return {
+          rows: [
+            { model: SONNET, input_tokens: "1000000", output_tokens: "100000" },
+            { model: HAIKU, input_tokens: "2000000", output_tokens: "0" },
+            { model: null, input_tokens: "0", output_tokens: "0" },
+          ],
+        };
+      },
+    };
+    expect(await readMonthEstimate(db)).toBeCloseTo(3 + 1.5 + 2, 10);
+    expect(calls).toEqual([{ text: MONTH_SQL, params: [] }]);
+    expect(MONTH_SQL).toMatch(/FROM usage_daily/);
   });
 });

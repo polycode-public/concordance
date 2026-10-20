@@ -104,18 +104,19 @@ export class AppStack extends Stack {
    * @param {import('constructs').Construct} scope
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: s3.Bucket, dbResourceArn: string,
-   *   dbSecretArn: string, dbName: string, budgetName: string,
+   *   dbSecretArn: string, dbName: string, budgetNames: string[],
    *   corpora?: { id: string, name: string }[], domainName?: string,
    *   certificateArn?: string }} props
    */
   constructor(scope, id, props) {
     super(scope, id, props);
-    const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetName } = props;
+    const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetNames } = props;
     const corpora = pageCorpora(props.corpora ?? DEFAULT_CORPORA);
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
-    if (!budgetName) throw new Error("AppStack needs the budgetName the spend route reads");
+    if (!budgetNames?.length)
+      throw new Error("AppStack needs the budgetNames the spend route reads");
     const domain = siteDomain(props);
 
     const siteBucket = new s3.Bucket(this, "SiteBucket", {
@@ -277,12 +278,16 @@ export class AppStack extends Stack {
       },
     });
     const spendFn = fn("spend", {
-      environment: { ...storeEnv, BUDGET_ACCOUNT_ID: this.account, BUDGET_NAME: budgetName },
+      environment: {
+        ...storeEnv,
+        BUDGET_ACCOUNT_ID: this.account,
+        BUDGET_NAMES: budgetNames.join(","),
+      },
     });
     spendFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["budgets:ViewBudget"],
-        resources: [`arn:aws:budgets::${this.account}:budget/${budgetName}`],
+        resources: budgetNames.map((name) => `arn:aws:budgets::${this.account}:budget/${name}`),
       }),
     );
 

@@ -13,33 +13,52 @@ const handlerFor = (describeBudget, overrides = {}) => {
       return describeBudget(input);
     },
     accountId: "111111111111",
-    budgetName: "concordance-sandbox-monthly",
+    budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
     now: () => NOW,
     ...overrides,
   });
   return { handler, calls };
 };
 
+const budget = (actual, limit) => ({
+  Budget: {
+    BudgetLimit: { Amount: limit, Unit: "USD" },
+    CalculatedSpend: { ActualSpend: { Amount: actual, Unit: "USD" } },
+  },
+});
+
 describe("spend handler", () => {
-  it("answers the spend, the limit, the unit and the time of the read", async () => {
-    const { handler, calls } = handlerFor(async () => ({
-      Budget: {
-        BudgetLimit: { Amount: "25.0", Unit: "USD" },
-        CalculatedSpend: { ActualSpend: { Amount: "3.42", Unit: "USD" } },
-      },
-    }));
+  it("answers the budget closest to its limit, every budget's figures and the time of the read", async () => {
+    const amounts = { "concordance-sandbox-monthly": "0.74", "concordance-sandbox-models": "30.1" };
+    const { handler, calls } = handlerFor(async ({ BudgetName }) =>
+      budget(amounts[BudgetName], "25.0"),
+    );
     const res = await handler({});
     expect(calls).toEqual([
       { AccountId: "111111111111", BudgetName: "concordance-sandbox-monthly" },
+      { AccountId: "111111111111", BudgetName: "concordance-sandbox-models" },
     ]);
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/^application\/json/);
     expect(JSON.parse(res.body)).toEqual({
-      actual: 3.42,
+      actual: 30.1,
       limit: 25,
       unit: "USD",
       asOf: "2026-10-19T09:30:00.000Z",
+      budgets: [
+        { name: "concordance-sandbox-monthly", actual: 0.74, limit: 25 },
+        { name: "concordance-sandbox-models", actual: 30.1, limit: 25 },
+      ],
     });
+  });
+
+  it("ranks by the share of each budget's own limit", async () => {
+    const figures = {
+      "concordance-sandbox-monthly": budget("9", "10"),
+      "concordance-sandbox-models": budget("20", "50"),
+    };
+    const { handler } = handlerFor(async ({ BudgetName }) => figures[BudgetName]);
+    expect(JSON.parse((await handler({})).body)).toMatchObject({ actual: 9, limit: 10 });
   });
 
   it("answers 500 with a message when the call fails", async () => {
@@ -52,11 +71,22 @@ describe("spend handler", () => {
     expect(JSON.parse(res.body).message).toMatch(/AccessDeniedException/);
   });
 
-  it("answers 500 when the budget has no amounts or the names are missing", async () => {
+  it("answers 500 when one budget is missing", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { handler } = handlerFor(async ({ BudgetName }) => {
+      if (BudgetName.endsWith("models")) throw new Error("NotFoundException");
+      return budget("1", "25");
+    });
+    const res = await handler({});
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).message).toMatch(/NotFoundException/);
+  });
+
+  it("answers 500 when a budget has no amounts or the names are missing", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const empty = handlerFor(async () => ({ Budget: {} }));
     expect((await empty.handler({})).statusCode).toBe(500);
-    const unnamed = handlerFor(async () => ({}), { budgetName: undefined });
+    const unnamed = handlerFor(async () => ({}), { budgetNames: [] });
     const res = await unnamed.handler({});
     expect(res.statusCode).toBe(500);
     expect(unnamed.calls).toEqual([]);
