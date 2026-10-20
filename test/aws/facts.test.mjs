@@ -55,7 +55,7 @@ describe("the facts routes", () => {
   });
 
   it("answers the groups, the timeline and a witness", async () => {
-    expect(json(await handler(event("GET", "/facts/groups"))).groups).toHaveLength(5);
+    expect(json(await handler(event("GET", "/facts/groups"))).groups).toHaveLength(4);
     expect(json(await handler(event("GET", "/facts/timeline"))).points).toHaveLength(5);
     const witness = await handler(event("GET", "/facts/witness/C123"));
     expect(json(witness).witness).toEqual({ id: "C123", cipherOnly: true, role: "Firefighter" });

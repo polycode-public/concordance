@@ -20,6 +20,7 @@ import {
   runComparison,
 } from "../../packages/core/facts/compare.mjs";
 import {
+  NLI_PROMPT_VERSION,
   PAIRS_PER_CALL,
   RULES_MODEL,
   checkLabel,
@@ -64,7 +65,7 @@ describe("alignment", () => {
     expect(normalisePredicate("did not sound")).toBe("not sound");
   });
 
-  it("pairs the smoke, alarm, flat, stairs and firefighter claims and nothing else", async () => {
+  it("pairs the smoke, alarm, stairs and firefighter claims and nothing else", async () => {
     const { pairs } = await aligned();
     expect(pairs.map(ids).sort()).toEqual(
       [
@@ -75,7 +76,6 @@ describe("alignment", () => {
         "cross 2-6",
         "cross 3-6",
         "cross 4-5",
-        "cross 7-8",
         "cross 9-10",
         "cross 11-12",
       ].sort(),
@@ -106,7 +106,7 @@ describe("alignment", () => {
     expect(anchorsOf("11", "12")).toEqual(["subject"]);
     const [a] = fixtureAssertions();
     const car = { objectText: "the car", objectEntityId: "70", witnessId: "IWS-B", id: "90" };
-    const thing = { ...a, subjectText: "It", subjectKind: "thing", eventId: null };
+    const thing = { ...a, subjectText: "The lift", subjectKind: "thing", eventId: null };
     expect(
       sharedAnchors(
         { ...thing, ...car, objectEntityKind: "vehicle" },
@@ -121,20 +121,71 @@ describe("alignment", () => {
     ).toEqual([]);
   });
 
-  it("pairs two first-person claims of two witnesses only on a shared event", async () => {
+  it("pairs two first-person claims of two witnesses only when both observe a shared event", async () => {
     const [a, b] = fixtureAssertions();
     const car = { objectEntityId: "70", objectEntityKind: "vehicle" };
     expect(sharedAnchors({ ...a, ...car, eventId: null }, { ...b, ...car, eventId: null })).toEqual(
       [],
     );
     expect(sharedAnchors(a, b)).toEqual(["event"]);
+    for (const kind of ["action", "attribute", "report", null]) {
+      expect(sharedAnchors(a, { ...b, claimKind: kind })).toEqual([]);
+    }
   });
 
-  it("leaves the bed times and the witness nobody told unpaired, and pairs the brigade's arrival", async () => {
+  it("pairs a witness's own attribute only with a claim whose subject resolves to that witness", () => {
+    const [a] = fixtureAssertions();
+    const age = { ...a, predicate: "was", objectText: "40 years old", claimKind: "attribute" };
+    const about = {
+      ...age,
+      id: "92",
+      witnessId: "IWS-B",
+      subjectText: "Mrs Ash",
+      subjectKind: "person",
+      claimKind: "report",
+    };
+    expect(sharedAnchors(age, about)).toEqual([]);
+    expect(
+      sharedAnchors(age, { ...about, subjectEntityId: "81", subjectWitnessId: "IWS-A" }),
+    ).toEqual(["subject"]);
+    expect(sharedAnchors({ ...age, claimKind: "observation" }, about)).toEqual(["event"]);
+  });
+
+  it("shares no subject by a pronoun's words, and one by a resolved entity whatever the words", () => {
+    const [, , , alarm] = fixtureAssertions();
+    const she = { ...alarm, eventId: null, subjectText: "She", subjectKind: "person" };
+    const other = { ...she, id: "93", witnessId: "IWS-B" };
+    expect(sharedAnchors(she, other)).toEqual([]);
+    expect(
+      sharedAnchors({ ...she, subjectText: "this man" }, { ...other, subjectText: "This man" }),
+    ).toEqual([]);
+    expect(
+      sharedAnchors(
+        { ...she, subjectText: "Mrs Ash", subjectEntityId: "81" },
+        { ...other, subjectText: "Ms Ash", subjectEntityId: "81" },
+      ),
+    ).toEqual(["subject"]);
+    expect(
+      sharedAnchors(
+        { ...she, subjectText: "Mrs Ash", subjectEntityId: "81" },
+        { ...other, subjectText: "Mrs Ash", subjectEntityId: "82" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("pairs the brigade's arrival and the fire safety notice, and no bed time, age, death or nobody told", async () => {
     const { pairs } = await aligned(undefined, disputeSeed());
     const added = pairs.filter((p) => Number(p.a.id) > 12 || Number(p.b.id) > 12);
-    expect(added.map(ids)).toEqual(["cross 16-17"]);
-    expect(added[0]).toMatchObject({ eventId: "10", anchors: ["event", "subject"], similarity: 1 });
+    expect(added.map(ids).sort()).toEqual(["cross 16-17", "cross 23-24"]);
+    expect(added.find((p) => p.a.id === "16")).toMatchObject({
+      eventId: "10",
+      anchors: ["event", "subject"],
+      similarity: 1,
+    });
+    expect(added.find((p) => p.a.id === "23")).toMatchObject({
+      eventId: null,
+      anchors: ["subject"],
+    });
   });
 
   it("pairs a self pair on its predicate, or above the stronger threshold with no anchor", async () => {
@@ -182,7 +233,6 @@ describe("the rules pass", () => {
     expect(rulesLabel(find("11", "12")).label).toBe("agree");
     for (const [a, b] of [
       ["4", "5"],
-      ["7", "8"],
       ["9", "10"],
     ])
       expect(rulesLabel(find(a, b))).toBeNull();
@@ -343,12 +393,12 @@ describe("runComparison", () => {
       counts: {
         assertions: 12,
         compared: 12,
-        pairs: 10,
+        pairs: 9,
         rules: 7,
         modelCalls: 1,
-        modelLabelled: 3,
+        modelLabelled: 2,
         rejected: 0,
-        written: 10,
+        written: 9,
         remaining: 0,
       },
     });
@@ -368,7 +418,7 @@ describe("runComparison", () => {
       expect.objectContaining({
         corpus: "grenfell",
         pipeline_version: COMPARE_PIPELINE_VERSION,
-        prompt_version: "nli-v2",
+        prompt_version: NLI_PROMPT_VERSION,
         model: "fake-extract",
         status: "complete",
       }),
@@ -413,7 +463,7 @@ describe("runComparison", () => {
     });
     expect(first).toMatchObject({
       status: "partial",
-      counts: { rules: 7, modelCalls: 0, remaining: 3 },
+      counts: { rules: 7, modelCalls: 0, remaining: 2 },
     });
     expect(store.tables.comparison_runs[0].status).toBe("partial");
     clock = 1;
@@ -421,10 +471,10 @@ describe("runComparison", () => {
     expect(second).toMatchObject({
       status: "complete",
       runId: first.runId,
-      counts: { alreadyLabelled: 7, rules: 0, modelCalls: 1, written: 3 },
+      counts: { alreadyLabelled: 7, rules: 0, modelCalls: 1, written: 2 },
     });
     expect(prompts).toHaveLength(1);
-    expect(store.tables.assertion_comparisons).toHaveLength(10);
+    expect(store.tables.assertion_comparisons).toHaveLength(9);
   });
 
   describe("a run in progress", () => {
@@ -516,8 +566,8 @@ describe("runComparison", () => {
       provider,
       log: (l) => lines.push(l),
     });
-    expect(result.counts).toMatchObject({ modelLabelled: 0, rejected: 3, written: 7 });
-    expect(lines.filter((l) => l.includes('"label-rejected"'))).toHaveLength(3);
+    expect(result.counts).toMatchObject({ modelLabelled: 0, rejected: 2, written: 7 });
+    expect(lines.filter((l) => l.includes('"label-rejected"'))).toHaveLength(2);
   });
 
   it("throws when the model reply has no labels array", async () => {
@@ -528,18 +578,29 @@ describe("runComparison", () => {
     ).rejects.toThrow(/no labels array/);
   });
 
-  it("labels the brigade's arrival contradict by rules and pairs no bed time", async () => {
+  it("labels the brigade's arrival by rules and the notice through the model, and pairs no age or death", async () => {
     const store = createCompareStore(disputeSeed());
-    const { provider } = compareProvider();
+    const { provider, prompts } = compareProvider();
     const result = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
-    expect(result.counts).toMatchObject({ assertions: 18, pairs: 11, rules: 8, modelLabelled: 3 });
+    expect(result.counts).toMatchObject({ assertions: 24, pairs: 11, rules: 8, modelLabelled: 3 });
     expect(labelOf(store, "16", "17")).toMatchObject({
       label: "contradict",
       model: RULES_MODEL,
       event_id: "10",
     });
+    expect(labelOf(store, "23", "24")).toMatchObject({
+      label: "contradict",
+      model: "fake-extract",
+      span_a: "residents should stay in their flat",
+      span_b: "call 999 and to use the stairs",
+    });
+    expect(prompts.join("\n")).toMatch(
+      /statements about themselves \(their own age, health, home or family\) are not about one person/,
+    );
     const touched = store.tables.assertion_comparisons.filter((c) =>
-      ["13", "14", "15", "18"].some((n) => c.assertion_a === n || c.assertion_b === n),
+      ["13", "14", "15", "18", "19", "20", "21", "22"].some(
+        (n) => c.assertion_a === n || c.assertion_b === n,
+      ),
     );
     expect(touched).toEqual([]);
   });
@@ -560,7 +621,7 @@ describe("runComparison", () => {
     const result = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
     expect(result).toMatchObject({
       status: "complete",
-      counts: { alreadyLabelled: 10, pairs: 13, rules: 3, modelCalls: 0, written: 3 },
+      counts: { alreadyLabelled: 9, pairs: 12, rules: 3, modelCalls: 0, written: 3 },
     });
     const accepted = store.tables.assertion_comparisons.filter((c) => c.kind === "accepted");
     expect(

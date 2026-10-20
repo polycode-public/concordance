@@ -158,6 +158,8 @@ export function createFactsStore(seed = {}) {
         confidence: cols[10][i],
         subject_text: cols[11][i],
         subject_kind: cols[12][i],
+        claim_kind: cols[13][i],
+        subject_entity_id: cols[14][i],
         extractor,
         pipeline_version: version,
       }));

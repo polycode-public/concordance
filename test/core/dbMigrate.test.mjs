@@ -133,6 +133,19 @@ describe("splitStatements", () => {
     expect(statements[0]).toContain("REFERENCES assertions (id) ON DELETE SET NULL");
   });
 
+  it("splits 0009_assertion_claims.sql into one change that adds the claim kind and subject entity", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0009_assertion_claims.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    const [alter] = statements;
+    expect(alter).toMatch(/^ALTER TABLE assertions/);
+    for (const part of [
+      "ADD COLUMN claim_kind         text CHECK (claim_kind IN ('attribute', 'action', 'observation', 'report'))",
+      "ADD COLUMN subject_entity_id  bigint REFERENCES entities (id)",
+    ])
+      expect(alter).toContain(part);
+  });
+
   it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
     const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
     const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));

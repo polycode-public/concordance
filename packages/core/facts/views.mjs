@@ -77,7 +77,7 @@ export const VIEW_SQL = Object.freeze({
   event: `SELECT id, name FROM events WHERE id = $1::bigint`,
   assertions: `
   SELECT a.id, a.witness_id, w.cipher_only, a.event_id, a.subject_text, a.subject_kind,
-         a.predicate, a.object_text, a.time_text, a.place_text, a.polarity, a.modality,
+         a.claim_kind, a.predicate, a.object_text, a.time_text, a.place_text, a.polarity, a.modality,
          a.source_chunk_id, c.document_id,
          c.text AS sentence, c.locator, to_char(d.statement_date, 'YYYY-MM-DD') AS statement_date
     FROM assertions a
@@ -209,6 +209,7 @@ function sideOf(a, hideSentence) {
     sentence: hideSentence ? null : a.sentence,
     subjectText: a.subject_text ?? null,
     subjectKind: a.subject_kind ?? null,
+    claimKind: a.claim_kind ?? null,
     predicate: a.predicate,
     objectText: a.object_text ?? null,
     timeText: a.time_text ?? null,

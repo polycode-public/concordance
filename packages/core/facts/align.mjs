@@ -8,9 +8,12 @@
 // witnesses make a cross pair, which always needs an anchor, and only the event, a person, group or
 // thing as the shared subject, or a shared object entity of kind place, vehicle or unit anchor it:
 // two witnesses who each went to bed are two events, so a shared predicate is no anchor. Two
-// first-person claims of two witnesses pair only on a shared event. A witness assertion against an
-// accepted fact makes an accepted pair. Every bound is a constant here.
-
+// first-person claims of two witnesses pair only when both are observations of a shared event. A
+// claim about the witness's own age, health, home, family or job is about that witness alone: no
+// event anchors it to another witness's claim, and only a claim whose subject names that witness
+// shares its subject. A pronoun subject names nobody in particular and shares no subject by its
+// words. A witness assertion against an accepted fact makes an accepted pair. Every bound is a
+// constant here.
 import { normaliseSpan } from "./registers.mjs";
 
 /** Cosine at or above which an anchored pair is a candidate. */
@@ -28,6 +31,44 @@ export const MAX_PAIRS_PER_FACT = 40;
 
 /** The object entity kinds that anchor a cross pair. */
 export const CROSS_OBJECT_KINDS = Object.freeze(["place", "vehicle", "unit"]);
+
+/** What a claim states: the witness's own attribute, act or observation, or a report. */
+export const CLAIM_KINDS = Object.freeze(["attribute", "action", "observation", "report"]);
+
+/**
+ * Subjects that name nobody in particular: a pronoun, or a bare man or woman. Two of them in two
+ * sentences are not one person or thing by their words.
+ */
+export const PRONOUN_SUBJECTS = Object.freeze([
+  "he",
+  "she",
+  "they",
+  "him",
+  "her",
+  "them",
+  "himself",
+  "herself",
+  "themselves",
+  "it",
+  "you",
+  "someone",
+  "somebody",
+  "everyone",
+  "everybody",
+  ...["this", "that", "the", "a"].flatMap((d) =>
+    ["man", "woman", "person", "lady", "gentleman", "boy", "girl"].map((n) => `${d} ${n}`),
+  ),
+]);
+
+const PRONOUN_SET = new Set(PRONOUN_SUBJECTS);
+
+/** True when a subject span is a pronoun or a bare man or woman. */
+export const pronounSubject = (text) =>
+  PRONOUN_SET.has(
+    normaliseSpan(text ?? "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}' ]+/gu, ""),
+  );
 
 const LEADING_WORDS = new Set([
   "i",
@@ -80,14 +121,20 @@ export const claimText = (a) =>
   [firstPerson(a) ? null : a.subjectText, a.predicate, a.objectText].filter(Boolean).join(" ");
 
 /**
- * True when two assertions have one subject: the same witness in the first person, or the same
- * words for a person, group or thing. An assertion with no recorded subject shares none.
+ * True when two assertions have one subject: the same witness in the first person, or a witness's
+ * first person against a subject resolved to that witness, or one resolved subject entity, or the
+ * same words for a person, group or thing that are not a pronoun. An assertion with no recorded
+ * subject shares none.
  */
 export function sameSubject(a, b) {
   if (!a.subjectKind || !b.subjectKind) return false;
+  if (firstPerson(a) && firstPerson(b)) return a.witnessId === b.witnessId;
   if (firstPerson(a) || firstPerson(b)) {
-    return firstPerson(a) && firstPerson(b) && a.witnessId === b.witnessId;
+    const [self, other] = firstPerson(a) ? [a, b] : [b, a];
+    return Boolean(other.subjectWitnessId) && other.subjectWitnessId === self.witnessId;
   }
+  if (a.subjectEntityId && b.subjectEntityId) return a.subjectEntityId === b.subjectEntityId;
+  if (pronounSubject(a.subjectText) || pronounSubject(b.subjectText)) return false;
   const subject = normaliseObject(a.subjectText);
   return subject !== "" && subject === normaliseObject(b.subjectText);
 }
@@ -110,14 +157,20 @@ export function samePlace(a, b) {
 /** The anchors two assertions share, by name: those of a self pair or of a cross pair. */
 export function sharedAnchors(a, b) {
   const out = [];
-  if (sameEvent(a, b)) out.push("event");
   const sameObjectEntity = Boolean(a.objectEntityId) && a.objectEntityId === b.objectEntityId;
   if (a.witnessId !== b.witnessId) {
-    if (firstPerson(a) && firstPerson(b)) return out;
+    const event = sameEvent(a, b);
+    if (firstPerson(a) && firstPerson(b)) {
+      return event && a.claimKind === "observation" && b.claimKind === "observation"
+        ? ["event"]
+        : [];
+    }
+    if (event && a.claimKind !== "attribute" && b.claimKind !== "attribute") out.push("event");
     if (sameSubject(a, b)) out.push("subject");
     if (sameObjectEntity && CROSS_OBJECT_KINDS.includes(a.objectEntityKind)) out.push("object");
     return out;
   }
+  if (sameEvent(a, b)) out.push("event");
   if (sameSubject(a, b)) out.push("subject");
   if (sameObjectEntity) out.push("object");
   if (a.placeEntityId && a.placeEntityId === b.placeEntityId) out.push("place");

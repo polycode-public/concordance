@@ -6,6 +6,7 @@
 // offline suite never import it.
 
 import { parseJsonReply } from "./jsonReply.mjs";
+import { ReplyTruncatedError } from "./modelProvider.mjs";
 
 const EMBED_CONCURRENCY = 4;
 const MAX_EMBED_CHARS = 45000;
@@ -15,6 +16,7 @@ const RETRY_ATTEMPTS = 8;
 const RETRY_BASE_MS = 1000;
 const RETRY_CAP_MS = 60000;
 const EXTRACT_INTERVAL_MS = 1500;
+const EXTRACT_MAX_TOKENS = 8192;
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -181,13 +183,16 @@ export function createBedrockProvider(
       const command = new mod.ConverseCommand({
         modelId: extractModel,
         messages: [{ role: "user", content: [{ text: `${prompt}\n\n${instruction}` }] }],
-        inferenceConfig: { temperature: 0 },
+        inferenceConfig: { temperature: 0, maxTokens: EXTRACT_MAX_TOKENS },
       });
       const response = await withRetry(async () => {
         await paceExtraction(signal);
         return runtime.send(command, { abortSignal: signal });
       }, signal);
       const content = response.output?.message?.content?.[0]?.text ?? "";
+      if (response.stopReason === "max_tokens") {
+        throw new ReplyTruncatedError(extractModel, content.length);
+      }
       return parseJsonReply(content, extractModel);
     },
   };

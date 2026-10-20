@@ -8,15 +8,19 @@
 // One model call covers a window of consecutive sentences, with the sentence before and the
 // sentence after the window as context, so a document of 700 sentences fits one Lambda run.
 // Every text value the model returns must be a span of the target sentence it names; a value
-// that is not is rejected in code, and the row is dropped, counted and logged. The one exception
-// is event_text, a label: it is either a name from the corpus's shared events or a span of the
-// sentence. The model never names a chunk: source_chunk_id comes from the sentence the code
-// numbered.
+// that is not is rejected in code, and the row is dropped, counted and logged. Two values are the
+// exceptions. event_text is a label: a name from the corpus's shared events or a span of the
+// sentence. subject_text, when the sentence names its subject by a pronoun, may be the name or
+// description of that subject as a span of any sentence the prompt shows, so two people each
+// called "she" are not one subject. The model never names a chunk: source_chunk_id comes from the
+// sentence the code numbered.
 
+import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
 import { sha256Text } from "../ingest/run.mjs";
+import { CLAIM_KINDS, PRONOUN_SUBJECTS, pronounSubject } from "./align.mjs";
 import { loadRegisters, normaliseSpan } from "./registers.mjs";
 
-export const EXTRACT_PROMPT_VERSION = "assertions-v2";
+export const EXTRACT_PROMPT_VERSION = "assertions-v3";
 export const EXTRACT_PIPELINE_VERSION = "facts-v1";
 export const EXTRACT_STEP = "extract-assertions";
 export const EXTRACT_WINDOW = 10;
@@ -69,6 +73,7 @@ export const ASSERTION_SCHEMA = Object.freeze({
           sentence: { type: "integer" },
           subject_text: nullableString,
           subject_kind: { enum: [...SUBJECT_KINDS, null] },
+          claim_kind: { enum: [...CLAIM_KINDS, null] },
           predicate: { type: "string" },
           object_text: nullableString,
           object_kind: { enum: [...ENTITY_KINDS, null] },
@@ -121,8 +126,10 @@ export function extractPrompt({ before, targets, after }, events = []) {
   const lines = [
     "You extract the assertions a witness makes in a statement. An assertion is one claim the witness makes: what happened, or what the witness did, saw, heard or knew.",
     "Extract assertions only from the target sentences, which are numbered [Sn]. The context sentences help you read the targets; extract nothing from them.",
-    "Copy every text value exactly as it appears in its own target sentence, with the same words, spelling and case. Do not paraphrase, resolve pronouns or add words. Use null when the sentence does not state the value.",
+    "Copy every text value exactly as it appears in its own target sentence, with the same words, spelling and case. Do not paraphrase or add words. Use null when the sentence does not state the value.",
     "Fields: sentence is the number n of the target sentence. subject_text is who or what does or undergoes the action of the claim. subject_kind is witness when subject_text is I, we or me (the witness); person for a named or ciphered person or one person such as 'a firefighter'; group for a group such as 'the fire brigade', 'the 999 operator' or 'residents'; thing for a thing such as 'the fire', 'the smoke' or 'the lift'. predicate is the verb phrase of the claim. object_text is what the claim is about; object_kind is person, place, vehicle or unit when object_text names one, else null. event_text names the event the claim is about. time_text is the time or date stated. place_text is the place stated. modality is the words that hedge the claim, such as 'I think' or 'about'. polarity is negative when the witness denies the claim, else positive. confidence is from 0 to 1.",
+    "When the target sentence names the subject by a pronoun such as he, she, they, it or 'this man', subject_text is the name or description of that person or thing, copied exactly from the target sentence or another sentence shown here. Write the pronoun only when no sentence shown here names them.",
+    "claim_kind is attribute when the claim states the witness's own age, health, home, years of residence, family or job; action when it states what the witness did; observation when it states what the witness saw, heard, smelt, felt, was told or called; report when it states what another person or a thing did or was.",
     ...(events.length
       ? [
           `event_text is a label. When the claim is about one of these events, copy its name exactly: ${events.map((e) => `'${e}'`).join("; ")}. Use the sentence's own words only when none of them fits, and null when the claim is about no event.`,
@@ -163,9 +170,11 @@ function wordsIn(span, text, flags = "u") {
 /**
  * The subject span and kind. I, we and me are the witness, whatever kind the model gave; a
  * witness subject in any other words is rejected, because the row would then claim the witness
- * did what someone else did.
+ * did what someone else did. A subject that is not in its sentence is kept only when the sentence
+ * uses a pronoun and the span stands in the window's text, because that is the name the pronoun
+ * stands for.
  */
-function checkSubject(raw, text) {
+function checkSubject(raw, text, windowText) {
   const value = raw.subject_text ?? null;
   const kind = raw.subject_kind ?? null;
   if (kind !== null && !SUBJECT_KINDS.includes(kind)) {
@@ -183,7 +192,13 @@ function checkSubject(raw, text) {
     if (!wordsIn(span, haystack, "iu")) return reject("subject_text", "not-in-sentence", value);
     return { ok: true, text: span, kind: "witness" };
   }
-  if (!wordsIn(span, haystack)) return reject("subject_text", "not-in-sentence", value);
+  if (!wordsIn(span, haystack)) {
+    const named =
+      !pronounSubject(span) &&
+      PRONOUN_SUBJECTS.some((p) => wordsIn(p, haystack, "iu")) &&
+      wordsIn(span, normaliseSpan(windowText));
+    if (!named) return reject("subject_text", "not-in-sentence", value);
+  }
   if (kind === null) return reject("subject_kind", "subject-without-kind", value);
   if (kind === "witness") return reject("subject_kind", "witness-not-first-person", value);
   return { ok: true, text: span, kind };
@@ -208,8 +223,9 @@ function checkEvent(value, haystack, events) {
  * @param {unknown} raw
  * @param {Map<number, { id: string, ordinal: number, text: string }>} targets by ordinal
  * @param {readonly string[]} [events] the corpus's shared event names
+ * @param {readonly (string | null | undefined)[]} [context] the texts of the context sentences
  */
-export function checkAssertion(raw, targets, events = []) {
+export function checkAssertion(raw, targets, events = [], context = []) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return reject(null, "not-an-object", raw);
   }
@@ -246,10 +262,18 @@ export function checkAssertion(raw, targets, events = []) {
     return reject("object_kind", "kind-without-object", kind);
   }
   row.objectKind = kind;
-  const subject = checkSubject(raw, sentence.text);
+  const windowText = [...context, ...[...targets.values()].map((t) => t.text)]
+    .filter(Boolean)
+    .join("\n");
+  const subject = checkSubject(raw, sentence.text, windowText);
   if (!subject.ok) return subject;
   row.subject_text = subject.text;
   row.subjectKind = subject.kind;
+  const claimKind = raw.claim_kind ?? null;
+  if (claimKind !== null && !CLAIM_KINDS.includes(claimKind)) {
+    return reject("claim_kind", "not-a-claim-kind", claimKind);
+  }
+  row.claimKind = claimKind;
   const event = checkEvent(raw.event_text, haystack, events);
   if (!event.ok) return event;
   row.event_text = event.text;
@@ -269,6 +293,7 @@ const assertionKey = (r) =>
     r.sourceChunkId,
     r.subject_text,
     r.subjectKind,
+    r.claimKind,
     r.predicate,
     r.object_text,
     r.event_text,
@@ -333,6 +358,19 @@ function entityFor(registers, span, kindHint) {
   return kindHint ? { kind: kindHint, canonical: span } : null;
 }
 
+/**
+ * The register entry a subject names: a known entity, or the entity named by a witness's id. A
+ * subject the registers do not know gets none, because a description such as "a firefighter"
+ * from two witnesses is no evidence of one person. The witness's own first person and a pronoun
+ * name no entry.
+ */
+export function subjectEntityFor(registers, row) {
+  if (!row.subject_text || row.subjectKind === "witness" || pronounSubject(row.subject_text)) {
+    return null;
+  }
+  return entityFor(registers, row.subject_text, null);
+}
+
 const entityKey = (kind, canonical) => `${kind}\u0000${canonical}`;
 
 const INSERT_ENTITIES = `
@@ -357,15 +395,16 @@ const INSERT_ASSERTIONS = `
   INSERT INTO assertions (witness_id, source_chunk_id, event_id, predicate, object_text,
                           object_entity_id, time_text, place_text, place_entity_id, polarity,
                           modality, confidence, extractor, pipeline_version, subject_text,
-                          subject_kind)
+                          subject_kind, claim_kind, subject_entity_id)
   SELECT $1, u.chunk, u.event, u.predicate, u.object_text, u.object_entity, u.time_text,
          u.place_text, u.place_entity, u.polarity, u.modality, u.confidence, $2, $3,
-         u.subject_text, u.subject_kind
+         u.subject_text, u.subject_kind, u.claim_kind, u.subject_entity
     FROM unnest($4::bigint[], $5::bigint[], $6::text[], $7::text[], $8::bigint[], $9::text[],
                 $10::text[], $11::bigint[], $12::text[], $13::text[], $14::real[], $15::text[],
-                $16::text[])
+                $16::text[], $17::text[], $18::bigint[])
       AS u(chunk, event, predicate, object_text, object_entity, time_text, place_text,
-           place_entity, polarity, modality, confidence, subject_text, subject_kind)`;
+           place_entity, polarity, modality, confidence, subject_text, subject_kind, claim_kind,
+           subject_entity)`;
 
 const DELETE_ASSERTIONS = `
   DELETE FROM assertions a USING chunks c
@@ -401,6 +440,8 @@ const ASSERTION_COLUMNS = [
   "confidence",
   "subject_text",
   "subject_kind",
+  "claim_kind",
+  "subject_entity",
 ];
 
 /**
@@ -500,10 +541,11 @@ export async function extractAssertions({
     for (const r of kept) {
       r.objectEntity = entityFor(registers, r.object_text, r.objectKind);
       r.placeEntity = entityFor(registers, r.place_text, "place");
+      r.subjectEntity = subjectEntityFor(registers, r);
     }
     const newEntities = new Map();
     for (const r of kept) {
-      for (const e of [r.objectEntity, r.placeEntity]) {
+      for (const e of [r.objectEntity, r.placeEntity, r.subjectEntity]) {
         if (e && !e.id) newEntities.set(entityKey(e.kind, e.canonical.toLowerCase()), e);
       }
     }
@@ -555,6 +597,8 @@ export async function extractAssertions({
         confidence: r.confidence,
         subject_text: r.subject_text,
         subject_kind: r.subjectKind,
+        claim_kind: r.claimKind,
+        subject_entity: idOf(r.subjectEntity),
       }));
       for (const row of rows) {
         if (row.event === undefined) throw new Error(`${documentId}: an event was not stored`);
@@ -613,52 +657,91 @@ export async function extractAssertions({
       stopped = true;
       break;
     }
-    const w = windows[next];
-    let result;
-    try {
-      result = await provider.extractJson({
-        prompt: extractPrompt(w, events),
-        schema: ASSERTION_SCHEMA,
-        signal,
-      });
-    } catch (err) {
-      if (!signal?.aborted) throw err;
-      stopped = true;
-      break;
-    }
-    calls++;
-    if (!Array.isArray(result?.assertions)) {
-      throw new Error(
-        `${documentId}: the extraction model returned no assertions array for sentences ` +
-          `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}: ${JSON.stringify(result).slice(0, 200)}`,
-      );
-    }
     const kept = [];
-    const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
-    for (const raw of result.assertions) {
-      const checked = checkAssertion(raw, targets, events);
-      let reason = checked.ok ? null : checked.reason;
-      if (checked.ok) {
-        const k = assertionKey(checked.row);
-        if (seen.has(k)) reason = "duplicate";
-        else {
-          seen.add(k);
-          kept.push(checked.row);
-        }
-      }
-      if (reason) {
-        rejected[reason] = (rejected[reason] ?? 0) + 1;
-        log(
-          JSON.stringify({
-            evidenceId: documentId,
-            stage: "assertion-rejected",
-            sentence: raw?.sentence ?? null,
-            field: checked.field ?? null,
-            reason,
-            value: JSON.stringify(checked.value ?? raw?.predicate ?? null).slice(0, 200),
-          }),
+    const collect = (w, result) => {
+      if (!Array.isArray(result?.assertions)) {
+        throw new Error(
+          `${documentId}: the extraction model returned no assertions array for sentences ` +
+            `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}: ${JSON.stringify(result).slice(0, 200)}`,
         );
       }
+      const targets = new Map(w.targets.map((s) => [s.ordinal, s]));
+      for (const raw of result.assertions) {
+        const checked = checkAssertion(raw, targets, events, [w.before?.text, w.after?.text]);
+        let reason = checked.ok ? null : checked.reason;
+        if (checked.ok) {
+          const k = assertionKey(checked.row);
+          if (seen.has(k)) reason = "duplicate";
+          else {
+            seen.add(k);
+            kept.push(checked.row);
+          }
+        }
+        if (reason) {
+          rejected[reason] = (rejected[reason] ?? 0) + 1;
+          log(
+            JSON.stringify({
+              evidenceId: documentId,
+              stage: "assertion-rejected",
+              sentence: raw?.sentence ?? null,
+              field: checked.field ?? null,
+              reason,
+              value: JSON.stringify(checked.value ?? raw?.predicate ?? null).slice(0, 200),
+            }),
+          );
+        }
+      }
+    };
+    // A reply cut off at the output limit is retried as two half windows, down to one sentence.
+    const extractWindow = async (w, depth) => {
+      let result;
+      try {
+        result = await provider.extractJson({
+          prompt: extractPrompt(w, events),
+          schema: ASSERTION_SCHEMA,
+          signal,
+        });
+      } catch (err) {
+        if (err instanceof ReplyTruncatedError && !signal?.aborted) {
+          calls++;
+          const sentencesIn = `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}`;
+          if (w.targets.length === 1) {
+            throw new Error(
+              `${documentId}: window ${next}, sentence ${sentencesIn}: ${err.message}`,
+              { cause: err },
+            );
+          }
+          log(
+            JSON.stringify({
+              evidenceId: documentId,
+              stage: "window-split",
+              window: next,
+              depth,
+              sentences: sentencesIn,
+            }),
+          );
+          const mid = Math.ceil(w.targets.length / 2);
+          const head = w.targets.slice(0, mid);
+          const tail = w.targets.slice(mid);
+          const halves = [
+            { before: w.before, targets: head, after: tail[0] },
+            { before: head.at(-1), targets: tail, after: w.after },
+          ];
+          for (const half of halves) {
+            if (!(await extractWindow(half, depth + 1))) return false;
+          }
+          return true;
+        }
+        if (!signal?.aborted) throw err;
+        return false;
+      }
+      calls++;
+      collect(w, result);
+      return true;
+    };
+    if (!(await extractWindow(windows[next], 1))) {
+      stopped = true;
+      break;
     }
     keptCount += kept.length;
     await writeWindow(kept, next);

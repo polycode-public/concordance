@@ -26,10 +26,10 @@ describe("the compare handler", () => {
       corpus: "grenfell",
       status: "complete",
       runId: expect.any(String),
-      counts: { pairs: 10, rules: 7, modelCalls: 1, written: 10 },
+      counts: { pairs: 9, rules: 7, modelCalls: 1, written: 9 },
     });
     expect(store.closed).toBe(1);
-    expect(lines.at(-1)).toMatchObject({ corpus: "grenfell", status: "complete", written: 10 });
+    expect(lines.at(-1)).toMatchObject({ corpus: "grenfell", status: "complete", written: 9 });
     expect(lines.map((l) => l.stage).filter(Boolean)).toContain("pairs-aligned");
   });
 
@@ -47,13 +47,13 @@ describe("the compare handler", () => {
     const { handler } = setup();
     const short = { getRemainingTimeInMillis: () => WRITE_MARGIN_MS - 1 };
     const first = await handler({ corpus: "grenfell" }, short);
-    expect(first).toMatchObject({ status: "partial", counts: { modelCalls: 0, remaining: 3 } });
+    expect(first).toMatchObject({ status: "partial", counts: { modelCalls: 0, remaining: 2 } });
     const long = { getRemainingTimeInMillis: () => 15 * 60_000 };
     const second = await handler({ corpus: "grenfell" }, long);
     expect(second).toMatchObject({
       status: "complete",
       runId: first.runId,
-      counts: { written: 3 },
+      counts: { written: 2 },
     });
   });
 

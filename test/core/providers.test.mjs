@@ -141,6 +141,17 @@ describe("ollama provider", () => {
     expect(sent).toMatchObject({ format: "json", stream: false });
   });
 
+  it("throws ReplyTruncatedError when Ollama stopped at its length limit", async () => {
+    const p = createOllamaProvider({
+      fetchImpl: async () =>
+        Response.json({ message: { content: '{"assertions":[' }, done_reason: "length" }),
+    });
+    await expect(p.extractJson({ prompt: "extract" })).rejects.toMatchObject({
+      name: "ReplyTruncatedError",
+      replyLength: 15,
+    });
+  });
+
   it("reports a non-OK response with its status", async () => {
     const p = createOllamaProvider({
       fetchImpl: async () => new Response("model not found", { status: 404 }),

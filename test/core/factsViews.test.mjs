@@ -31,7 +31,6 @@ describe("the groups", () => {
       { eventId: "7", name: "smoke in the lobby", topic: null, pairs: 6, contradictions: 4 },
       { eventId: "8", name: "the fire alarm", topic: null, pairs: 1, contradictions: 1 },
       { eventId: null, name: null, topic: "dark", pairs: 1, contradictions: 0 },
-      { eventId: "9", name: "leaving the flat", topic: null, pairs: 1, contradictions: 0 },
       { eventId: null, name: null, topic: "told", pairs: 1, contradictions: 0 },
     ]);
   });
