@@ -169,20 +169,25 @@ export function quotedPhrases(query) {
 }
 
 /**
- * The witnesses that have a document in one corpus, each with its id and aliases.
+ * The witnesses that have a document in one corpus, each with its id, aliases and role. A
+ * cipher-only witness shows no role.
  * @param {{ query: Function }} db
  * @param {string} corpus
- * @returns {Promise<{ id: string, names: string[] }[]>}
+ * @returns {Promise<{ id: string, names: string[], role: string | null }[]>}
  */
 export async function corpusWitnesses(db, corpus) {
   requireCorpus(corpus);
   const { rows } = await db.query(
-    `SELECT w.id, w.aliases FROM witnesses w
+    `SELECT w.id, w.aliases, w.role, w.cipher_only FROM witnesses w
       WHERE EXISTS (SELECT 1 FROM documents d WHERE d.witness_id = w.id AND d.corpus = $1)
       ORDER BY w.id`,
     [corpus],
   );
-  return rows.map((r) => ({ id: String(r.id), names: [String(r.id), ...(r.aliases ?? [])] }));
+  return rows.map((r) => ({
+    id: String(r.id),
+    names: [String(r.id), ...(r.aliases ?? [])],
+    role: r.cipher_only || r.role == null ? null : String(r.role),
+  }));
 }
 
 const words = (text) =>
@@ -191,30 +196,56 @@ const words = (text) =>
     .toLowerCase()
     .match(/[\p{L}\p{N}]+/gu) ?? [];
 
+/** The surname and, for a name of three or more words, the first and last words of a name. */
+const nameParts = (nameWords) =>
+  nameWords.length < 2
+    ? []
+    : [
+        nameWords.slice(-1),
+        ...(nameWords.length > 2 ? [[nameWords[0], nameWords[nameWords.length - 1]]] : []),
+      ];
+
+/** The flat numbers that a text names as "flat <number>". */
+const flatNumbers = (textWords) =>
+  textWords.flatMap((w, i) =>
+    w === "flat" && /^\d+$/.test(textWords[i + 1] ?? "") ? [textWords[i + 1]] : [],
+  );
+
 /**
- * Finds the witnesses a query names by id or by any alias, compared word by word without case.
- * The longest name is matched first and each word of the query is part of at most one name; a
- * name that several witnesses share names them all.
+ * Finds the witnesses a query names by id, by any alias, by the surname of an alias or by the
+ * first and last words of an alias, compared word by word without case. The longest name is
+ * matched first, a full name before a part of a name of the same length, and each word of the
+ * query is part of at most one name; a name that several witnesses share names them all. When
+ * the query names "flat <number>", the witnesses whose role names that flat are named too, as
+ * one group; the flat words stay in the query.
  * @param {string} query
- * @param {{ id: string, names: string[] }[]} witnesses
+ * @param {{ id: string, names: string[], role?: string | null }[]} witnesses
  * @returns {{ rest: string, nameGroups: string[][], witnessIds: string[] }}
- *   `rest` is the query without the matched names; each group holds every name of one witness;
- *   `witnessIds` holds the id of each group's witness, in the same order.
+ *   `rest` is the query without the matched names; each group holds every name of one witness
+ *   that a name matches, or of every witness of one flat; `witnessIds` holds the id of each
+ *   named witness once.
  */
 export function namedWitnesses(query, witnesses) {
   const queryWords = words(query);
   const used = new Array(queryWords.length).fill(false);
-  const byName = new Map();
+  const full = new Map();
+  const parts = new Map();
+  const add = (byName, nameWords, w) => {
+    const k = nameWords.join(" ");
+    if (!byName.has(k)) byName.set(k, { nameWords, holders: [] });
+    if (!byName.get(k).holders.includes(w)) byName.get(k).holders.push(w);
+  };
   for (const w of witnesses) {
     for (const name of w.names) {
       const nameWords = words(name);
       if (!nameWords.length) continue;
-      const k = nameWords.join(" ");
-      if (!byName.has(k)) byName.set(k, { nameWords, holders: [] });
-      if (!byName.get(k).holders.includes(w)) byName.get(k).holders.push(w);
+      add(full, nameWords, w);
+      for (const part of nameParts(nameWords)) add(parts, part, w);
     }
   }
-  const names = [...byName.values()].sort((a, b) => b.nameWords.length - a.nameWords.length);
+  for (const k of full.keys()) parts.delete(k);
+  const byLength = (a, b) => b.nameWords.length - a.nameWords.length;
+  const names = [...full.values(), ...parts.values()].sort(byLength);
   const matched = new Map();
   for (const { nameWords, holders } of names) {
     for (let i = 0; i + nameWords.length <= queryWords.length; i++) {
@@ -224,10 +255,18 @@ export function namedWitnesses(query, witnesses) {
       for (const w of holders) matched.set(w.id, w.names);
     }
   }
+  const nameGroups = [...matched.values()];
+  const witnessIds = [...matched.keys()];
+  for (const flat of new Set(flatNumbers(queryWords))) {
+    const residents = witnesses.filter((w) => w.role && flatNumbers(words(w.role)).includes(flat));
+    if (!residents.length) continue;
+    nameGroups.push(residents.flatMap((w) => w.names));
+    for (const w of residents) if (!witnessIds.includes(w.id)) witnessIds.push(w.id);
+  }
   return {
     rest: queryWords.filter((_, i) => !used[i]).join(" "),
-    nameGroups: [...matched.values()],
-    witnessIds: [...matched.keys()],
+    nameGroups,
+    witnessIds,
   };
 }
 
@@ -288,9 +327,9 @@ async function lexicalRankings(db, query, { rest, nameGroups }, scope) {
 }
 
 /**
- * The scope of the vector rankings when the queries name witnesses: the documents of those
- * witnesses, inside the witnesses that the filters keep. Null when the two share no witness,
- * so that the vector rankings are empty.
+ * The scope of the added vector rankings when the queries name witnesses: the documents of
+ * those witnesses, inside the witnesses that the filters keep. Null when the two share no
+ * witness, so that the added vector rankings are empty.
  * @param {RankingScope} scope
  * @param {string[]} witnessIds
  * @returns {RankingScope | null}
@@ -306,8 +345,9 @@ export function namedWitnessScope(scope, witnessIds) {
  * Embeds each query and runs the rankings of each over one corpus, then fuses every ranking of
  * every query by reciprocal rank. A non-empty `documentIds` limits every ranking to those
  * documents, and `filters` to the documents that pass them. When any query names a witness,
- * every vector ranking reads only the documents of the named witnesses, so that their
- * passages rank first.
+ * each query adds vector rankings that read only the documents of the named witnesses beside
+ * its vector rankings over the corpus, so that their passages rank first and no document is
+ * kept out.
  * @param {{ queries: string[], corpus: string, provider: object, db: { query: Function },
  *   signal?: AbortSignal, documentIds?: string[] | null, filters?: RetrievalFilters | null }} args
  * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]>[] }>}
@@ -335,7 +375,7 @@ export async function retrieve({
     );
   }
   const scope = { corpus, documentIds, filters };
-  const [{ lexical, vectorScope }, vectors] = await Promise.all([
+  const [{ lexical, namedScope }, vectors] = await Promise.all([
     corpusWitnesses(db, corpus).then(async (witnesses) => {
       const named = queries.map((query) => namedWitnesses(query, witnesses));
       const witnessIds = [...new Set(named.flatMap((n) => n.witnessIds))];
@@ -343,7 +383,7 @@ export async function retrieve({
         lexical: await Promise.all(
           queries.map((query, i) => lexicalRankings(db, query, named[i], scope)),
         ),
-        vectorScope: namedWitnessScope(scope, witnessIds),
+        namedScope: witnessIds.length ? namedWitnessScope(scope, witnessIds) : undefined,
       };
     }),
     provider.embed(queries),
@@ -357,12 +397,24 @@ export async function retrieve({
   const rankings = await Promise.all(
     queries.map(async (_, i) => {
       const literal = halfvecLiteral(vectors[i]);
-      const vector = (level) =>
-        vectorRanking(db, literal, provider.embedModel, level, RANK_LIMITS[level], vectorScope);
-      const [vectorPassage, vectorSection] = vectorScope
-        ? await Promise.all([vector("passage"), vector("section")])
-        : [[], []];
-      return { ...lexical[i], vectorPassage, vectorSection };
+      const vector = (level, vectorScope) =>
+        vectorScope
+          ? vectorRanking(db, literal, provider.embedModel, level, RANK_LIMITS[level], vectorScope)
+          : [];
+      if (namedScope === undefined) {
+        const [vectorPassage, vectorSection] = await Promise.all([
+          vector("passage", scope),
+          vector("section", scope),
+        ]);
+        return { ...lexical[i], vectorPassage, vectorSection };
+      }
+      const [vectorPassage, vectorSection, namedPassage, namedSection] = await Promise.all([
+        vector("passage", scope),
+        vector("section", scope),
+        vector("passage", namedScope),
+        vector("section", namedScope),
+      ]);
+      return { ...lexical[i], vectorPassage, vectorSection, namedPassage, namedSection };
     }),
   );
   signal?.throwIfAborted();

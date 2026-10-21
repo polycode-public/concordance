@@ -587,6 +587,59 @@ describe("witness names and quoted phrases", () => {
     });
   });
 
+  it("finds a witness by the surname or by the first and last words of an alias", () => {
+    const people = [
+      { id: "IWS1", names: ["IWS1", "Hime Haymanot Gashaw"] },
+      { id: "IWS2", names: ["IWS2", "Walid Wahbi"] },
+      { id: "IWS3", names: ["IWS3", "Hamid Wahbi"] },
+      { id: "IWS4", names: ["IWS4", "Gashaw"] },
+    ];
+    expect(namedWitnesses("Why did Hime Gashaw leave?", people)).toEqual({
+      rest: "why did leave",
+      nameGroups: [["IWS1", "Hime Haymanot Gashaw"]],
+      witnessIds: ["IWS1"],
+    });
+    expect(namedWitnesses("What did Firefighter Wahbi see?", people)).toEqual({
+      rest: "what did firefighter see",
+      nameGroups: [
+        ["IWS2", "Walid Wahbi"],
+        ["IWS3", "Hamid Wahbi"],
+      ],
+      witnessIds: ["IWS2", "IWS3"],
+    });
+    expect(namedWitnesses("Did Hamid Wahbi see Gashaw?", people)).toEqual({
+      rest: "did see",
+      nameGroups: [
+        ["IWS3", "Hamid Wahbi"],
+        ["IWS4", "Gashaw"],
+      ],
+      witnessIds: ["IWS3", "IWS4"],
+    });
+  });
+
+  it("names the witnesses whose role names the flat that the query names", () => {
+    const people = [
+      { id: "IWS1", names: ["IWS1", "Richard Fletcher"], role: "resident, floor 16, flat 131" },
+      { id: "IWS2", names: ["IWS2", "Hime Haymanot Gashaw"], role: "resident, Flat 131" },
+      { id: "IWS3", names: ["IWS3"], role: null },
+      { id: "IWS4", names: ["IWS4", "Ann Other"], role: "resident, floor 16, flat 1311" },
+    ];
+    expect(namedWitnesses("What happened at FLAT 131?", people)).toEqual({
+      rest: "what happened at flat 131",
+      nameGroups: [["IWS1", "Richard Fletcher", "IWS2", "Hime Haymanot Gashaw"]],
+      witnessIds: ["IWS1", "IWS2"],
+    });
+    expect(namedWitnesses("Did Richard Fletcher leave flat 131?", people)).toEqual({
+      rest: "did leave flat 131",
+      nameGroups: [
+        ["IWS1", "Richard Fletcher"],
+        ["IWS1", "Richard Fletcher", "IWS2", "Hime Haymanot Gashaw"],
+      ],
+      witnessIds: ["IWS1", "IWS2"],
+    });
+    expect(namedWitnesses("flat 999 and flatmates 131", people).witnessIds).toEqual([]);
+  });
+
   it("reads straight and curly quoted phrases", () => {
     expect(quotedPhrases('the "fire door" and \u201cstay put\u201d policy, ""')).toEqual([
       "fire door",
@@ -625,6 +678,8 @@ describe("witness names and quoted phrases", () => {
       "phraseSection",
       "vectorPassage",
       "vectorSection",
+      "namedPassage",
+      "namedSection",
     ]);
     const lexical = calls.filter((c) => /plainto_tsquery/.test(c.text));
     expect(lexical).toHaveLength(2);
@@ -670,19 +725,45 @@ describe("named witness scope", () => {
     return { result, vector, lexical };
   };
 
-  it("holds the vector rankings to the documents of a witness that any query names", async () => {
-    const { vector, lexical } = await run(["What did Ada Lovelace see?", "smoke in the lobby"]);
-    expect(vector).toHaveLength(4);
-    for (const { text, params } of vector) {
+  it("adds vector rankings over the documents of a witness that any query names beside the corpus-wide ones", async () => {
+    const { result, vector, lexical } = await run([
+      "What did Ada Lovelace see?",
+      "smoke in the lobby",
+    ]);
+    expect(vector).toHaveLength(8);
+    const scoped = vector.filter(({ text }) => text.includes("d.witness_id"));
+    const corpusWide = vector.filter(({ text }) => !text.includes("d.witness_id"));
+    expect(scoped).toHaveLength(4);
+    expect(corpusWide).toHaveLength(4);
+    for (const { text, params } of scoped) {
       expect(text).toMatch(/d\.witness_id = ANY\(\$\d+::text\[\]\)/);
       expect(text).toMatch(/ORDER BY \(embedding <=> \$\d+::halfvec\) \+ 0/);
       expect(params).toContainEqual(["IWS9"]);
     }
+    for (const { text } of corpusWide) {
+      expect(text).toMatch(/ORDER BY embedding <=> \$\d+::halfvec\n/);
+    }
     for (const { text } of lexical) expect(text).not.toContain("d.witness_id");
+    for (const r of result.rankings) {
+      expect(Object.keys(r)).toEqual([
+        "lexicalPassage",
+        "lexicalSection",
+        "vectorPassage",
+        "vectorSection",
+        "namedPassage",
+        "namedSection",
+      ]);
+    }
   });
 
   it("leaves the rankings of a query that names no witness as they are", async () => {
-    const { vector, lexical } = await run(["smoke in the lobby"]);
+    const { result, vector, lexical } = await run(["smoke in the lobby"]);
+    expect(Object.keys(result.rankings[0])).toEqual([
+      "lexicalPassage",
+      "lexicalSection",
+      "vectorPassage",
+      "vectorSection",
+    ]);
     expect(vector).toHaveLength(2);
     for (const { text } of [...vector, ...lexical]) {
       expect(text).not.toContain("document_id IN");
@@ -694,11 +775,57 @@ describe("named witness scope", () => {
     const both = await run(["Did Ada Lovelace meet Bob Example?"], {
       witnesses: ["IWS10", "IWS1"],
     });
-    for (const { params } of both.vector) expect(params).toContainEqual(["IWS10"]);
+    expect(both.vector).toHaveLength(4);
+    const holding = (ids) =>
+      both.vector.filter(({ params }) => JSON.stringify(params).includes(ids));
+    expect(holding('["IWS10"]')).toHaveLength(2);
+    expect(holding('["IWS10","IWS1"]')).toHaveLength(2);
     const none = await run(["What did Ada Lovelace see?"], { witnesses: ["IWS1"] });
-    expect(none.vector).toEqual([]);
-    expect(none.result.rankings[0].vectorPassage).toEqual([]);
-    expect(none.result.rankings[0].vectorSection).toEqual([]);
+    expect(none.vector).toHaveLength(2);
+    for (const { params } of none.vector) expect(params).toContainEqual(["IWS1"]);
+    expect(none.result.rankings[0].namedPassage).toEqual([]);
+    expect(none.result.rankings[0].namedSection).toEqual([]);
+  });
+
+  it("names the residents of a flat by their role and never a cipher-only witness", async () => {
+    const calls = [];
+    const db = {
+      query: async (text, params) => {
+        calls.push({ text, params });
+        if (/FROM witnesses/.test(text)) {
+          return {
+            rows: [
+              {
+                id: "IWS9",
+                aliases: ["Ada Lovelace"],
+                role: "resident, flat 131",
+                cipher_only: false,
+              },
+              { id: "C1", aliases: [], role: "resident, flat 131", cipher_only: true },
+            ],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+    const provider = {
+      name: "p",
+      embedModel: "m",
+      embedDim: 1024,
+      embed: async (texts) => texts.map(() => new Array(1024).fill(0.5)),
+    };
+    await retrieve({ queries: ["Who lived in Flat 131?"], corpus: "grenfell", provider, db });
+    expect(calls[0].text).toContain("w.role, w.cipher_only");
+    const scoped = calls.filter(
+      (c) => /embedding <=>/.test(c.text) && c.text.includes("d.witness_id"),
+    );
+    expect(scoped).toHaveLength(2);
+    for (const { params } of scoped) expect(params).toContainEqual(["IWS9"]);
+    const lexical = calls.filter((c) => /websearch_to_tsquery/.test(c.text));
+    for (const { params } of lexical) {
+      expect(params).toContain("IWS9");
+      expect(params).not.toContain("C1");
+    }
   });
 
   it("keeps the other filters and the scope when it names witnesses", () => {
