@@ -1,0 +1,23 @@
+[
+  {
+    "evidence_id": "DOC1",
+    "witness_id": "W1",
+    "witness": "  Ada Example ",
+    "role": "resident",
+    "floor": 3
+  },
+  {
+    "evidence_id": "DOC2",
+    "witness_id": "W1",
+    "witness": "A. Example",
+    "role": "resident",
+    "floor": 4
+  },
+  {
+    "evidence_id": "DOC3",
+    "witness_id": "C1",
+    "witness": "Cipher Person",
+    "role": "firefighter",
+    "cipher_only": true
+  }
+]

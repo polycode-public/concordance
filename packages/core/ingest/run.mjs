@@ -328,6 +328,36 @@ export function documentMeta(corpus, row, source) {
 }
 
 /**
+ * Merges one witness row into the witnesses table. A cipher-only witness loses every alias;
+ * any other witness keeps its aliases and gains the new ones.
+ */
+export const WITNESS_UPSERT_SQL = `INSERT INTO witnesses (id, role, cipher_only, aliases) VALUES ($1, $2, $3, $4::text[])
+         ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, cipher_only = EXCLUDED.cipher_only,
+           aliases = CASE WHEN EXCLUDED.cipher_only THEN '{}'::text[]
+                          ELSE ARRAY(SELECT DISTINCT a FROM unnest(witnesses.aliases || EXCLUDED.aliases) a
+                                      ORDER BY a) END`;
+
+/**
+ * The witnesses row that documentMeta() gives: the witness name is the only alias, and a
+ * cipher-only witness has none.
+ * @param {{ witnessId: string, role: string | null, cipherOnly?: boolean, witnessName: string | null }} meta
+ */
+export function witnessRow(meta) {
+  const cipherOnly = meta.cipherOnly ?? false;
+  return {
+    id: meta.witnessId,
+    role: meta.role,
+    cipherOnly,
+    aliases: cipherOnly || !meta.witnessName ? [] : [meta.witnessName],
+  };
+}
+
+/** @param {{ id: string, role: string | null, cipherOnly: boolean, aliases: string[] }} row */
+export function witnessUpsertParams(row) {
+  return [row.id, row.role, row.cipherOnly, row.aliases];
+}
+
+/**
  * Splits pages into sections (numbered paragraphs, or pages when none is numbered), passages and sentences with their
  * locators. Passage and sentence ordinals run across the whole document.
  * @param {{ page: number, text: string }[]} pages
@@ -686,19 +716,7 @@ export async function ingestDocument({
       status = "replaced";
     }
     if (meta.witnessId) {
-      await client.query(
-        `INSERT INTO witnesses (id, role, cipher_only, aliases) VALUES ($1, $2, $3, $4::text[])
-         ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, cipher_only = EXCLUDED.cipher_only,
-           aliases = CASE WHEN EXCLUDED.cipher_only THEN '{}'::text[]
-                          ELSE ARRAY(SELECT DISTINCT a FROM unnest(witnesses.aliases || EXCLUDED.aliases) a
-                                      ORDER BY a) END`,
-        [
-          meta.witnessId,
-          meta.role,
-          meta.cipherOnly ?? false,
-          meta.cipherOnly || !meta.witnessName ? [] : [meta.witnessName],
-        ],
-      );
+      await client.query(WITNESS_UPSERT_SQL, witnessUpsertParams(witnessRow(meta)));
     }
     await client.query(
       `INSERT INTO documents (id, corpus, source_url, fetched_at, sha256, licence, format,
