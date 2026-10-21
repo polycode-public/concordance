@@ -51,6 +51,62 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, corrected gold
+
+The same command and store as the miss-report run below, with `RERANK=off`, on the gold set of
+pull request #60 (63 locators over 50 rows). One run, from 20:02:08Z to 20:12:11Z. Spend: about
+$0.70 by the day's Sonnet rate; Cost Explorer lags by hours. The run report is
+`evals/grenfell/runs/2026-10-21T20-12-11-275Z-bedrock-rerank-off.json`.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.463 |
+| citation recall           | 0.698 |
+| unsupported-sentence rate | 0.180 |
+| abstention correctness    | 0.920 |
+
+The 95 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 44    |
+| `document`    | 22    |
+| `page`        | 15    |
+| `paragraph`   | 14    |
+| `abstain-row` | 0     |
+
+The 63 gold locators: 44 cited, 15 retrieved but not cited (5 of them with the gold paragraph
+itself in the evidence blocks), 4 not retrieved at all (rows 0006, 0008, 0022, 0036).
+
+The gold changes this run scores:
+
+| id                        | document    | old    | new              |
+| ------------------------- | ----------- | ------ | ---------------- |
+| grenfell-0005             | IWS00000169 | p4 ¶9  | p4 ¶9 and p5 ¶10 |
+| grenfell-0007, 0022       | IWS00000913 | p3 ¶11 | p3 ¶14           |
+| grenfell-0008, 0021       | IWS00000913 | p3 ¶11 | p4 ¶20           |
+| grenfell-0008, 0021       | IWS00000990 | p1 ¶2  | p3 ¶14           |
+| grenfell-0009, 0024       | IWS00000990 | p1 ¶2  | p12 ¶71          |
+| grenfell-0012, 0023       | IWS00001156 | p3 ¶10 | p4 ¶14           |
+| grenfell-0016, 0022, 0025 | IWS00000835 | p2 ¶11 | p9 ¶61           |
+| grenfell-0017             | IWS00000835 | p2 ¶11 | p8 ¶55           |
+
+Row grenfell-0013 keeps IWS00001156 p3 ¶10 because no paragraph of that statement holds the
+finding, which cites the witness's first statement, not in the corpus.
+
+Against the miss-report run (precision 0.360, recall 0.500, unsupported 0.201, abstention 0.860;
+86 citations: 31 gold, 29 page, 18 document, 7 paragraph; 62 gold: 31 cited, 27 retrieved not
+cited, 4 not retrieved), precision rises 0.103, recall 0.198 and abstention 0.060, and the
+unsupported rate falls 0.021. Gold citations rise from 31 to 44 and `page` misses fall from 29 to
+15, because the corrected locators now match what the model cites. `document` misses rise from 18
+to 22 and now make the largest miss kind. Rows 0006, 0015, 0035 and 0036 hold 13 of them: the
+firefighter and other residents' statements rank above the named witness's statement. The 4 gold
+locators never retrieved sit in rows 0006, 0008, 0022 and 0036. Four answer rows abstain (0005,
+0012, 0030, 0042); three of them (0005, 0012, 0030) have the gold paragraph in the evidence. The
+next pipeline change is the rewrite in `packages/core/retrieval/rewrite.mjs` and the fusion in
+`rrf.mjs` and `hybrid.mjs`, because they cause the `document` misses and all 4 unretrieved gold
+locators. The answer prompt is the change after it, for the three abstaining rows.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, miss report
 
 The same command and store as the run below, with `RERANK=off`, run once from 14:06:10Z to
