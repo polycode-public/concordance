@@ -40,6 +40,8 @@ export const CONTEXT_PROMPT_VERSION = "context-v1";
 export const ABSTRACT_PROMPT_VERSION = "abstract-v1";
 export const EMBED_BATCH_SIZE = 32;
 export const ABSTRACT_INPUT_CHARS = 12000;
+export const ABSTRACT_TAIL_CHARS = 2000;
+export const CONTEXT_CHECKPOINT_SECTIONS = 25;
 export const MIN_TEXT_PAGE_FRACTION = 0.25;
 export const LEVEL_BATCH_BYTES = 60 * 1024;
 export const LEVELS = Object.freeze(["document", "section", "passage", "sentence"]);
@@ -348,6 +350,18 @@ export function abstractPrompt({ header, text }) {
   ].join("\n");
 }
 
+/**
+ * The text the abstract prompt sees: the start of the statement and, when the statement is
+ * longer than that, the last page, where a signature and a date sit.
+ * @param {string} text  the sections joined
+ * @param {string} lastPage
+ */
+export function abstractInput(text, lastPage) {
+  const head = text.slice(0, ABSTRACT_INPUT_CHARS);
+  if (text.length <= ABSTRACT_INPUT_CHARS) return head;
+  return `${head}\n[...]\n${lastPage.trim().slice(-ABSTRACT_TAIL_CHARS)}`;
+}
+
 async function extractString(provider, { prompt, schema }, field) {
   const result = await provider.extractJson({ prompt, schema });
   const value = result?.[field];
@@ -378,6 +392,23 @@ const INSERT_LEVEL = `
       AS u(ordinal, text, header, context_line, locator, parent_id, embedding)
   RETURNING id, ordinal`;
 
+const SELECT_PROGRESS = `
+  SELECT source_sha256, pipeline_version, model, prompt_version, section_count, contexts
+    FROM ingest_progress WHERE document_id = $1`;
+
+const START_PROGRESS = `
+  INSERT INTO ingest_progress (document_id, source_sha256, pipeline_version, model,
+                               prompt_version, section_count, contexts)
+  VALUES ($1, $2, $3, $4, $5, $6, '[]')
+  ON CONFLICT (document_id) DO UPDATE SET
+    source_sha256 = EXCLUDED.source_sha256, pipeline_version = EXCLUDED.pipeline_version,
+    model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,
+    section_count = EXCLUDED.section_count, contexts = '[]', updated_at = now()`;
+
+const APPEND_PROGRESS = `
+  UPDATE ingest_progress SET contexts = contexts || $2::jsonb, updated_at = now()
+   WHERE document_id = $1 AND jsonb_array_length(contexts) = $3::int`;
+
 const LINK_NEIGHBOURS = `
   UPDATE chunks c SET prev_id = n.prev_id, next_id = n.next_id
     FROM (SELECT id,
@@ -390,6 +421,9 @@ const LINK_NEIGHBOURS = `
  * Ingests one document's pages. Model calls run before the transaction; every row is written
  * in one transaction, so a failure leaves nothing behind. A stored document with the same
  * sha256 and pipeline version is skipped; one with another sha256 or version is replaced.
+ * The context lines are stored in batches as they are made. When the abort signal fires the run
+ * stores the lines in hand and returns status "partial"; the next run resumes after the last
+ * stored line.
  * @param {object} args
  * @param {{ page: number, text: string }[]} args.pages
  * @param {ReturnType<typeof documentMeta>} args.meta
@@ -398,8 +432,10 @@ const LINK_NEIGHBOURS = `
  * @param {string} [args.pipelineVersion]
  * @param {string} [args.extractModel]  the model id recorded in provenance
  * @param {{ tool: string, version: string | null }} [args.textTool]  the text extractor
+ * @param {AbortSignal} [args.signal]
  * @param {(line: string) => void} [args.log]
- * @returns {Promise<{ status: 'skipped' | 'ingested' | 'replaced', counts: Record<string, number> }>}
+ * @returns {Promise<{ status: 'skipped' | 'ingested' | 'replaced' | 'partial',
+ *   counts: Record<string, number>, contexts?: { done: number, total: number } }>}
  */
 export async function ingestDocument({
   pages,
@@ -409,6 +445,7 @@ export async function ingestDocument({
   pipelineVersion = PIPELINE_VERSION,
   extractModel = provider.extractModel,
   textTool = { tool: "pdftotext", version: null },
+  signal,
   log = console.log,
 }) {
   const id = meta.evidenceId;
@@ -452,21 +489,65 @@ export async function ingestDocument({
   const extractedText = pages.map((p) => p.text).join("\f");
   stage("sections-split", sections.length);
 
-  for (const [i, section] of sections.entries()) {
-    section.header = headerFor(section.locator, section.heading);
-    section.context = await extractString(
-      provider,
-      {
-        prompt: contextPrompt({
-          header: section.header,
-          previous: sections[i - 1]?.text,
-          text: section.text,
-        }),
-        schema: CONTEXT_SCHEMA,
-      },
-      "context",
+  for (const section of sections) section.header = headerFor(section.locator, section.heading);
+
+  const progressKey = [
+    meta.sha256,
+    pipelineVersion,
+    extractModel,
+    CONTEXT_PROMPT_VERSION,
+    sections.length,
+  ];
+  const { rows: progressRows } = await db.query(SELECT_PROGRESS, [id]);
+  const saved = progressRows[0];
+  const savedContexts =
+    saved && typeof saved.contexts === "string" ? JSON.parse(saved.contexts) : saved?.contexts;
+  const resumes =
+    saved &&
+    saved.source_sha256 === progressKey[0] &&
+    saved.pipeline_version === progressKey[1] &&
+    saved.model === progressKey[2] &&
+    saved.prompt_version === progressKey[3] &&
+    saved.section_count === progressKey[4] &&
+    Array.isArray(savedContexts);
+  const contexts = resumes ? [...savedContexts] : [];
+  if (!resumes) await db.query(START_PROGRESS, [id, ...progressKey]);
+  let stored = contexts.length;
+  const checkpoint = async () => {
+    if (contexts.length === stored) return;
+    await db.query(APPEND_PROGRESS, [id, JSON.stringify(contexts.slice(stored)), stored]);
+    stored = contexts.length;
+  };
+  for (let i = contexts.length; i < sections.length; i++) {
+    if (signal?.aborted) {
+      await checkpoint();
+      log(JSON.stringify({ evidenceId: id, stage: "context-lines-partial", count: i }));
+      return {
+        status: "partial",
+        counts: zero,
+        contexts: { done: i, total: sections.length },
+      };
+    }
+    contexts.push(
+      await extractString(
+        provider,
+        {
+          prompt: contextPrompt({
+            header: sections[i].header,
+            previous: sections[i - 1]?.text,
+            text: sections[i].text,
+          }),
+          schema: CONTEXT_SCHEMA,
+        },
+        "context",
+      ),
     );
+    if (contexts.length - stored >= CONTEXT_CHECKPOINT_SECTIONS) await checkpoint();
   }
+  await checkpoint();
+  sections.forEach((section, i) => {
+    section.context = contexts[i];
+  });
   stage("context-lines-done", sections.length);
   const documentHeader = headerFor(undefined);
   const abstract = await extractString(
@@ -474,10 +555,7 @@ export async function ingestDocument({
     {
       prompt: abstractPrompt({
         header: documentHeader,
-        text: sections
-          .map((s) => s.text)
-          .join("\n")
-          .slice(0, ABSTRACT_INPUT_CHARS),
+        text: abstractInput(sections.map((s) => s.text).join("\n"), pages.at(-1).text),
       }),
       schema: ABSTRACT_SCHEMA,
     },
@@ -613,6 +691,7 @@ export async function ingestDocument({
            AS u(derived, step, tool, tool_version, model, prompt_version)`,
       [meta.sha256, ...[0, 1, 2, 3, 4, 5].map((col) => provenance.map((p) => p[col]))],
     );
+    await client.query("DELETE FROM ingest_progress WHERE document_id = $1", [id]);
     await client.query("COMMIT");
     stage("rows-written", all.length);
   } catch (err) {

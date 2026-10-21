@@ -2,7 +2,11 @@
 // Copyright 2026 Polycode Limited
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createHandler, originalKey } from "../../packages/aws/ingestDocument.mjs";
+import {
+  createHandler,
+  FINISH_MARGIN_MS,
+  originalKey,
+} from "../../packages/aws/ingestDocument.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 
 const PDF = new TextEncoder().encode("%PDF-1.4 statement bytes");
@@ -135,5 +139,16 @@ describe("ingestDocument handler", () => {
   it("lets an extraction failure fail the item", async () => {
     const { handler } = setup({ failExtract: true });
     await expect(handler({ corpus: "grenfell", row: ROW })).rejects.toThrow("bad PDF");
+  });
+
+  it("stops the context lines at the finish margin and returns partial", async () => {
+    const { handler, db } = setup();
+    const result = await handler(
+      { corpus: "grenfell", row: ROW },
+      { getRemainingTimeInMillis: () => FINISH_MARGIN_MS },
+    );
+    expect(result.status).toBe("partial");
+    expect(result.contexts).toEqual({ done: 0, total: 2 });
+    expect(db.statements.some((st) => /INSERT INTO documents/.test(st.text))).toBe(false);
   });
 });

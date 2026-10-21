@@ -10,6 +10,9 @@ import { toDataApiParameter, toNamedParameters } from "../../packages/core/db.mj
 import { sha256File } from "../../packages/core/ingest/hash.mjs";
 import { splitPages } from "../../packages/core/ingest/pdfText.mjs";
 import {
+  ABSTRACT_INPUT_CHARS,
+  ABSTRACT_TAIL_CHARS,
+  abstractInput,
   batches,
   documentMeta,
   ingestDocument,
@@ -446,5 +449,115 @@ describe("levelBatches", () => {
   it("returns one batch for small rows under the default limit", () => {
     expect(levelBatches([row(0, 10), row(1, 10)])).toHaveLength(1);
     expect(LEVEL_BATCH_BYTES).toBe(60 * 1024);
+  });
+});
+
+describe("ingestDocument long statements", () => {
+  const meta = {
+    evidenceId: "IWS3",
+    corpus: "ucpi",
+    sha256: "e".repeat(64),
+    witnessId: "IWS3",
+  };
+  const longText = (n) =>
+    Array.from(
+      { length: n },
+      (_, i) => `${i + 1}. ${"I recall the meeting at the flat. ".repeat(20)}`,
+    ).join("\n");
+  const pagesOf = (n) => [
+    { page: 1, text: longText(n) },
+    { page: 2, text: "Signed 30 May 2024. The end of the statement." },
+  ];
+
+  function setup(progress) {
+    const prompts = [];
+    const statements = [];
+    let nextId = 1;
+    const query = async (text, params = []) => {
+      statements.push({ text, params });
+      if (/FROM ingest_progress/.test(text)) return { rows: progress ? [progress] : [] };
+      if (/INSERT INTO chunks/.test(text)) {
+        return { rows: params[5].map((ordinal) => ({ id: String(nextId++), ordinal })) };
+      }
+      return { rows: [] };
+    };
+    const db = { query, pool: { connect: async () => ({ query, release: () => {} }) } };
+    const provider = createFakeProvider({
+      tokens: [],
+      embedDim: 1024,
+      embedFor: () => Array.from({ length: 1024 }, () => 0.5),
+      extractJson: ({ prompt, schema }) => {
+        prompts.push({ field: schema.required[0], length: prompt.length });
+        return schema.required[0] === "context"
+          ? { context: `C${prompts.length}.` }
+          : { abstract: "A." };
+      },
+    });
+    return { prompts, statements, db, provider };
+  }
+
+  it("keeps the abstract input to the start of the statement and the last page", () => {
+    const input = abstractInput("x".repeat(100000), `${"y".repeat(5000)}END`);
+    expect(input.length).toBeLessThanOrEqual(ABSTRACT_INPUT_CHARS + ABSTRACT_TAIL_CHARS + 10);
+    expect(input.endsWith("END")).toBe(true);
+    expect(abstractInput("short", "last page")).toBe("short");
+  });
+
+  it("sends the abstract prompt a bounded text however long the statement", async () => {
+    const { prompts, db, provider } = setup();
+    await ingestDocument({ pages: pagesOf(60), meta, provider, db, log: () => {} });
+    const abstract = prompts.find((p) => p.field === "abstract");
+    expect(abstract.length).toBeLessThan(ABSTRACT_INPUT_CHARS + ABSTRACT_TAIL_CHARS + 2000);
+    const contexts = prompts.filter((p) => p.field === "context");
+    expect(Math.max(...contexts.map((p) => p.length))).toBeLessThan(4000);
+  });
+
+  it("stores the context lines made so far and returns partial when the signal fires", async () => {
+    const { statements, db, provider } = setup();
+    const controller = new AbortController();
+    let calls = 0;
+    const inner = provider.extractJson;
+    provider.extractJson = async (args) => {
+      if (++calls === 3) controller.abort();
+      return inner(args);
+    };
+    const result = await ingestDocument({
+      pages: pagesOf(10),
+      meta,
+      provider,
+      db,
+      signal: controller.signal,
+      log: () => {},
+    });
+    expect(result.status).toBe("partial");
+    expect(result.contexts.done).toBe(3);
+    const append = statements.find((s) => /UPDATE ingest_progress/.test(s.text));
+    expect(JSON.parse(append.params[1])).toHaveLength(3);
+    expect(statements.some((s) => /INSERT INTO documents/.test(s.text))).toBe(false);
+  });
+
+  it("resumes after the stored context lines and clears the progress row", async () => {
+    const stored = {
+      source_sha256: meta.sha256,
+      pipeline_version: "ingest-v2",
+      model: "fake-extract",
+      prompt_version: "context-v1",
+      section_count: 4,
+      contexts: ["One.", "Two."],
+    };
+    const { prompts, statements, db, provider } = setup(stored);
+    provider.extractModel = "fake-extract";
+    const result = await ingestDocument({
+      pages: [{ page: 1, text: "1. One.\n2. Two.\n3. Three.\n4. Four." }, ...[]],
+      meta,
+      provider,
+      db,
+      extractModel: "fake-extract",
+      log: () => {},
+    });
+    expect(result.status).toBe("ingested");
+    expect(prompts.filter((p) => p.field === "context")).toHaveLength(2);
+    expect(statements.some((s) => /INSERT INTO ingest_progress/.test(s.text))).toBe(false);
+    expect(statements.some((s) => /DELETE FROM ingest_progress/.test(s.text))).toBe(true);
   });
 });

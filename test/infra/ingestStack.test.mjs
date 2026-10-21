@@ -51,6 +51,13 @@ describe("IngestStack", () => {
     expect(map.ItemProcessor.States.RecordFailure.Output.evidenceId).toBe(
       "{% $states.input.row.evidence_id %}",
     );
+    const choice = map.ItemProcessor.States.DocumentComplete;
+    expect(map.ItemProcessor.States.IngestDocument.ResultPath).toBe("$.result");
+    expect(map.ItemProcessor.States.IngestDocument.Next).toBe("DocumentComplete");
+    expect(choice.Choices).toEqual([
+      { Variable: "$.result.status", StringEquals: "partial", Next: "IngestDocument" },
+    ]);
+    expect(choice.Default).toBe("DocumentResult");
     expect(map.Next).toBe("CheckBudgetBeforeExtraction");
     template.hasResourceProperties("AWS::StepFunctions::StateMachine", {
       StateMachineType: "STANDARD",
