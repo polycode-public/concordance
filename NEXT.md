@@ -7,11 +7,9 @@ Open work only. A row leaves this file in the same commit that closes it; comple
 
 The board runs in five sections, in this order. The section is the classification: what it takes to carry the row to completion. `machine-ask` is work a session drives with a human present to authenticate or approve (an SSO login, an AWS write outside `deploy.yml`, a GitHub setting). `human-driven` is work a person must do themselves (a decision between named alternatives, a purchase, a signature).
 
-**Deployed:** five stacks in polycode-sandbox, the newest from `deploy.yml` run 39674831274 of `c1a9e8ce` (2026-10-21: PR #63, named witnesses as a fusion boost with name-part and flat matches). The store's 38 Grenfell witnesses carry their names as aliases since the backfill of 20:23Z. Store: 38 Grenfell and 10 UCPI statements; the UCPI resume for HN43 is execution `090a8a87` (started 20:32Z).
+**Deployed:** five stacks in polycode-sandbox, the newest from `deploy.yml` run 39674831274 of `c1a9e8ce` (2026-10-21: PR #63, named witnesses as a fusion boost with name-part and flat matches). The store's 38 Grenfell witnesses carry their names as aliases since the backfill of 20:23Z. Store: 38 Grenfell statements with 9,261 assertions and 10 UCPI statements with 3,383; HN43's statement `UCPI0000036012` holds 859 assertions after the resume (execution `090a8a87`, SUCCEEDED 20:57Z).
 
 ## In flight
-
-- [ ] **O3. The UCPI resume for HN43.** HN43's extraction stopped at 370 assertions over 592 sections after a Bedrock `ServiceUnavailableException`. In flight: execution `090a8a87-a921-4a89-af07-32c879389556` of the ingest state machine (`{"corpus":"ucpi"}`, started 2026-10-21 20:32Z after deploy run 39670178164). Remainder: when it ends, read HN43's assertion count through the Data API (`SELECT count(*) FROM assertions a JOIN chunks c ON c.id = a.source_chunk_id WHERE c.document_id = 'HN43'`) and the execution's status, and update the deployed line here. **Size** 0 files. **Model** Haiku.
 
 ## Machine-only
 
