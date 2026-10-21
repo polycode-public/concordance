@@ -21,3 +21,6 @@ Licence: Crown copyright, reproduced under the Open Government Licence v3.0
 `MG11-unnumbered-pages-1-3.txt` is a made-up police statement form of three pages with invented
 sentences: prose paragraphs without numbers and the three header lines on every page. It is not
 a real statement.
+
+`backfill/grenfell/` holds a made-up `manifest.jsonl` and `sources.json` of four documents for
+`scripts/backfill-aliases.mjs`. The names and evidence ids are invented.

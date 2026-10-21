@@ -197,8 +197,9 @@ const words = (text) =>
  * name that several witnesses share names them all.
  * @param {string} query
  * @param {{ id: string, names: string[] }[]} witnesses
- * @returns {{ rest: string, nameGroups: string[][] }}
- *   `rest` is the query without the matched names; each group holds every name of one witness.
+ * @returns {{ rest: string, nameGroups: string[][], witnessIds: string[] }}
+ *   `rest` is the query without the matched names; each group holds every name of one witness;
+ *   `witnessIds` holds the id of each group's witness, in the same order.
  */
 export function namedWitnesses(query, witnesses) {
   const queryWords = words(query);
@@ -226,6 +227,7 @@ export function namedWitnesses(query, witnesses) {
   return {
     rest: queryWords.filter((_, i) => !used[i]).join(" "),
     nameGroups: [...matched.values()],
+    witnessIds: [...matched.keys()],
   };
 }
 
@@ -265,8 +267,7 @@ const requireCorpus = (corpus) => {
  * The lexical rankings of one query at both levels: the words with the witness names expanded,
  * and, when the query quotes a phrase, the exact phrases beside them.
  */
-async function lexicalRankings(db, query, witnesses, scope) {
-  const { rest, nameGroups } = namedWitnesses(query, witnesses);
+async function lexicalRankings(db, query, { rest, nameGroups }, scope) {
   const text = nameGroups.length ? rest : query;
   const phrases = quotedPhrases(query);
   const [lexicalPassage, lexicalSection, phrasePassage, phraseSection] = await Promise.all([
@@ -287,9 +288,26 @@ async function lexicalRankings(db, query, witnesses, scope) {
 }
 
 /**
+ * The scope of the vector rankings when the queries name witnesses: the documents of those
+ * witnesses, inside the witnesses that the filters keep. Null when the two share no witness,
+ * so that the vector rankings are empty.
+ * @param {RankingScope} scope
+ * @param {string[]} witnessIds
+ * @returns {RankingScope | null}
+ */
+export function namedWitnessScope(scope, witnessIds) {
+  if (!witnessIds.length) return scope;
+  const kept = scope.filters?.witnesses;
+  const witnesses = kept?.length ? witnessIds.filter((id) => kept.includes(id)) : witnessIds;
+  return witnesses.length ? { ...scope, filters: { ...scope.filters, witnesses } } : null;
+}
+
+/**
  * Embeds each query and runs the rankings of each over one corpus, then fuses every ranking of
  * every query by reciprocal rank. A non-empty `documentIds` limits every ranking to those
- * documents, and `filters` to the documents that pass them.
+ * documents, and `filters` to the documents that pass them. When any query names a witness,
+ * every vector ranking reads only the documents of the named witnesses, so that their
+ * passages rank first.
  * @param {{ queries: string[], corpus: string, provider: object, db: { query: Function },
  *   signal?: AbortSignal, documentIds?: string[] | null, filters?: RetrievalFilters | null }} args
  * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]>[] }>}
@@ -317,10 +335,17 @@ export async function retrieve({
     );
   }
   const scope = { corpus, documentIds, filters };
-  const [lexical, vectors] = await Promise.all([
-    corpusWitnesses(db, corpus).then((witnesses) =>
-      Promise.all(queries.map((query) => lexicalRankings(db, query, witnesses, scope))),
-    ),
+  const [{ lexical, vectorScope }, vectors] = await Promise.all([
+    corpusWitnesses(db, corpus).then(async (witnesses) => {
+      const named = queries.map((query) => namedWitnesses(query, witnesses));
+      const witnessIds = [...new Set(named.flatMap((n) => n.witnessIds))];
+      return {
+        lexical: await Promise.all(
+          queries.map((query, i) => lexicalRankings(db, query, named[i], scope)),
+        ),
+        vectorScope: namedWitnessScope(scope, witnessIds),
+      };
+    }),
     provider.embed(queries),
   ]);
   signal?.throwIfAborted();
@@ -332,10 +357,11 @@ export async function retrieve({
   const rankings = await Promise.all(
     queries.map(async (_, i) => {
       const literal = halfvecLiteral(vectors[i]);
-      const [vectorPassage, vectorSection] = await Promise.all([
-        vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, scope),
-        vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, scope),
-      ]);
+      const vector = (level) =>
+        vectorRanking(db, literal, provider.embedModel, level, RANK_LIMITS[level], vectorScope);
+      const [vectorPassage, vectorSection] = vectorScope
+        ? await Promise.all([vector("passage"), vector("section")])
+        : [[], []];
       return { ...lexical[i], vectorPassage, vectorSection };
     }),
   );

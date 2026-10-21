@@ -1,0 +1,4 @@
+{"url": "https://example.org/W1-a.pdf", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "bytes": 10, "fetched_at": "2026-01-01T00:00:00Z", "licence": "OGL-3.0", "evidence_id": "DOC1"}
+{"url": "https://example.org/W1-b.pdf", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "bytes": 10, "fetched_at": "2026-01-01T00:00:00Z", "licence": "OGL-3.0", "evidence_id": "DOC2"}
+{"url": "https://example.org/C1.pdf", "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "bytes": 10, "fetched_at": "2026-01-01T00:00:00Z", "licence": "OGL-3.0", "evidence_id": "DOC3"}
+{"url": "https://example.org/D4.pdf", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "bytes": 10, "fetched_at": "2026-01-01T00:00:00Z", "licence": "OGL-3.0", "evidence_id": "DOC4"}

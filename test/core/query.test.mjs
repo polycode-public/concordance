@@ -18,6 +18,7 @@ import {
 } from "../../packages/core/retrieval/expand.mjs";
 import {
   halfvecLiteral,
+  namedWitnessScope,
   namedWitnesses,
   quotedPhrases,
   retrieve,
@@ -569,6 +570,7 @@ describe("witness names and quoted phrases", () => {
     expect(namedWitnesses("What did Ada Lovelace see?", witnesses)).toEqual({
       rest: "what did see",
       nameGroups: [["IWS9", "Ada Lovelace", "Lovelace"]],
+      witnessIds: ["IWS9"],
     });
     expect(namedWitnesses("Did ada and LOVELACE meet?", witnesses)).toEqual({
       rest: "did and meet",
@@ -576,10 +578,12 @@ describe("witness names and quoted phrases", () => {
         ["IWS9", "Ada Lovelace", "Lovelace"],
         ["IWS10", "Ada"],
       ],
+      witnessIds: ["IWS9", "IWS10"],
     });
     expect(namedWitnesses("smoke in the lobby", witnesses)).toEqual({
       rest: "smoke in the lobby",
       nameGroups: [],
+      witnessIds: [],
     });
   });
 
@@ -637,6 +641,78 @@ describe("witness names and quoted phrases", () => {
     expect(phrase).toHaveLength(2);
     expect(phrase[0].text).toContain("(SELECT phraseto_tsquery('english', $2) AS q)");
     expect(phrase[0].params.slice(0, 2)).toEqual(["grenfell", "fire door"]);
+  });
+});
+
+describe("named witness scope", () => {
+  const witnessRows = [
+    { id: "IWS9", aliases: ["Ada Lovelace"] },
+    { id: "IWS10", aliases: ["Bob Example"] },
+  ];
+  const run = async (queries, filters = null) => {
+    const calls = [];
+    const db = {
+      query: async (text, params) => {
+        calls.push({ text, params });
+        if (/FROM witnesses/.test(text)) return { rows: witnessRows };
+        return { rows: [] };
+      },
+    };
+    const provider = {
+      name: "p",
+      embedModel: "m",
+      embedDim: 1024,
+      embed: async (texts) => texts.map(() => new Array(1024).fill(0.5)),
+    };
+    const result = await retrieve({ queries, corpus: "grenfell", provider, db, filters });
+    const vector = calls.filter((c) => /embedding <=>/.test(c.text));
+    const lexical = calls.filter((c) => /websearch_to_tsquery/.test(c.text));
+    return { result, vector, lexical };
+  };
+
+  it("holds the vector rankings to the documents of a witness that any query names", async () => {
+    const { vector, lexical } = await run(["What did Ada Lovelace see?", "smoke in the lobby"]);
+    expect(vector).toHaveLength(4);
+    for (const { text, params } of vector) {
+      expect(text).toMatch(/d\.witness_id = ANY\(\$\d+::text\[\]\)/);
+      expect(text).toMatch(/ORDER BY \(embedding <=> \$\d+::halfvec\) \+ 0/);
+      expect(params).toContainEqual(["IWS9"]);
+    }
+    for (const { text } of lexical) expect(text).not.toContain("d.witness_id");
+  });
+
+  it("leaves the rankings of a query that names no witness as they are", async () => {
+    const { vector, lexical } = await run(["smoke in the lobby"]);
+    expect(vector).toHaveLength(2);
+    for (const { text } of [...vector, ...lexical]) {
+      expect(text).not.toContain("document_id IN");
+      expect(text).toMatch(/ORDER BY (embedding <=> \$\d+::halfvec|ts_rank)/);
+    }
+  });
+
+  it("keeps only the named witnesses that the page's witness filter keeps", async () => {
+    const both = await run(["Did Ada Lovelace meet Bob Example?"], {
+      witnesses: ["IWS10", "IWS1"],
+    });
+    for (const { params } of both.vector) expect(params).toContainEqual(["IWS10"]);
+    const none = await run(["What did Ada Lovelace see?"], { witnesses: ["IWS1"] });
+    expect(none.vector).toEqual([]);
+    expect(none.result.rankings[0].vectorPassage).toEqual([]);
+    expect(none.result.rankings[0].vectorSection).toEqual([]);
+  });
+
+  it("keeps the other filters and the scope when it names witnesses", () => {
+    const scope = { corpus: "grenfell", documentIds: ["d1"], filters: { role: "Fire" } };
+    expect(namedWitnessScope(scope, [])).toBe(scope);
+    expect(namedWitnessScope(scope, ["IWS9"])).toEqual({
+      corpus: "grenfell",
+      documentIds: ["d1"],
+      filters: { role: "Fire", witnesses: ["IWS9"] },
+    });
+    expect(namedWitnessScope({ corpus: "grenfell" }, ["IWS9"])).toEqual({
+      corpus: "grenfell",
+      filters: { witnesses: ["IWS9"] },
+    });
   });
 });
 
