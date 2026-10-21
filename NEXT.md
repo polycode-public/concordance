@@ -21,8 +21,6 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-ask
 
-the Data API and the deployed line here. **Size** 0 files. **Model** Haiku.
-
 ## Human-driven
 
 ## Blocked
