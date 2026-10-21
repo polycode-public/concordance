@@ -118,8 +118,10 @@ CloudFront page with the abstention phrase; `deploy.yml` and its smoke step gree
 
 The Grenfell importer over the files O2 delivers, the manifest, the upload to the originals
 bucket, the first ingest execution. Exit: 20 statements in Aurora; a second execution changes no
-row counts; then 300. Ten statements are in Aurora (2026-10-19) and serve Phases 3 to 5 until W1
-widens the corpus; the second execution proved the idempotence.
+row counts. 38 Grenfell statements are in Aurora (2026-10-21: the floor 4, 16 and 17 residents
+and the floor 16 and 17 crews and control room officers) with a UCPI slice beside them; the second
+execution proved the idempotence. The 300-statement target is dropped (the operator's word,
+2026-10-21): the corpus grows by the witnesses a question needs, never by count.
 
 ### Phase 3: retrieval and citations (B1, F6, F7)
 
