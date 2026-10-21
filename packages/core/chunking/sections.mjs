@@ -16,6 +16,10 @@ const NAME_LINE = /^[\p{L}'’-]+(?: [\p{L}'’-]+){1,3}$/u;
 const PAGE_NUMBER_LINE = /^(?:\d{1,3}|Page \d{1,3} of \d{1,3})$/;
 const SIGNATURE_LINE = /\b(?:Signed|Dated)\b/;
 const MAX_FOOTER_LINES = 3;
+// A page may end with the document's own id and a dash suffix ("UCPI0000036956-WEB-1",
+// "UCPI0000036979-115"). OCR often reads the zeros of the id as the letter O.
+const DOCUMENT_REFERENCE = /^[A-Z]{3,6}[0-9O]{6,12}(?:-[A-Za-z0-9]{1,5}){0,2}$/;
+const MAX_REFERENCE_LINES = 2;
 // A police statement form repeats three lines at the top of each page: the marking, the
 // "Statement of: SURNAME, FORENAME FormMG11(T)" line and the page number.
 const MARKING_LINE = /^(?:RESTRICTED|OFFICIAL(?:[- ]SENSITIVE)?)$/;
@@ -125,6 +129,14 @@ function dropFooter(lines, footer) {
   return lines.slice(0, start);
 }
 
+/** Drops the document reference lines that end a page. */
+function dropDocumentReference(lines) {
+  let end = nonBlank(lines);
+  const floor = Math.max(0, end - MAX_REFERENCE_LINES);
+  while (end > floor && DOCUMENT_REFERENCE.test(lines[end - 1].trim())) end--;
+  return end === nonBlank(lines) ? lines : lines.slice(0, end);
+}
+
 /**
  * Drops the statement form header lines at the top of a page and returns the witness name
  * that its "Statement of:" line gives, or null.
@@ -183,7 +195,7 @@ export function splitNumberedParagraphs(pageTexts) {
   for (const { page, lines } of pages) {
     const header = dropHeader(lines);
     statementName ??= header.name;
-    const kept = dropFooter(header.lines, footer);
+    const kept = dropFooter(dropDocumentReference(header.lines), footer);
     const chars = kept.join("\n").length;
     kept.forEach((text, i) => flat.push({ page, text, chars, first: i === 0 }));
   }
@@ -273,12 +285,14 @@ export function splitNumberedParagraphs(pageTexts) {
   });
   flush();
   const numbered = out.some((section) => section.paragraph !== null);
-  return out.flatMap((section) => {
-    if (section.paragraph !== null) return [section];
-    return partsOfUnnumbered(section.lines, !numbered).map((text, i) => {
-      const part = { paragraph: null, page: section.page, text };
-      if (i === 0 && section.heading) part.heading = section.heading;
-      return part;
-    });
-  });
+  return out
+    .flatMap((section) => {
+      if (section.paragraph !== null) return [section];
+      return partsOfUnnumbered(section.lines, !numbered).map((text, i) => {
+        const part = { paragraph: null, page: section.page, text };
+        if (i === 0 && section.heading) part.heading = section.heading;
+        return part;
+      });
+    })
+    .filter((section) => !DOCUMENT_REFERENCE.test(section.text));
 }

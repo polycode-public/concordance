@@ -32,6 +32,7 @@ import { buildHeader } from "../chunking/header.mjs";
 import { slidingPassages } from "../chunking/passages.mjs";
 import { splitNumberedParagraphs } from "../chunking/sections.mjs";
 import { splitSentences } from "../chunking/sentences.mjs";
+import { InvalidReplyError } from "../providers/jsonReply.mjs";
 import { sha256File } from "./hash.mjs";
 import { pdfToPages } from "./pdfText.mjs";
 
@@ -164,6 +165,31 @@ export function levelBatches(rows, maxBytes = LEVEL_BATCH_BYTES) {
       size = 0;
     }
     current.push(row);
+    size += bytes;
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
+/**
+ * Splits vectors into INSERT batches whose serialised literals stay within maxBytes, because the
+ * RDS Data API refuses a request over 64 KB. A vector larger than maxBytes goes in a batch of its
+ * own. Order is kept.
+ * @param {{ idx: number, literal: string }[]} items
+ * @param {number} [maxBytes]
+ */
+export function vectorBatches(items, maxBytes = LEVEL_BATCH_BYTES) {
+  const out = [];
+  let current = [];
+  let size = 0;
+  for (const item of items) {
+    const bytes = arrayElementBytes(item.literal) + 16;
+    if (current.length && size + bytes > maxBytes) {
+      out.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(item);
     size += bytes;
   }
   if (current.length) out.push(current);
@@ -387,9 +413,13 @@ const INSERT_LEVEL = `
   INSERT INTO chunks (document_id, level, ordinal, text, header, context_line, locator, parent_id,
                       embedding, embedding_model, embedding_dim, pipeline_version)
   SELECT $1, $2::chunk_level, u.ordinal, u.text, u.header, u.context_line, u.locator, u.parent_id,
-         u.embedding::halfvec, $3, $4, $5
-    FROM unnest($6::int[], $7::text[], $8::text[], $9::text[], $10::jsonb[], $11::bigint[], $12::text[])
-      AS u(ordinal, text, header, context_line, locator, parent_id, embedding)
+         COALESCE(u.embedding::halfvec,
+                  (SELECT v.embedding FROM ingest_vectors v
+                    WHERE v.document_id = $1 AND v.idx = u.vector_index)),
+         $3, $4, $5
+    FROM unnest($6::int[], $7::text[], $8::text[], $9::text[], $10::jsonb[], $11::bigint[], $12::text[],
+                $13::int[])
+      AS u(ordinal, text, header, context_line, locator, parent_id, embedding, vector_index)
   RETURNING id, ordinal`;
 
 const SELECT_PROGRESS = `
@@ -409,6 +439,16 @@ const APPEND_PROGRESS = `
   UPDATE ingest_progress SET contexts = contexts || $2::jsonb, updated_at = now()
    WHERE document_id = $1 AND jsonb_array_length(contexts) = $3::int`;
 
+const COUNT_VECTORS = "SELECT count(*)::int AS n FROM ingest_vectors WHERE document_id = $1";
+
+const CLEAR_VECTORS = "DELETE FROM ingest_vectors WHERE document_id = $1";
+
+const APPEND_VECTORS = `
+  INSERT INTO ingest_vectors (document_id, idx, embedding)
+  SELECT $1, u.idx, u.embedding::halfvec
+    FROM unnest($2::int[], $3::text[]) AS u(idx, embedding)
+  ON CONFLICT (document_id, idx) DO NOTHING`;
+
 const LINK_NEIGHBOURS = `
   UPDATE chunks c SET prev_id = n.prev_id, next_id = n.next_id
     FROM (SELECT id,
@@ -421,9 +461,12 @@ const LINK_NEIGHBOURS = `
  * Ingests one document's pages. Model calls run before the transaction; every row is written
  * in one transaction, so a failure leaves nothing behind. A stored document with the same
  * sha256 and pipeline version is skipped; one with another sha256 or version is replaced.
- * The context lines are stored in batches as they are made. When the abort signal fires the run
- * stores the lines in hand and returns status "partial"; the next run resumes after the last
- * stored line.
+ * The context lines are stored in batches as they are made, then the vectors of the section,
+ * passage and sentence rows are stored in ingest_vectors after each embed call. When the abort
+ * signal fires the run keeps what it stored and returns status "partial"; the next run resumes
+ * after the last stored line and the last stored vector. The chunk rows are written in one
+ * transaction at the end, so a document is invisible to retrieval until it is complete. A context
+ * call that answers prose twice stores an empty line and counts in contextsSkipped.
  * @param {object} args
  * @param {{ page: number, text: string }[]} args.pages
  * @param {ReturnType<typeof documentMeta>} args.meta
@@ -435,7 +478,8 @@ const LINK_NEIGHBOURS = `
  * @param {AbortSignal} [args.signal]
  * @param {(line: string) => void} [args.log]
  * @returns {Promise<{ status: 'skipped' | 'ingested' | 'replaced' | 'partial',
- *   counts: Record<string, number>, contexts?: { done: number, total: number } }>}
+ *   counts: Record<string, number>, contexts?: { done: number, total: number },
+ *   embeddings?: { done: number, total: number }, contextsSkipped?: number }>}
  */
 export async function ingestDocument({
   pages,
@@ -511,7 +555,31 @@ export async function ingestDocument({
     saved.section_count === progressKey[4] &&
     Array.isArray(savedContexts);
   const contexts = resumes ? [...savedContexts] : [];
-  if (!resumes) await db.query(START_PROGRESS, [id, ...progressKey]);
+  if (!resumes) {
+    await db.query(START_PROGRESS, [id, ...progressKey]);
+    await db.query(CLEAR_VECTORS, [id]);
+  }
+  let contextsSkipped = 0;
+  const contextFor = async (i) => {
+    const args = {
+      prompt: contextPrompt({
+        header: sections[i].header,
+        previous: sections[i - 1]?.text,
+        text: sections[i].text,
+      }),
+      schema: CONTEXT_SCHEMA,
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await extractString(provider, args, "context");
+      } catch (err) {
+        if (!(err instanceof InvalidReplyError)) throw err;
+      }
+    }
+    contextsSkipped++;
+    log(JSON.stringify({ evidenceId: id, stage: "context-line-skipped", section: i }));
+    return "";
+  };
   let stored = contexts.length;
   const checkpoint = async () => {
     if (contexts.length === stored) return;
@@ -528,27 +596,59 @@ export async function ingestDocument({
         contexts: { done: i, total: sections.length },
       };
     }
-    contexts.push(
-      await extractString(
-        provider,
-        {
-          prompt: contextPrompt({
-            header: sections[i].header,
-            previous: sections[i - 1]?.text,
-            text: sections[i].text,
-          }),
-          schema: CONTEXT_SCHEMA,
-        },
-        "context",
-      ),
-    );
+    contexts.push(await contextFor(i));
     if (contexts.length - stored >= CONTEXT_CHECKPOINT_SECTIONS) await checkpoint();
   }
   await checkpoint();
   sections.forEach((section, i) => {
-    section.context = contexts[i];
+    section.context = contexts[i] || null;
   });
   stage("context-lines-done", sections.length);
+  const embedInput = (r) => `${r.header}\n${r.context ? `${r.context}\n` : ""}${r.text}`;
+  const embedBatch = async (batch) => {
+    const vectors = await provider.embed(batch.map(embedInput));
+    if (!Array.isArray(vectors) || vectors.length !== batch.length) {
+      throw new Error(`${id}: embed returned ${vectors?.length} vectors for ${batch.length} texts`);
+    }
+    return vectors.map((vector) => toHalfvecLiteral(vector, provider.embedDim));
+  };
+
+  const body = {
+    section: sections.map((s) => ({ ...s, parent: 0 })),
+    passage: sections.flatMap((s) =>
+      s.passages.map((p) => ({ ...p, header: s.header, context: s.context, parent: s.ordinal })),
+    ),
+    sentence: sections.flatMap((s) =>
+      s.sentences.map((p) => ({ ...p, header: s.header, context: s.context, parent: s.ordinal })),
+    ),
+  };
+  const bodyRows = ["section", "passage", "sentence"].flatMap((level) => body[level]);
+  bodyRows.forEach((r, i) => {
+    r.vectorIndex = i;
+  });
+  const { rows: countRows } = await db.query(COUNT_VECTORS, [id]);
+  let embedded = Math.min(Number(countRows[0]?.n ?? 0), bodyRows.length);
+  while (embedded < bodyRows.length) {
+    if (signal?.aborted) {
+      log(JSON.stringify({ evidenceId: id, stage: "embeddings-partial", count: embedded }));
+      return {
+        status: "partial",
+        counts: zero,
+        contexts: { done: sections.length, total: sections.length },
+        embeddings: { done: embedded, total: bodyRows.length },
+        contextsSkipped,
+      };
+    }
+    const batch = bodyRows.slice(embedded, embedded + EMBED_BATCH_SIZE);
+    const literals = await embedBatch(batch);
+    const items = batch.map((r, i) => ({ idx: r.vectorIndex, literal: literals[i] }));
+    for (const part of vectorBatches(items)) {
+      await db.query(APPEND_VECTORS, [id, part.map((x) => x.idx), part.map((x) => x.literal)]);
+    }
+    embedded += batch.length;
+  }
+  stage("embeddings-done", bodyRows.length);
+
   const documentHeader = headerFor(undefined);
   const abstract = await extractString(
     provider,
@@ -561,41 +661,18 @@ export async function ingestDocument({
     },
     "abstract",
   );
-
   stage("abstract-done", 1);
-  const rows = {
-    document: [
-      {
-        ordinal: 0,
-        text: abstract,
-        header: documentHeader,
-        context: null,
-        locator: { page: pages[0]?.page ?? 1, paragraph: null },
-      },
-    ],
-    section: sections.map((s) => ({ ...s, parent: 0 })),
-    passage: sections.flatMap((s) =>
-      s.passages.map((p) => ({ ...p, header: s.header, context: s.context, parent: s.ordinal })),
-    ),
-    sentence: sections.flatMap((s) =>
-      s.sentences.map((p) => ({ ...p, header: s.header, context: s.context, parent: s.ordinal })),
-    ),
+  const documentRow = {
+    ordinal: 0,
+    text: abstract,
+    header: documentHeader,
+    context: null,
+    locator: { page: pages[0]?.page ?? 1, paragraph: null },
   };
-
+  [documentRow.embedding] = await embedBatch([documentRow]);
+  const rows = { document: [documentRow], ...body };
   const all = LEVELS.flatMap((level) => rows[level]);
-  for (const batch of batches(all, EMBED_BATCH_SIZE)) {
-    const vectors = await provider.embed(
-      batch.map((r) => `${r.header}\n${r.context ? `${r.context}\n` : ""}${r.text}`),
-    );
-    if (!Array.isArray(vectors) || vectors.length !== batch.length) {
-      throw new Error(`${id}: embed returned ${vectors?.length} vectors for ${batch.length} texts`);
-    }
-    batch.forEach((r, i) => {
-      r.embedding = toHalfvecLiteral(vectors[i], provider.embedDim);
-    });
-  }
 
-  stage("embeddings-done", all.length);
   const client = await db.pool.connect();
   let status = "ingested";
   try {
@@ -658,7 +735,8 @@ export async function ingestDocument({
           levelRows.map((r) => r.context),
           levelRows.map((r) => JSON.stringify(r.locator)),
           levelRows.map((r) => (parents ? parents.get(r.parent) : null)),
-          levelRows.map((r) => r.embedding),
+          levelRows.map((r) => r.embedding ?? null),
+          levelRows.map((r) => r.vectorIndex ?? null),
         ]);
         for (const r of inserted) idsByLevel[level].set(r.ordinal, r.id);
       }
@@ -675,14 +753,16 @@ export async function ingestDocument({
         extractModel,
         ABSTRACT_PROMPT_VERSION,
       ],
-      ...sections.map((s) => [
-        sha256Text(s.context),
-        "context-line",
-        INGEST_TOOL,
-        pipelineVersion,
-        extractModel,
-        CONTEXT_PROMPT_VERSION,
-      ]),
+      ...sections
+        .filter((s) => s.context)
+        .map((s) => [
+          sha256Text(s.context),
+          "context-line",
+          INGEST_TOOL,
+          pipelineVersion,
+          extractModel,
+          CONTEXT_PROMPT_VERSION,
+        ]),
     ];
     await client.query(
       `INSERT INTO provenance (derived_sha256, source_sha256, step, tool, tool_version, model, prompt_version)
@@ -692,6 +772,7 @@ export async function ingestDocument({
       [meta.sha256, ...[0, 1, 2, 3, 4, 5].map((col) => provenance.map((p) => p[col]))],
     );
     await client.query("DELETE FROM ingest_progress WHERE document_id = $1", [id]);
+    await client.query(CLEAR_VECTORS, [id]);
     await client.query("COMMIT");
     stage("rows-written", all.length);
   } catch (err) {
@@ -703,7 +784,7 @@ export async function ingestDocument({
 
   const counts = Object.fromEntries(LEVELS.map((l) => [l, rows[l].length]));
   log(`${status.padEnd(8)}${id} ${LEVELS.map((l) => `${l}=${counts[l]}`).join(" ")}`);
-  return { status, counts };
+  return { status, counts, ...(contextsSkipped && { contextsSkipped }) };
 }
 
 /** Reads the pdftotext version line, e.g. "pdftotext version 24.02.0". */
