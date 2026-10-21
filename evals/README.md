@@ -51,6 +51,84 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, lexical boost and resident flat match
+
+The same command and store as the fusion-boost run below, with `RERANK=off`, after three changes.
+One run, from 22:35:37Z to 22:44:59Z. Spend: about $0.70 by the day's Sonnet rate; Cost Explorer
+lags by hours. The run report is `evals/grenfell/runs/2026-10-21T22-44-58-960Z-bedrock-rerank-off.json`.
+
+1. The witness name groups are a lexical boost. A query that names a witness keeps the lexical
+   rankings over the corpus and adds the rankings that need a name of the witness beside them. A
+   page witness filter stays a hard scope.
+2. A flat names only its residents: `residentFlats` reads the flats of a role that starts with
+   "resident". Of the 21 stored roles that name a flat, 16 are residents' roles; the 3 fire-brigade
+   roles and the 2 relatives' roles name a flat that is not theirs.
+3. Three gold rows add a locator of a second statement that says what the report's quote says:
+   row 0012 IWS00000069 p15 ¶87, row 0013 IWS00000069 p18 ¶103, row 0015 IWS00000113 p3 ¶15. The
+   gold set holds 67 locators.
+
+The answer prompt stays at `answer-closed-world-v4`. Rows 0006 and 0020 name no common change:
+row 0006 abstained because its gold paragraph was not in the evidence, and row 0020's evidence
+holds a related figure (IWS00000169 p126, "nearly £10 million" for the whole improvement works).
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.530 |
+| citation recall           | 0.791 |
+| unsupported-sentence rate | 0.140 |
+| abstention correctness    | 0.960 |
+
+The 100 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 53    |
+| `page`        | 27    |
+| `paragraph`   | 16    |
+| `document`    | 3     |
+| `abstain-row` | 1     |
+
+The 67 gold locators: 53 cited, 12 retrieved but not cited (4 of them with the gold paragraph
+itself in the evidence blocks), 2 not retrieved at all (rows 0022 and 0047).
+
+Against the fusion-boost run (precision 0.495, recall 0.797, unsupported 0.145, abstention 0.960;
+103 citations: 51 gold, 22 page, 18 paragraph, 11 document, 1 abstain-row; 64 gold: 51 cited, 11
+retrieved not cited, 2 not retrieved: rows 0022 and 0047), precision rises 0.035, recall falls
+0.006 on 3 more gold locators, the unsupported rate falls 0.005 and abstention is the same.
+`document` misses fall from 11 to 3 and `page` misses rise from 22 to 27. Row 0006 no longer
+abstains and cites its gold. Row 0048 no longer cites Dean Nelson. The 3 `document` misses of
+row 0012 become `paragraph` misses in IWS00000069, and rows 0003 and 0016 now cite every gold
+locator. Row 0047 abstains again: its gold page ranks 20th in the corpus-wide lexical ranking
+and still falls outside the evidence. Row 0038 cites 1 of its 2 gold locators against 2.
+
+The rows that still miss:
+
+| id            | miss                                      | cause in the run                                                                                                                                                              |
+| ------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| grenfell-0047 | abstains, 1 gold not retrieved            | for the question text, MET00008034 p8 ranks 20th in the corpus-wide lexical passage ranking; Sener Macit's two statements gain from four named rankings and fill the evidence |
+| grenfell-0022 | 1 gold not retrieved                      | names no witness and no flat; Petra Doulova's statement (IWS00000835 p9 ¶61) is not retrieved                                                                                 |
+| grenfell-0013 | 2 gold retrieved not cited, 1 `paragraph` | the model cites IWS00000069 ¶105 (they leave the flat), the gold names ¶103 (the buckets of water); ¶103 is not in the evidence                                               |
+| grenfell-0012 | 1 gold retrieved not cited, 3 `paragraph` | the model cites IWS00000069 ¶85, ¶88 and ¶89 around the gold ¶87, which is not in the evidence                                                                                |
+| grenfell-0007 | 4 `page`                                  | cites four more paragraphs of Richard Fletcher's statement (IWS00000913) beside the gold                                                                                      |
+| grenfell-0023 | 9 `page` and `paragraph`                  | a list across two statements; every gold locator is cited                                                                                                                     |
+| grenfell-0006 | 1 `document`                              | cites MET00012483 p11 (Jamal Stern) beside the gold; check whether it holds the rescue that the finding quotes                                                                |
+| grenfell-0045 | 1 `document`                              | the question names Crew Manager Stern, and the model cites his statement (MET00012483 p12); the gold names Hippel's only                                                      |
+| grenfell-0015 | 1 `document`, 1 gold retrieved not cited  | cites Edward Daffarn's statement (IWS00000169 p15 ¶50); ¶55 of Hamid Wahbi is not cited                                                                                       |
+| grenfell-0038 | 1 gold retrieved not cited                | cites MET00007764 p4 and not Angie Gotts' page 5 (MET00007694)                                                                                                                |
+| grenfell-0020 | 1 `abstain-row`                           | an abstain row that the model answers from the improvement works budget in IWS00000169 p126                                                                                   |
+
+The next changes the evidence names:
+
+1. Rows 0012 and 0013: the gold paragraph of IWS00000069 is retrieved but not in the evidence,
+   while its neighbours are. Read the block choice in `evidence.mjs` and the neighbour expansion in
+   `expand.mjs` for a paragraph whose chunks rank below its neighbours'.
+2. Row 0047: weight the named rankings against the corpus-wide ones, or link a witness to the
+   roles of the witnesses who took his calls ("control room officer; floor 16 calls").
+3. Check rows 0006 and 0045 against Jamal Stern's statement (MET00012483 p11, p12), as rows 0012,
+   0013 and 0015 were.
+4. Row 0020: decide whether a question about a part of a cost is answered by the whole budget, then
+   change the prompt or the row.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, fusion boost, name and flat matches
 
 The same command and store as the aliases run below, with `RERANK=off`, after four changes. One
