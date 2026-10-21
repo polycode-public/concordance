@@ -43,6 +43,30 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off and on
+
+Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
+reranker `eu.anthropic.claude-haiku-4-5-20251001-v1:0` when on, store polycode-sandbox Aurora with
+38 Grenfell statements and the store tools offered. The full gold set: 50 rows (46 answer, 4
+abstain), 62 locators, matched by document and paragraph, or by page when the row names no
+paragraph. Two runs of the same command, one with `RERANK=off` and one with `RERANK=model`, after
+PR #56 (the query rewrite, aliases, exact phrase, `websearch_to_tsquery` and the reranker).
+
+| Metric                    | `RERANK=off` | `RERANK=model` |
+| ------------------------- | ------------ | -------------- |
+| citation precision        | 0.372        | 0.302          |
+| citation recall           | 0.516        | 0.516          |
+| unsupported-sentence rate | 0.187        | 0.198          |
+| abstention correctness    | 0.860        | 0.940          |
+| wall time                 | 11 min 24 s  | 16 min 38 s    |
+
+The reranker cites the same share of gold locators and more non-gold ones, and takes five minutes
+longer, so the deploy keeps `RERANK` off. Against the 25-row run below, precision rose from 0.193
+to 0.372 and recall from 0.297 to 0.516; the 25 added rows name a page only for the fire-brigade
+statements, so part of the rise is the looser key on those rows. The Phase 3 exit (precision above
+0.85) is not met. Cost Explorer on the day: Sonnet 4.5 $2.56 and Haiku 4.5 $16.04, which hold the
+day's UCPI ingest and lag by hours; about $0.70 per run by the day's Sonnet rate.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, `assertions-v5`, 38 statements
 
 Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
