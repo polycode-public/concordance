@@ -21,6 +21,8 @@ ports and measurements below are the facts that check needs.
 - "We'll also transition from lambda+bedrock to a local model on fargate and ec2 tollerating a
   longer start time to pull in the parameters as we move lambda->fargate->ec2." (2026-10-19,
   evening)
+- "All these should be blocked on my word: P1 the image on this machine with compose, P2 Fargate,
+  one task, P3 EC2 with a GPU, L1 the demo laptop." (2026-10-21, evening)
 
 ## The path from Lambda to the laptop
 
@@ -56,14 +58,14 @@ Tasks, each its own board row when pulled:
 - **P1. The image and compose.** A `Dockerfile` for the server (Node 24, the page assets staged),
   `docker-compose.yml` extended with the server and Ollama beside Postgres, the corpus directory
   as a volume. Exit: `docker compose up` answers a question from the page on this machine with
-  `MODEL_PROVIDER=laptop`. [ready, after D2 and U8 so the image carries a working page]
+  `MODEL_PROVIDER=laptop`. [blocked, the operator's word (2026-10-21)]
 - **P2. The Fargate rig.** A destroyable stack: one task with the server, a Postgres sidecar and
   Ollama, the evidence synced from the originals bucket at start, an HTTP endpoint for the page.
   Exit: the eval runs in the task with `--provider=laptop` and the wall time and start time are
-  recorded below. [blocked, P1]
+  recorded below. [blocked, P1 and the operator's word]
 - **P3. The EC2 GPU rig.** A destroyable stack: a g5 instance, the EBS volume with the evidence,
   compose from user data. Exit: the same eval within tolerance of the Bedrock scores, first token
-  and tokens a second recorded below. [blocked, P2]
+  and tokens a second recorded below. [blocked, P2 and the operator's word]
 - **L1. The laptop port check.** Pulled off the board on the operator's word (2026-10-19); it
   returns when P3 is done and a machine is named. `npm run eval -- --provider=laptop` within the
   gold set's tolerance of the Bedrock scores (Phase L). [blocked, P3 and the operator's word]
