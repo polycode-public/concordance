@@ -53,10 +53,12 @@ Write all five parts into your output in full. That output becomes the job summa
 nobody watched it is the only account of what the board looked like. Do not abbreviate on the
 grounds that nobody is reading; the point is that somebody reads it later.
 
-The final message is the render alone. It starts at the mode line, the skill's first output line,
-and carries the five parts in order. Print nothing before the mode line: no sentence about what the
-run will do next, no analysis heading, and no rule or separator before the report. On a render-only
-run, the last part is the list of edits that step 3 would have made.
+The final message is the render alone. Its first line is `# Board` on its own line, followed by the
+mode line, the skill's first output line, and then the five parts in order. The workflow keeps only
+the text from the `# Board` line on, so any text before that line is dropped from the job summary.
+Print nothing before the `# Board` line: no sentence about what the run will do next, no analysis
+heading, and no rule or separator before the report. On a render-only run, the last part is the
+list of edits that step 3 would have made.
 
 ## Writing back: only when it is worth a commit
 
