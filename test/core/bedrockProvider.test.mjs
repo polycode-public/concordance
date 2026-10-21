@@ -248,7 +248,9 @@ describe("bedrock provider", () => {
     await expect(p.embed(["abc"])).rejects.toThrow(/throttled after \d+ attempts/);
     expect(waits.reduce((a, b) => a + b, 0)).toBeCloseTo(EMBED_RETRY_BUDGET_MS, 5);
     expect(client.calls).toHaveLength(waits.length + 1);
-    expect(waits.length).toBeGreaterThanOrEqual(8);
+    // The ceilings 1, 2, 4, 8, 16 and 20 seconds add up to 51, so the seventh wait reaches the
+    // budget at the latest; a lower draw of the jitter takes more waits, never fewer.
+    expect(waits.length).toBeGreaterThanOrEqual(7);
     waits.forEach((ms) => expect(ms).toBeLessThanOrEqual(20000));
   });
 
