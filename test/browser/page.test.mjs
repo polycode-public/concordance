@@ -101,12 +101,15 @@ async function stubQuery({ question, provider, signal, onStage, onEvidence, onTo
   };
 }
 
+const PDF_STREAM = `BT /F1 14 Tf 72 770 Td (IWS00000169) Tj ET
+BT /F1 12 Tf 72 700 Td (${BLOCKS[0].text}) Tj ET`;
+const PDF_PAGES = [3, 6, 7, 8, 9];
 const PDF = `%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length 60 >> stream
-BT /F1 14 Tf 72 770 Td (IWS00000169) Tj ET
+2 0 obj << /Type /Pages /Kids [${PDF_PAGES.map((n) => `${n} 0 R`).join(" ")}] /Count ${PDF_PAGES.length} >> endobj
+${PDF_PAGES.map((n) => `${n} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj`).join("\n")}
+4 0 obj << /Length ${PDF_STREAM.length} >> stream
+${PDF_STREAM}
 endstream endobj
 5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
 trailer << /Root 1 0 R >>
@@ -493,13 +496,15 @@ describe.skipIf(!enabled)(
     it("names a locator past the end of the document as a defect in the viewer bar", async () => {
       await open({ width: 1280, height: 800 });
       await ask();
-      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await evaluate(
+        `[...document.querySelectorAll(".answer .cite")].find((c) => c.textContent === "2").click(); true`,
+      );
       await until(`document.querySelector("#viewer-page.defect")`);
       expect(await evaluate(`document.getElementById("viewer-page").textContent`)).toContain(
         "past the end",
       );
       expect(await evaluate(`document.getElementById("viewer-message").textContent`)).toContain(
-        "names page 3",
+        "names page 7",
       );
     });
 
@@ -543,6 +548,161 @@ describe.skipIf(!enabled)(
         "IWS00000169",
       );
       await shot("laptop-viewer");
+    });
+
+    it("marks the cited block's first sentence on the page and leaves a page without it unmarked", async () => {
+      await open({ width: 1280, height: 800 });
+      await ask();
+      await evaluate(`document.querySelector(".answer .cite").click(); true`);
+      await until(`document.querySelectorAll("#viewer-marks .viewer-mark").length === 1`, 15_000);
+      expect(
+        await evaluate(`(() => {
+          const m = document.querySelector("#viewer-marks .viewer-mark").getBoundingClientRect();
+          const c = document.getElementById("viewer-canvas").getBoundingClientRect();
+          return m.width > 50 && m.height > 5 && m.left >= c.left && m.bottom <= c.bottom;
+        })()`),
+      ).toBe(true);
+      await shot("laptop-viewer-mark");
+      await evaluate(`document.getElementById("viewer-next").click(); true`);
+      await until(`document.getElementById("viewer-page").textContent.startsWith("p.4")`);
+      expect(await evaluate(`document.querySelectorAll("#viewer-marks .viewer-mark").length`)).toBe(
+        0,
+      );
+    });
+
+    describe("the filters", () => {
+      const sent = () => evaluate(`window.__turns`);
+      const spy = () =>
+        evaluate(`(() => {
+          window.__turns = [];
+          const send = WebSocket.prototype.send;
+          WebSocket.prototype.send = function (data) {
+            const frame = JSON.parse(data);
+            if (frame.type === "turn") window.__turns.push(frame);
+            return send.call(this, data);
+          };
+          return true;
+        })()`);
+      const askAgain = async (text) => {
+        const before = (await sent()).length;
+        await evaluate(
+          `document.getElementById("question").value = ${JSON.stringify(text)};
+           document.getElementById("ask").requestSubmit(); true`,
+        );
+        await until(`window.__turns.length === ${before + 1}`);
+        await until(`document.getElementById("cancel").disabled`);
+      };
+
+      it("sends no filters while none is set", async () => {
+        await open({ width: 1280, height: 800 });
+        await spy();
+        await askAgain(QUESTION);
+        const [frame] = await sent();
+        expect("filters" in frame).toBe(false);
+      });
+
+      it("sends the chosen filters on the turn frame and shows a chip for each, with a remove button", async () => {
+        await open({ width: 1280, height: 800 });
+        await spy();
+        expect(await evaluate(`document.querySelector("#filters summary").textContent`)).toBe(
+          "Filters",
+        );
+        await evaluate(`document.getElementById("filters").open = true; true`);
+        await until(`document.querySelectorAll("#filter-witnesses option").length > 0`);
+        expect(
+          await evaluate(
+            `[...document.querySelectorAll("#filter-witnesses option")].map((o) => o.value)`,
+          ),
+        ).toEqual(expect.arrayContaining(["IWS-A", "IWS-B", "C123"]));
+        expect(
+          await evaluate(
+            `["filter-witnesses", "filter-role", "filter-from", "filter-to"].map((id) => document.querySelector('label[for="' + id + '"]')?.textContent)`,
+          ),
+        ).toEqual([
+          "Witnesses (none chosen: all)",
+          "Role",
+          "From (statement date)",
+          "To (statement date)",
+        ]);
+        expect(await evaluate(`document.getElementById("filter-role").placeholder`)).toBe(
+          "role or floor",
+        );
+        await evaluate(`(() => {
+          const select = document.getElementById("filter-witnesses");
+          for (const o of select.options) o.selected = o.value === "IWS-A" || o.value === "C123";
+          select.dispatchEvent(new Event("change"));
+          const role = document.getElementById("filter-role");
+          role.value = "floor 12";
+          role.dispatchEvent(new Event("input"));
+          const from = document.getElementById("filter-from");
+          from.value = "2018-01-01";
+          from.dispatchEvent(new Event("change"));
+          return true;
+        })()`);
+        expect(
+          await evaluate(
+            `[...document.querySelectorAll("#filter-chips button")].map((b) => b.textContent)`,
+          ),
+        ).toEqual([
+          "Witness C123 \u00d7",
+          "Witness IWS-A \u00d7",
+          "Role: floor 12 \u00d7",
+          "From 2018-01-01 \u00d7",
+        ]);
+        await shot("laptop-filters");
+        await askAgain(QUESTION);
+        const [frame] = await sent();
+        expect(frame.filters).toEqual({
+          witnesses: ["C123", "IWS-A"],
+          role: "floor 12",
+          from: "2018-01-01",
+        });
+        await evaluate(
+          `document.querySelector('#filter-chips button[aria-label="Remove filter: Role: floor 12"]').click(); true`,
+        );
+        expect(await evaluate(`document.getElementById("filter-role").value`)).toBe("");
+        await askAgain(QUESTION);
+        expect((await sent())[1].filters).not.toHaveProperty("role");
+      });
+
+      it("refuses a From date after the To date and names it", async () => {
+        await open({ width: 1280, height: 800 });
+        await spy();
+        await evaluate(`(() => {
+          for (const [id, v] of [["filter-from", "2019-01-01"], ["filter-to", "2018-01-01"]]) {
+            const input = document.getElementById(id);
+            input.value = v;
+            input.dispatchEvent(new Event("change"));
+          }
+          document.getElementById("question").value = "A question";
+          document.getElementById("ask").requestSubmit();
+          return true;
+        })()`);
+        expect(await evaluate(`document.getElementById("filter-message").textContent`)).toContain(
+          "From date is after",
+        );
+        expect(await evaluate(`document.getElementById("filters").open`)).toBe(true);
+        expect(await sent()).toEqual([]);
+      });
+
+      it("clears the filters when the corpus changes", async () => {
+        await open({ width: 1280, height: 800 });
+        await evaluate(`(() => {
+          const role = document.getElementById("filter-role");
+          role.value = "floor 12";
+          role.dispatchEvent(new Event("input"));
+          return true;
+        })()`);
+        expect(await evaluate(`document.querySelectorAll("#filter-chips li").length`)).toBe(1);
+        await evaluate(
+          `(() => { const s = document.getElementById("corpus-select"); s.value = "ucpi"; s.dispatchEvent(new Event("change")); return true; })()`,
+        );
+        await until(`document.querySelectorAll("#filter-chips li").length === 0`);
+        expect(await evaluate(`document.getElementById("filter-role").value`)).toBe("");
+        await evaluate(
+          `(() => { const s = document.getElementById("corpus-select"); s.value = "grenfell"; s.dispatchEvent(new Event("change")); return true; })()`,
+        );
+      });
     });
 
     it("sets the root font size to 20 px in projector mode at 1920 by 1080", async () => {

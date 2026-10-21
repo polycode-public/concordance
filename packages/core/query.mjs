@@ -4,8 +4,17 @@
 // The query pipeline: hybrid retrieval, fusion, expansion, a closed-world answer with tools
 // over the store, the citation check, and the map from [En] to the locator stored at ingest.
 import { citationTags, markUnsupported } from "./checks/citations.mjs";
-import { ABSTAIN_PHRASE, PROMPT_VERSION, answerMessages, toolResultText } from "./prompt.mjs";
+import {
+  ABSTAIN_PHRASE,
+  PROMPT_VERSION,
+  RERANK_PROMPT_VERSION,
+  REWRITE_PROMPT_VERSION,
+  answerMessages,
+  toolResultText,
+} from "./prompt.mjs";
+import { addUsage } from "./providers/toolLoop.mjs";
 import { retrieveEvidence } from "./retrieval/evidence.mjs";
+import { rewriteQueries } from "./retrieval/rewrite.mjs";
 import { buildTools } from "./tools/index.mjs";
 
 /** A response with more flagged sentences than this ratio carries a warning. */
@@ -158,6 +167,11 @@ export function chatTools(tools, registry, onTool) {
  * @param {string} args.corpus the corpus the evidence comes from
  * @param {import('./providers/modelProvider.mjs').ModelProvider} args.provider
  * @param {{ query: Function }} args.db
+ * @param {import('./retrieval/hybrid.mjs').RetrievalFilters | null} [args.filters]
+ *   Limits the retrieval to the documents that pass them.
+ * @param {{ question: string, answer: string }[]} [args.history]
+ *   The earlier finished turns of the thread, oldest first. With any, the chat model rewrites the
+ *   question and the last turns into standalone search queries.
  * @param {AbortSignal} [args.signal]
  * @param {(text: string) => void} [args.onToken]
  * @param {(stage: 'rewriting' | 'retrieving' | 'answering' | 'checking' | 'tool',
@@ -170,15 +184,22 @@ export function chatTools(tools, registry, onTool) {
  *   checks: { sentences: number, supported: number, flaggedRatio: number, warning: boolean,
  *     droppedCitations: number, marks: object[], model: string | null, promptVersion: string,
  *     usage: { inputTokens: number, outputTokens: number } | null,
+ *     rewritePromptVersion: string | null, rerankPromptVersion: string | null,
  *     tools: { name: string, input: object, rows: number, ms: number }[],
  *     timings: { rewriting: number, retrieving: number, answering: number, checking: number } },
- *   evidenceBlocks: object[], retrievedIds: string[] }>}
+ *   evidenceBlocks: object[], retrievedIds: string[], queryRewrites: string[],
+ *   rerankerScores: Record<string, number> }>}
+ *   `usage` adds the rewrite call to the answer's calls; `queryRewrites` is empty when no rewrite
+ *   ran; `rerankerScores` maps each reranked chunk id to its score and is empty when the provider
+ *   has no rerank(). The reranker scores against the rewrites when there are any.
  */
 export async function runQuery({
   question,
   corpus,
   provider,
   db,
+  filters = null,
+  history = [],
   signal,
   onToken,
   onStage,
@@ -194,10 +215,19 @@ export async function runQuery({
     stageStart = now;
   };
   onStage?.("rewriting");
+  const rewrite = await rewriteQueries({ question, history, provider, signal });
+  signal?.throwIfAborted();
   endStage("rewriting");
   onStage?.("retrieving");
-  const { fused, blocks: retrieved } = await retrieveEvidence({
+  const {
+    fused,
+    blocks: retrieved,
+    rerankerScores,
+  } = await retrieveEvidence({
     question,
+    queries: rewrite.queries,
+    rerankQuestion: rewrite.rewrites.length ? rewrite.rewrites.join("\n") : question,
+    filters,
     corpus,
     provider,
     db,
@@ -262,8 +292,19 @@ export async function runQuery({
     answer,
     abstained,
     citations,
-    checks: { ...checks, model, promptVersion: PROMPT_VERSION, usage, tools: toolCalls, timings },
+    checks: {
+      ...checks,
+      model,
+      promptVersion: PROMPT_VERSION,
+      rewritePromptVersion: rewrite.rewrites.length ? REWRITE_PROMPT_VERSION : null,
+      rerankPromptVersion: rerankerScores ? RERANK_PROMPT_VERSION : null,
+      usage: addUsage(usage, rewrite.usage),
+      tools: toolCalls,
+      timings,
+    },
     evidenceBlocks,
     retrievedIds: fused.map((f) => f.id),
+    queryRewrites: rewrite.rewrites,
+    rerankerScores: rerankerScores ?? {},
   };
 }

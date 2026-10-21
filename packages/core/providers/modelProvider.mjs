@@ -39,6 +39,10 @@
  *   with an AbortError.
  * @property {(args: { prompt: string, schema?: object, signal?: AbortSignal }) => Promise<object>} extractJson
  *   Returns one JSON object from the extraction model.
+ * @property {(question: string, passages: { id: string, header?: string | null, text: string }[],
+ *   options?: { signal?: AbortSignal }) => Promise<{ id: string, score: number }[]>} [rerank]
+ *   Optional. Scores each passage against the question, one score per passage in passage order;
+ *   a higher score is more relevant.
  */
 
 /** The model stopped at its output limit, so its reply is cut off. */

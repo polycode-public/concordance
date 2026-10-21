@@ -9,8 +9,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../../scripts/db-migrate.mjs";
 import { DEFAULT_DATABASE_URL } from "../../packages/core/db.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
-import { PROMPT_VERSION } from "../../packages/core/prompt.mjs";
+import { PROMPT_VERSION, REWRITE_PROMPT_VERSION } from "../../packages/core/prompt.mjs";
 import { runQuery } from "../../packages/core/query.mjs";
+import { lexicalRanking, retrieve } from "../../packages/core/retrieval/hybrid.mjs";
 import { createServer } from "../../packages/local/server.mjs";
 
 const enabled = process.env.CONCORDANCE_DB_TESTS === "1";
@@ -59,25 +60,43 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
     db = { query: (text, params) => client.query(text, params) };
 
     await client.query(
-      `INSERT INTO documents (id, corpus, source_url, fetched_at, sha256, licence, format, title, pipeline_version)
-       VALUES ('IWS9', 'grenfell', 'https://example.org/IWS9.pdf', now(), $1, 'OGL-3.0', 'pdf', 'Statement of IWS9', 'test')`,
+      `INSERT INTO witnesses (id, role, aliases) VALUES
+         ('IWS9', 'Resident', '{"Ada Lovelace"}'), ('IWS10', 'Firefighter', '{}')`,
+    );
+    await client.query(
+      `INSERT INTO documents (id, corpus, source_url, fetched_at, sha256, licence, format, title,
+                             witness_id, role, statement_date, pipeline_version)
+       VALUES ('IWS9', 'grenfell', 'https://example.org/IWS9.pdf', now(), $1, 'OGL-3.0', 'pdf',
+               'Statement of IWS9', 'IWS9', NULL, '2017-09-01', 'test'),
+              ('IWS10', 'grenfell', 'https://example.org/IWS10.pdf', now(), $1, 'OGL-3.0', 'pdf',
+               'Statement of IWS10', 'IWS10', 'Firefighter', '2018-03-01', 'test')`,
       ["0".repeat(64)],
     );
-    const insert = async (name, level, ordinal, text, locator, embedding, parent = null) => {
+    const insert = async (
+      name,
+      level,
+      ordinal,
+      text,
+      locator,
+      embedding,
+      parent = null,
+      document = "IWS9",
+    ) => {
       const { rows } = await client.query(
         `INSERT INTO chunks (document_id, level, ordinal, text, header, locator, parent_id,
                              embedding, embedding_model, embedding_dim, pipeline_version)
-         VALUES ('IWS9', $1, $2, $3, $4, $5, $6, $7::halfvec, $8, $9, 'test') RETURNING id`,
+         VALUES ($10, $1, $2, $3, $4, $5, $6, $7::halfvec, $8, $9, 'test') RETURNING id`,
         [
           level,
           ordinal,
           text,
-          `[Grenfell Inquiry | Witness IWS9 | p.${locator.page} para ${locator.paragraph}]`,
+          `[Grenfell Inquiry | Witness ${document} | p.${locator.page} para ${locator.paragraph}]`,
           locator,
           parent,
           literal(embedding),
           embedding ? EMBED_MODEL : null,
           embedding ? DIM : null,
+          document,
         ],
       );
       ids[name] = String(rows[0].id);
@@ -134,6 +153,16 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
       null,
       ids.s2,
     );
+    await insert(
+      "q1",
+      "passage",
+      1,
+      "Smoke filled the lobby.",
+      { page: 1, paragraph: 1 },
+      null,
+      null,
+      "IWS10",
+    );
     const chain = [ids.p1, ids.p2, ids.p3, ids.p4];
     for (let i = 0; i < chain.length; i++) {
       await client.query("UPDATE chunks SET prev_id = $2, next_id = $3 WHERE id = $1", [
@@ -159,6 +188,80 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
     expect(result.retrievedIds[0]).toBe(ids.p2);
     expect(result.retrievedIds).toEqual(expect.arrayContaining([ids.p3, ids.s2]));
     expect(result.retrievedIds).not.toContain(ids.p1);
+  });
+
+  it("finds the smoke passage for a question in natural words", async () => {
+    const question = "what did the witness say about the smoke";
+    const before = await client.query(
+      `SELECT id FROM chunks WHERE tsv @@ plainto_tsquery('english', $1)`,
+      [question],
+    );
+    expect(before.rows).toEqual([]);
+    const ranked = await lexicalRanking(db, question, "passage", 40, { corpus: "grenfell" });
+    expect(new Set(ranked.slice(0, 2))).toEqual(new Set([ids.p2, ids.q1]));
+    expect(ranked.slice(2)).toEqual(expect.arrayContaining([ids.p1]));
+  });
+
+  it("matches a witness named by an alias through the witness id in the header", async () => {
+    const scope = { corpus: "grenfell" };
+    const unexpanded = await lexicalRanking(db, "Ada Lovelace smoke", "passage", 40, scope);
+    expect(new Set(unexpanded)).toEqual(new Set([ids.p2, ids.q1]));
+    const { rankings } = await retrieve({
+      queries: ["Ada Lovelace and the smoke"],
+      corpus: "grenfell",
+      provider: testProvider(),
+      db,
+    });
+    expect(rankings[0].lexicalPassage).toEqual([ids.p2]);
+    const both = await retrieve({
+      queries: ["smoke"],
+      corpus: "grenfell",
+      provider: testProvider(),
+      db,
+    });
+    expect(new Set(both.rankings[0].lexicalPassage)).toEqual(new Set([ids.p2, ids.q1]));
+  });
+
+  it("ranks a quoted phrase only where its words stand in order", async () => {
+    const run = async (query) =>
+      (await retrieve({ queries: [query], corpus: "grenfell", provider: testProvider(), db }))
+        .rankings[0];
+    const exact = await run('Who said "full of smoke"?');
+    expect(exact.phrasePassage).toEqual([ids.p2]);
+    const reversed = await run('"smoke full"');
+    expect(reversed.phrasePassage).toEqual([]);
+    expect(reversed.lexicalPassage).toEqual([ids.p2, ids.q1]);
+    expect((await run("full of smoke")).phrasePassage).toBeUndefined();
+  });
+
+  it("filters by witness, by role text and by statement date", async () => {
+    const ranked = async (filters) =>
+      (
+        await retrieve({
+          queries: ["smoke"],
+          corpus: "grenfell",
+          provider: testProvider(),
+          db,
+          filters,
+        })
+      ).rankings[0];
+    expect((await ranked({ role: "resident" })).lexicalPassage).toEqual([ids.p2]);
+    expect((await ranked({ role: "FIRE" })).lexicalPassage).toEqual([ids.q1]);
+    expect((await ranked({ witnesses: ["IWS10"] })).lexicalPassage).toEqual([ids.q1]);
+    expect((await ranked({ from: "2018-01-01" })).lexicalPassage).toEqual([ids.q1]);
+    expect((await ranked({ to: "2017-12-31" })).lexicalPassage).toEqual([ids.p2]);
+    expect((await ranked({ from: "2017-09-01", to: "2017-09-01" })).lexicalPassage).toEqual([
+      ids.p2,
+    ]);
+    expect((await ranked({ witnesses: ["IWS10"] })).vectorPassage).toEqual([]);
+    expect((await ranked({ witnesses: ["IWS9"] })).vectorPassage).toEqual([ids.p2, ids.p3]);
+    await client.query("UPDATE witnesses SET cipher_only = true WHERE id = 'IWS10'");
+    try {
+      expect((await ranked({ role: "fire" })).lexicalPassage).toEqual([]);
+      expect((await ranked({ witnesses: ["IWS10"] })).lexicalPassage).toEqual([ids.q1]);
+    } finally {
+      await client.query("UPDATE witnesses SET cipher_only = false WHERE id = 'IWS10'");
+    }
   });
 
   it("expands the hit to its neighbours and builds headed evidence blocks", async () => {
@@ -265,6 +368,78 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
         evidence: 1,
         locator: { document: "IWS9", page: 1, paragraph: 2 },
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rewrites the second turn of a thread from the first and stores the rewrite and the reranker scores", async () => {
+    const base = testProvider();
+    const provider = {
+      ...base,
+      async rerank(question, passages) {
+        return passages.map(({ id }) => ({ id, score: id === ids.p3 ? 3 : 1 }));
+      },
+      async chat(args) {
+        if (args.promptVersion === REWRITE_PROMPT_VERSION) {
+          rewritePrompts.push(args.messages.at(-1).content);
+          return {
+            text: '{"queries": ["dark stairs smoke"]}',
+            model: "fake-chat",
+            promptVersion: args.promptVersion,
+            usage: null,
+          };
+        }
+        return base.chat(args);
+      },
+    };
+    const rewritePrompts = [];
+    const app = await createServer({ provider, db });
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${app.port}/ws`);
+      await new Promise((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+      const finished = [];
+      ws.on("message", (data) => {
+        const frame = JSON.parse(String(data));
+        if (frame.type === "done" || frame.type === "error") finished.push(frame);
+      });
+      const ask = async (turnId, text) => {
+        const before = finished.length;
+        ws.send(JSON.stringify({ type: "turn", thread: "r", turnId, text, corpus: "grenfell" }));
+        while (finished.length === before) await new Promise((r) => setTimeout(r, 10));
+        return finished.at(-1);
+      };
+      const turnRow = async (turnId) => {
+        for (let i = 0; i < 100; i++) {
+          const { rows } = await client.query(
+            `SELECT query_rewrites, retrieved_ids, reranker_scores FROM session_turns
+              WHERE thread = 'r' AND turn_id = $1`,
+            [turnId],
+          );
+          if (rows.length) return rows[0];
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        throw new Error(`turn ${turnId} was not written`);
+      };
+      expect((await ask("r1", "dark stairs")).type).toBe("done");
+      const first = await turnRow("r1");
+      expect(first.query_rewrites).toEqual([]);
+      expect(first.retrieved_ids.map(String)[0]).toBe(ids.p2);
+      expect(rewritePrompts).toEqual([]);
+      const second = await ask("r2", "And what was in them?");
+      ws.close();
+      expect(second.type).toBe("done");
+      expect(second.checks.rewritePromptVersion).toBe(REWRITE_PROMPT_VERSION);
+      expect(rewritePrompts).toHaveLength(1);
+      expect(rewritePrompts[0]).toContain("Turn 1 question: dark stairs");
+      const row = await turnRow("r2");
+      expect(row.query_rewrites).toEqual(["dark stairs smoke"]);
+      expect(row.reranker_scores[ids.p3]).toBe(3);
+      expect(row.reranker_scores[ids.p2]).toBe(1);
+      expect(first.reranker_scores[ids.p3]).toBe(3);
     } finally {
       await app.close();
     }

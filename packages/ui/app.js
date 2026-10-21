@@ -5,6 +5,7 @@ import { mountConversations, replayTurns } from "./conversations.js";
 import { chooseCorpus, configCorpora, readStoredCorpus, storeCorpus } from "./corpus.mjs";
 import { mountExport } from "./export.js";
 import { mountFacts } from "./facts.js";
+import { mountFilters } from "./filters.js";
 import { mountReports } from "./reports.js";
 import { showSpend } from "./spend.js";
 import { chipInline, renderMarkdown } from "./markdown.mjs";
@@ -37,6 +38,7 @@ let current = null;
 /** @type {Turn | null} The last turn started; the keys act on its chips. */
 let newest = null;
 let opening = null;
+let openingText = "";
 /** @type {Turn | null} The turn whose blocks the evidence panel shows. */
 let evidenceTurn = null;
 
@@ -52,6 +54,8 @@ let evidenceTurn = null;
 let reports = null;
 /** @type {ReturnType<typeof mountFacts> | null} */
 let facts = null;
+/** @type {ReturnType<typeof mountFilters> | null} */
+let filters = null;
 /** @type {ReturnType<typeof mountConversations> | null} */
 let conversations = null;
 /** The id of the corpus every frame and route reads. */
@@ -103,6 +107,7 @@ async function switchCorpus(id) {
   if (id === corpus || !corpora.some((c) => c.id === id)) return;
   corpus = id;
   storeCorpus(id);
+  filters?.clear();
   nameCorpus();
   startNew();
   mountSuggestions(id);
@@ -145,7 +150,7 @@ async function connect() {
 function onFrame(frame) {
   if (frame.requestId && reports?.onFrame(frame)) return;
   if (frame.type === "opened") {
-    if (frame.docId === opening) openPdf(frame);
+    if (frame.docId === opening) openPdf({ ...frame, text: openingText });
     opening = null;
     return;
   }
@@ -229,7 +234,7 @@ function chip(block, turn) {
   button.setAttribute("aria-label", referenceName(block));
   button.addEventListener("click", () => {
     openBlock(turn, block.evidence);
-    open(block.documentId, block.locator);
+    open(block.documentId, block.locator, block.text);
   });
   return button;
 }
@@ -242,12 +247,13 @@ function openBlock(turn, evidence) {
   if (details) details.open = true;
 }
 
-function open(documentId, locator) {
+function open(documentId, locator, text = "") {
   if (ws?.readyState !== WebSocket.OPEN) {
     showViewerMessage("Not connected to the server.");
     return;
   }
   opening = documentId;
+  openingText = text;
   ws.send(JSON.stringify({ type: "open", docId: documentId, locator, corpus }));
 }
 
@@ -348,7 +354,7 @@ function renderEvidence(turn, cited) {
       ref.type = "button";
       ref.addEventListener("click", () => {
         openBlock(turn, block.evidence);
-        open(block.documentId, block.locator);
+        open(block.documentId, block.locator, block.text);
       });
       summary.append(chip(block, turn), ref);
       if (block.text) summary.append(el("span", "first-line small", block.text.split("\n")[0]));
@@ -610,12 +616,23 @@ form.addEventListener("submit", (event) => {
     if (reports.requestEdit(target, text, note)) question.value = "";
     return;
   }
+  if (filters?.check()) return;
   const turn = startTurn(text);
   current = turn;
   newest = turn;
   question.value = "";
   cancelButton.disabled = false;
-  ws.send(JSON.stringify({ type: "turn", thread, turnId: turn.id, text, attachments: [], corpus }));
+  ws.send(
+    JSON.stringify({
+      type: "turn",
+      thread,
+      turnId: turn.id,
+      text,
+      attachments: [],
+      corpus,
+      filters: filters?.value(),
+    }),
+  );
 });
 
 question.addEventListener("keydown", (event) => {
@@ -706,6 +723,11 @@ if (config) {
     opener.textContent = "Conversations unavailable";
     opener.title = err.message;
   }
+  filters = mountFilters(config, {
+    token,
+    corpus: chosen,
+    extraWitnesses: () => [...documents.values()].map((entry) => entry.document?.witnessId),
+  });
   try {
     reports = mountReports(config, {
       token,

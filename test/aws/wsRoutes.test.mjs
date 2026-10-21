@@ -87,6 +87,7 @@ describe("WebSocket routes", () => {
           text: "Dark?",
           attachments: [],
           corpus: "grenfell",
+          filters: null,
         },
         ...TARGET,
         userId: "sub-1",

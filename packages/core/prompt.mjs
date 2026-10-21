@@ -55,3 +55,66 @@ export function answerMessages(question, blocks) {
     { role: "user", content: `${evidencePrompt(blocks)}\n\nQuestion: ${question}` },
   ];
 }
+
+export const REWRITE_PROMPT_VERSION = "rewrite-standalone-v1";
+
+/** The most search queries one rewrite returns. */
+export const MAX_REWRITES = 3;
+
+/** The characters of an earlier answer that the rewrite reads. */
+export const REWRITE_ANSWER_CHARS = 1200;
+
+export const REWRITE_SYSTEM_PROMPT = [
+  "You turn the last question of a conversation about witness statements into search queries for a search over those statements.",
+  "Each query must stand alone: replace every pronoun and every reference to an earlier turn with the witness id, name, place, time or thing it means.",
+  `Write one query when the question asks one thing, and at most ${MAX_REWRITES} when it asks several things.`,
+  "Keep every phrase in double quotes, every witness id and every name exactly as written.",
+  "Use only words from the conversation and add nothing from prior knowledge.",
+  'Answer with exactly one JSON object of the form {"queries": ["..."]} and nothing else.',
+].join(" ");
+
+/**
+ * The chat messages that ask for the standalone search queries of a question, given the earlier
+ * turns of its thread, oldest first. The [En] tags of an earlier answer are removed.
+ * @param {string} question
+ * @param {{ question: string, answer: string }[]} history
+ */
+export function rewriteMessages(question, history) {
+  const turns = history.map((turn, i) => {
+    const answer = turn.answer
+      .replace(/\s*\[E\d+\]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return `Turn ${i + 1} question: ${turn.question}\nTurn ${i + 1} answer: ${answer.slice(0, REWRITE_ANSWER_CHARS)}`;
+  });
+  return [
+    { role: "system", content: REWRITE_SYSTEM_PROMPT },
+    { role: "user", content: `${turns.join("\n\n")}\n\nLast question: ${question}` },
+  ];
+}
+
+export const RERANK_PROMPT_VERSION = "rerank-relevance-v1";
+
+/** The characters of one passage that the reranker reads. */
+export const RERANK_PASSAGE_CHARS = 1500;
+
+/**
+ * The prompt that asks the extraction model to score each passage against the question.
+ * @param {string} question
+ * @param {{ header?: string | null, text: string }[]} passages
+ */
+export function rerankPrompt(question, passages) {
+  const listed = passages
+    .map((p, i) => `[P${i + 1}] ${p.header ?? ""}\n${p.text.slice(0, RERANK_PASSAGE_CHARS)}`)
+    .join("\n\n");
+  return [
+    "You score how well each passage from a witness statement answers a question.",
+    "Judge only from the passage text and use no prior knowledge.",
+    "Score 3 when the passage answers the question directly, 2 when it holds part of the answer, 1 when it is on the topic and does not answer, and 0 when it is not relevant.",
+    `Give every passage from P1 to P${passages.length} one score, as {"scores": [{"passage": 1, "score": 3}, ...]}.`,
+    "",
+    `Question: ${question}`,
+    "",
+    listed,
+  ].join("\n");
+}

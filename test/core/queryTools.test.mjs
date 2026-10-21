@@ -48,6 +48,7 @@ function storeWith({ firstChunk = "2", failFacts = false } = {}) {
       if (/FROM chunks WHERE id = ANY/.test(text)) {
         return { rows: CHUNKS.filter((c) => params[0].includes(c.id)) };
       }
+      if (/SELECT w.id, w.aliases FROM witnesses w/.test(text)) return { rows: [] };
       throw new Error(`unexpected statement: ${text}`);
     },
   };

@@ -44,7 +44,62 @@ describe("parseClientFrame", () => {
       text: "hi",
       attachments: [],
       corpus: "grenfell",
+      filters: null,
     });
+  });
+
+  it("parses the filters of a turn and leaves out the empty ones", () => {
+    const turn = (filters) =>
+      parseClientFrame(
+        JSON.stringify({
+          type: "turn",
+          thread: "t",
+          turnId: "u",
+          text: "hi",
+          corpus: "grenfell",
+          filters,
+        }),
+      ).filters;
+    expect(
+      turn({
+        witnesses: ["IWS1", "IWS1", "IWS2"],
+        role: " firefighter ",
+        from: "2017-06-14",
+        to: "2018-12-31",
+      }),
+    ).toEqual({
+      witnesses: ["IWS1", "IWS2"],
+      role: "firefighter",
+      from: "2017-06-14",
+      to: "2018-12-31",
+    });
+    expect(turn({ witnesses: [], role: "  " })).toBeNull();
+    expect(turn({ to: "2018-01-01" })).toEqual({ to: "2018-01-01" });
+  });
+
+  it("rejects a malformed filter", () => {
+    const turn = (filters) =>
+      parseClientFrame(
+        JSON.stringify({
+          type: "turn",
+          thread: "t",
+          turnId: "u",
+          text: "hi",
+          corpus: "grenfell",
+          filters,
+        }),
+      );
+    expect(() => turn([])).toThrow(/must be an object/);
+    expect(() => turn({ witness: ["IWS1"] })).toThrow(/unknown turn filter witness/);
+    expect(() => turn({ witnesses: "IWS1" })).toThrow(/array of witness ids/);
+    expect(() => turn({ witnesses: [""] })).toThrow(/array of witness ids/);
+    expect(() => turn({ witnesses: Array.from({ length: 51 }, (_, i) => `W${i}`) })).toThrow(
+      /more than 50/,
+    );
+    expect(() => turn({ role: 3 })).toThrow(/role must be text/);
+    expect(() => turn({ from: "2018-02-30" })).toThrow(/from must be a YYYY-MM-DD date/);
+    expect(() => turn({ to: "14/06/2017" })).toThrow(/to must be a YYYY-MM-DD date/);
+    expect(() => turn({ from: "2018-01-02", to: "2018-01-01" })).toThrow(/after/);
   });
 
   it("parses a cancel", () => {

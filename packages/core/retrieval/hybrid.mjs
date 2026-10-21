@@ -42,25 +42,191 @@ export function halfvecLiteral(vector) {
   return `[${vector.join(",")}]`;
 }
 
+/** Collects the parameters of one statement and names each one `$n` in the order it is added. */
+function sqlParams() {
+  const values = [];
+  return {
+    values,
+    /** @param {unknown} value @param {string} [cast] */
+    p: (value, cast = "") => {
+      values.push(value);
+      return `$${values.length}${cast}`;
+    },
+  };
+}
+
 /**
- * Chunk ids of one corpus at one level, best lexical match first.
- * @param {{ query: Function }} db
- * @param {string} question
- * @param {string} level
- * @param {number} limit
- * @param {{ corpus: string, documentIds?: string[] | null }} scope
+ * @typedef {{ witnesses?: string[], role?: string, from?: string, to?: string }} RetrievalFilters
+ *   `witnesses` are witness ids; `role` is a substring of the role the page shows, without case;
+ *   `from` and `to` bound the statement date, both ends included, as YYYY-MM-DD.
+ * @typedef {{ corpus: string, documentIds?: string[] | null, filters?: RetrievalFilters | null }}
+ *   RankingScope
  */
-export async function lexicalRanking(db, question, level, limit, { corpus, documentIds = null }) {
+
+/**
+ * The predicates that hold a ranking to its corpus and, when named, to its documents and to the
+ * documents that pass the filters. A cipher-only witness shows no role, so a role filter never
+ * matches its documents.
+ * @param {RankingScope} scope
+ */
+function scopePredicates({ corpus, documentIds = null, filters = null }, p) {
   requireCorpus(corpus);
-  const scoped = documentIds?.length > 0;
+  const where = [`corpus = ${p(corpus)}`];
+  if (documentIds?.length > 0) where.push(`document_id = ANY(${p(documentIds, "::text[]")})`);
+  const kept = [];
+  if (filters?.witnesses?.length > 0) {
+    kept.push(`d.witness_id = ANY(${p(filters.witnesses, "::text[]")})`);
+  }
+  if (filters?.role) {
+    kept.push(
+      `NOT coalesce(w.cipher_only, false)`,
+      `strpos(lower(coalesce(d.role, w.role, '')), lower(${p(filters.role)})) > 0`,
+    );
+  }
+  if (filters?.from) kept.push(`d.statement_date >= ${p(filters.from, "::date")}`);
+  if (filters?.to) kept.push(`d.statement_date <= ${p(filters.to, "::date")}`);
+  if (kept.length) {
+    where.push(
+      `document_id IN (SELECT d.id FROM documents d LEFT JOIN witnesses w ON w.id = d.witness_id
+                        WHERE d.corpus = ${p(corpus)} AND ${kept.join(" AND ")})`,
+    );
+  }
+  return where;
+}
+
+/** Chunk ids that match one tsquery, best ts_rank first. */
+async function tsqueryRanking(db, tsquery, level, limit, scope) {
+  const { values, p } = sqlParams();
+  const where = scopePredicates(scope, p);
+  const q = tsquery(p);
   const { rows } = await db.query(
-    `SELECT id FROM chunks
-      WHERE corpus = $4 AND level = $2::chunk_level AND tsv @@ plainto_tsquery('english', $1)${scoped ? " AND document_id = ANY($5::text[])" : ""}
-      ORDER BY ts_rank(tsv, plainto_tsquery('english', $1)) DESC, id
-      LIMIT $3`,
-    scoped ? [question, level, limit, corpus, documentIds] : [question, level, limit, corpus],
+    `SELECT id FROM chunks, (SELECT ${q} AS q) AS search
+      WHERE ${where.join(" AND ")} AND level = ${p(level, "::chunk_level")} AND tsv @@ search.q
+      ORDER BY ts_rank(tsv, search.q) DESC, id
+      LIMIT ${p(limit)}`,
+    values,
   );
   return rows.map((r) => String(r.id));
+}
+
+/**
+ * Chunk ids of one corpus at one level, best lexical match first. Any word of the query may
+ * match, and ts_rank puts the chunks that match more of them first; each group of witness names
+ * must match by one of its names.
+ * @param {{ query: Function }} db
+ * @param {string} query
+ * @param {string} level
+ * @param {number} limit
+ * @param {RankingScope} scope
+ * @param {string[][]} [nameGroups]  the id and aliases of each witness the query names
+ */
+export function lexicalRanking(db, query, level, limit, scope, nameGroups = []) {
+  const plain = (p, text) => `plainto_tsquery('english', ${p(text)})`;
+  const anyWord = words(query)
+    .filter((w) => w !== "or")
+    .join(" or ");
+  return tsqueryRanking(
+    db,
+    (p) =>
+      [
+        `websearch_to_tsquery('english', ${p(anyWord)})`,
+        ...nameGroups.map((names) => `(${names.map((n) => plain(p, n)).join(" || ")})`),
+      ].join(" && "),
+    level,
+    limit,
+    scope,
+  );
+}
+
+/**
+ * Chunk ids of one corpus at one level that hold every phrase with its words in order, best
+ * match first.
+ * @param {{ query: Function }} db
+ * @param {string[]} phrases
+ * @param {string} level
+ * @param {number} limit
+ * @param {RankingScope} scope
+ */
+export function phraseRanking(db, phrases, level, limit, scope) {
+  if (!phrases.length) throw new Error("a phrase ranking needs a phrase");
+  return tsqueryRanking(
+    db,
+    (p) => phrases.map((phrase) => `phraseto_tsquery('english', ${p(phrase)})`).join(" && "),
+    level,
+    limit,
+    scope,
+  );
+}
+
+const QUOTED = /"([^"]+)"|\u201c([^\u201d]+)\u201d/g;
+
+/**
+ * The phrases a query puts in straight or curly double quotes, trimmed, without empty ones.
+ * @param {string} query
+ */
+export function quotedPhrases(query) {
+  return [...query.matchAll(QUOTED)].map((m) => (m[1] ?? m[2]).trim()).filter(Boolean);
+}
+
+/**
+ * The witnesses that have a document in one corpus, each with its id and aliases.
+ * @param {{ query: Function }} db
+ * @param {string} corpus
+ * @returns {Promise<{ id: string, names: string[] }[]>}
+ */
+export async function corpusWitnesses(db, corpus) {
+  requireCorpus(corpus);
+  const { rows } = await db.query(
+    `SELECT w.id, w.aliases FROM witnesses w
+      WHERE EXISTS (SELECT 1 FROM documents d WHERE d.witness_id = w.id AND d.corpus = $1)
+      ORDER BY w.id`,
+    [corpus],
+  );
+  return rows.map((r) => ({ id: String(r.id), names: [String(r.id), ...(r.aliases ?? [])] }));
+}
+
+const words = (text) =>
+  text
+    .normalize("NFC")
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/**
+ * Finds the witnesses a query names by id or by any alias, compared word by word without case.
+ * The longest name is matched first and each word of the query is part of at most one name; a
+ * name that several witnesses share names them all.
+ * @param {string} query
+ * @param {{ id: string, names: string[] }[]} witnesses
+ * @returns {{ rest: string, nameGroups: string[][] }}
+ *   `rest` is the query without the matched names; each group holds every name of one witness.
+ */
+export function namedWitnesses(query, witnesses) {
+  const queryWords = words(query);
+  const used = new Array(queryWords.length).fill(false);
+  const byName = new Map();
+  for (const w of witnesses) {
+    for (const name of w.names) {
+      const nameWords = words(name);
+      if (!nameWords.length) continue;
+      const k = nameWords.join(" ");
+      if (!byName.has(k)) byName.set(k, { nameWords, holders: [] });
+      if (!byName.get(k).holders.includes(w)) byName.get(k).holders.push(w);
+    }
+  }
+  const names = [...byName.values()].sort((a, b) => b.nameWords.length - a.nameWords.length);
+  const matched = new Map();
+  for (const { nameWords, holders } of names) {
+    for (let i = 0; i + nameWords.length <= queryWords.length; i++) {
+      const span = nameWords.every((w, j) => !used[i + j] && queryWords[i + j] === w);
+      if (!span) continue;
+      for (let j = 0; j < nameWords.length; j++) used[i + j] = true;
+      for (const w of holders) matched.set(w.id, w.names);
+    }
+  }
+  return {
+    rest: queryWords.filter((_, i) => !used[i]).join(" "),
+    nameGroups: [...matched.values()],
+  };
 }
 
 /**
@@ -71,37 +237,22 @@ export async function lexicalRanking(db, question, level, limit, { corpus, docum
  * @param {string} embedModel
  * @param {string} level
  * @param {number} limit
- * @param {{ corpus: string, documentIds?: string[] | null }} scope
+ * @param {RankingScope} scope
  */
-export async function vectorRanking(
-  db,
-  literal,
-  embedModel,
-  level,
-  limit,
-  { corpus, documentIds = null },
-) {
-  requireCorpus(corpus);
-  if (documentIds?.length > 0) {
-    // The HNSW index filters after its candidate list, so a few documents' rows would mostly
-    // fall outside it; "+ 0" keeps the planner off the index and the scan exact.
-    const { rows } = await db.query(
-      `SELECT id FROM chunks
-        WHERE corpus = $5 AND level = $2::chunk_level AND embedding IS NOT NULL
-          AND embedding_model = $3 AND document_id = ANY($6::text[])
-        ORDER BY (embedding <=> $1::halfvec) + 0
-        LIMIT $4`,
-      [literal, level, embedModel, limit, corpus, documentIds],
-    );
-    return rows.map((r) => String(r.id));
-  }
+export async function vectorRanking(db, literal, embedModel, level, limit, scope) {
+  const { values, p } = sqlParams();
+  const where = scopePredicates(scope, p);
+  const distance = `embedding <=> ${p(literal, "::halfvec")}`;
+  // The HNSW index filters after its candidate list, so a few documents' rows would mostly
+  // fall outside it; "+ 0" keeps the planner off the index and the scan exact.
+  const order = where.length > 1 ? `(${distance}) + 0` : distance;
   const { rows } = await db.query(
     `SELECT id FROM chunks
-      WHERE corpus = $5 AND level = $2::chunk_level AND embedding IS NOT NULL
-        AND embedding_model = $3
-      ORDER BY embedding <=> $1::halfvec
-      LIMIT $4`,
-    [literal, level, embedModel, limit, corpus],
+      WHERE ${where.join(" AND ")} AND level = ${p(level, "::chunk_level")}
+        AND embedding IS NOT NULL AND embedding_model = ${p(embedModel)}
+      ORDER BY ${order}
+      LIMIT ${p(limit)}`,
+    values,
   );
   return rows.map((r) => String(r.id));
 }
@@ -111,14 +262,52 @@ const requireCorpus = (corpus) => {
 };
 
 /**
- * Embeds the question and runs the four rankings over one corpus, then fuses them. A non-empty
- * `documentIds` limits every ranking to those documents.
- * @param {{ question: string, corpus: string, provider: object, db: { query: Function },
- *   signal?: AbortSignal, documentIds?: string[] | null }} args
- * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]> }>}
+ * The lexical rankings of one query at both levels: the words with the witness names expanded,
+ * and, when the query quotes a phrase, the exact phrases beside them.
  */
-export async function retrieve({ question, corpus, provider, db, signal, documentIds = null }) {
+async function lexicalRankings(db, query, witnesses, scope) {
+  const { rest, nameGroups } = namedWitnesses(query, witnesses);
+  const text = nameGroups.length ? rest : query;
+  const phrases = quotedPhrases(query);
+  const [lexicalPassage, lexicalSection, phrasePassage, phraseSection] = await Promise.all([
+    lexicalRanking(db, text, "passage", RANK_LIMITS.passage, scope, nameGroups),
+    lexicalRanking(db, text, "section", RANK_LIMITS.section, scope, nameGroups),
+    ...(phrases.length
+      ? [
+          phraseRanking(db, phrases, "passage", RANK_LIMITS.passage, scope),
+          phraseRanking(db, phrases, "section", RANK_LIMITS.section, scope),
+        ]
+      : []),
+  ]);
+  return {
+    lexicalPassage,
+    lexicalSection,
+    ...(phrases.length ? { phrasePassage, phraseSection } : {}),
+  };
+}
+
+/**
+ * Embeds each query and runs the rankings of each over one corpus, then fuses every ranking of
+ * every query by reciprocal rank. A non-empty `documentIds` limits every ranking to those
+ * documents, and `filters` to the documents that pass them.
+ * @param {{ queries: string[], corpus: string, provider: object, db: { query: Function },
+ *   signal?: AbortSignal, documentIds?: string[] | null, filters?: RetrievalFilters | null }} args
+ * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]>[] }>}
+ *   `rankings` holds the rankings of each query, in query order.
+ */
+export async function retrieve({
+  queries,
+  corpus,
+  provider,
+  db,
+  signal,
+  documentIds = null,
+  filters = null,
+}) {
   requireCorpus(corpus);
+  if (!Array.isArray(queries) || !queries.length || !queries.every((q) => typeof q === "string")) {
+    throw new Error("retrieval needs one or more query strings");
+  }
   if (typeof provider.embedModel !== "string" || !provider.embedModel) {
     throw new Error("provider has no embedModel");
   }
@@ -127,24 +316,31 @@ export async function retrieve({ question, corpus, provider, db, signal, documen
       `provider ${provider.name} embeds ${provider.embedDim} dimensions; chunks.embedding has ${CHUNK_EMBED_DIM}`,
     );
   }
-  const scope = { corpus, documentIds };
-  const [lexicalPassage, lexicalSection, vectors] = await Promise.all([
-    lexicalRanking(db, question, "passage", RANK_LIMITS.passage, scope),
-    lexicalRanking(db, question, "section", RANK_LIMITS.section, scope),
-    provider.embed([question]),
+  const scope = { corpus, documentIds, filters };
+  const [lexical, vectors] = await Promise.all([
+    corpusWitnesses(db, corpus).then((witnesses) =>
+      Promise.all(queries.map((query) => lexicalRankings(db, query, witnesses, scope))),
+    ),
+    provider.embed(queries),
   ]);
   signal?.throwIfAborted();
-  if (!Array.isArray(vectors) || vectors.length !== 1) {
-    throw new Error("provider.embed returned no vector for the question");
+  if (!Array.isArray(vectors) || vectors.length !== queries.length) {
+    throw new Error(
+      `provider.embed returned ${vectors?.length ?? "no"} vectors for ${queries.length} queries`,
+    );
   }
-  const literal = halfvecLiteral(vectors[0]);
-  const [vectorPassage, vectorSection] = await Promise.all([
-    vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, scope),
-    vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, scope),
-  ]);
+  const rankings = await Promise.all(
+    queries.map(async (_, i) => {
+      const literal = halfvecLiteral(vectors[i]);
+      const [vectorPassage, vectorSection] = await Promise.all([
+        vectorRanking(db, literal, provider.embedModel, "passage", RANK_LIMITS.passage, scope),
+        vectorRanking(db, literal, provider.embedModel, "section", RANK_LIMITS.section, scope),
+      ]);
+      return { ...lexical[i], vectorPassage, vectorSection };
+    }),
+  );
   signal?.throwIfAborted();
-  const rankings = { lexicalPassage, lexicalSection, vectorPassage, vectorSection };
-  const fused = reciprocalRankFusion(Object.values(rankings));
+  const fused = reciprocalRankFusion(rankings.flatMap((r) => Object.values(r)));
   return { fused, rankings };
 }
 

@@ -142,7 +142,20 @@ describe("sources", () => {
     expect(documentMeta("grenfell", ROW, undefined)).toMatchObject({
       role: null,
       statementDate: null,
+      witnessName: null,
     });
+  });
+
+  it("takes the witness name as the alias, and none for a cipher-only witness", () => {
+    expect(
+      documentMeta("grenfell", ROW, { evidence_id: "IWS1", witness: " Ada Lovelace " }),
+    ).toMatchObject({ witnessName: "Ada Lovelace" });
+    expect(
+      documentMeta("ucpi", ROW, { evidence_id: "A", witness: "HN58", cipher_only: true }),
+    ).toMatchObject({ witnessName: null, cipherOnly: true });
+    expect(() => parseSources(JSON.stringify([{ evidence_id: "A", witness: 7 }]))).toThrow(
+      /witness must be a string/,
+    );
   });
 });
 
@@ -361,7 +374,7 @@ describe("ingestDocument statements", () => {
     expect(witness.text).toMatch(
       /ON CONFLICT \(id\) DO UPDATE SET role = EXCLUDED\.role, cipher_only = EXCLUDED\.cipher_only/,
     );
-    expect(witness.params).toEqual(["IWS1", null, false]);
+    expect(witness.params).toEqual(["IWS1", null, false, []]);
   });
 
   it("logs one structured line per stage with the document id, count and elapsed time", async () => {

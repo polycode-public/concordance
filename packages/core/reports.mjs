@@ -254,7 +254,14 @@ export async function runReport({
 
   onStage?.("drafting");
   const question = previous ? `${topic}\n${changePrompt}` : topic;
-  const { fused } = await retrieve({ question, corpus, provider, db, signal, documentIds });
+  const { fused } = await retrieve({
+    queries: [question],
+    corpus,
+    provider,
+    db,
+    signal,
+    documentIds,
+  });
   const hitIds = fused.slice(0, limits.maxHits).map((f) => f.id);
   const rows = await loadChunks(db, hitIds);
   for (const [id, r] of await loadChunks(db, neighbourIds([...rows.values()], rows))) {

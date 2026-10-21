@@ -82,7 +82,7 @@ one matches paragraphs, and 15 of its 34 gold locators named a page only, so a c
 the right paragraph on a page the gold row does not name counts as a miss. The same run with the
 whole-object key scored precision 0.028 and recall 0.059 (two runs, about $0.35 each by the day's
 Sonnet rate; Cost Explorer lags by hours).
-The gold set now holds 37 locators, each with a paragraph; the next run scores against them.
+The gold set now holds 50 rows (46 answer, 4 abstain) and 62 locators: the 37 of the first 25 rows each name a paragraph, and the 25 added rows name a paragraph for residents and a page for the fire-brigade statements (their text has no numbered paragraphs); the next run scores against them.
 
 ### 2026-10-20, bedrock, `answer-closed-world-v2`, `ingest-v1`
 

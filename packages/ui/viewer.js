@@ -4,6 +4,8 @@
 // The PDF viewer panel. PDF.js loads from the site's own /vendor/ on first use; when it
 // does not load the panel says so, and the link to the original stays either way.
 
+import { firstSentence, itemBox, matchSpan } from "./spanMatch.mjs";
+
 const $ = (id) => document.getElementById(id);
 const panel = $("viewer");
 const titleEl = $("viewer-title");
@@ -11,6 +13,7 @@ const pageEl = $("viewer-page");
 const messageEl = $("viewer-message");
 const original = $("viewer-original");
 const canvas = $("viewer-canvas");
+const marks = $("viewer-marks");
 const prev = $("viewer-prev");
 const next = $("viewer-next");
 
@@ -47,15 +50,39 @@ function pastTheEnd(page, pages) {
   prev.disabled = false;
   next.disabled = true;
   canvas.hidden = true;
+  marks.replaceChildren();
   linkOriginal(current.url, pages);
   message(`The locator names page ${page}; the document has ${pages} pages.`);
 }
 
-async function renderPage(n) {
+/** Marks the first sentence of the cited block on the page and scrolls the mark into view. */
+async function markSentence(pdfPage, viewport, sentence) {
+  marks.replaceChildren();
+  if (!sentence) return;
+  const { items } = await pdfPage.getTextContent();
+  const hit = matchSpan(items, sentence);
+  if (!hit.length) return;
+  const boxes = hit.map((i) => itemBox(viewport.transform, items[i], viewport.scale));
+  marks.replaceChildren(
+    ...boxes.map((box) => {
+      const mark = document.createElement("div");
+      mark.className = "viewer-mark";
+      mark.style.left = `${box.left}px`;
+      mark.style.top = `${box.top}px`;
+      mark.style.width = `${box.width}px`;
+      mark.style.height = `${box.height}px`;
+      return mark;
+    }),
+  );
+  marks.firstChild.scrollIntoView({ block: "center", behavior: "instant" });
+}
+
+async function renderPage(n, sentence = "") {
   const { doc, url } = current;
   const page = Math.max(1, n);
   current.page = page;
   pageEl.classList.remove("defect");
+  marks.replaceChildren();
   canvas.hidden = false;
   pageEl.textContent = `p.${page} of ${doc.numPages}`;
   prev.disabled = page <= 1;
@@ -80,7 +107,9 @@ async function renderPage(n) {
     await renderTask.promise;
   } catch (err) {
     if (err?.name !== "RenderingCancelledException") throw err;
+    return;
   }
+  await markSentence(pdfPage, viewport, sentence);
 }
 
 /** Shows a message in the panel, for example an error from the server. */
@@ -97,9 +126,10 @@ export function closeViewer() {
 
 /**
  * Opens a PDF at a page.
- * @param {{ url: string, page: number, title: string }} target
+ * @param {{ url: string, page: number, title: string, text?: string }} target `text` is the cited
+ *   block's text; its first sentence is marked on the page when the page's text holds it.
  */
-export async function openPdf({ url, page, title }) {
+export async function openPdf({ url, page, title, text }) {
   show();
   titleEl.textContent = title;
   linkOriginal(url, page);
@@ -125,7 +155,7 @@ export async function openPdf({ url, page, title }) {
       pastTheEnd(page, current.doc.numPages);
       return;
     }
-    await renderPage(page);
+    await renderPage(page, firstSentence(text));
     message("");
   } catch (err) {
     current = { url: null, doc: null, page: 1 };

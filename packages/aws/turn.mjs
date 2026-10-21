@@ -10,7 +10,8 @@
 import { requireKnownCorpus } from "../core/corpora.mjs";
 import { serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
-import { recordSession, recordTurn, sessionIdFor } from "../core/sessions.mjs";
+import { REWRITE_TURNS } from "../core/retrieval/rewrite.mjs";
+import { recordSession, recordTurn, sessionIdFor, threadHistory } from "../core/sessions.mjs";
 import { cancelKey } from "./clients.mjs";
 
 const blockFrame = (b) => ({
@@ -42,7 +43,7 @@ export function createHandler({
   pollMs = 500,
 }) {
   return async function handler({ frame, connectionId, domainName, stage, userId }) {
-    const { thread, turnId, text, corpus } = frame;
+    const { thread, turnId, text, corpus, filters = null } = frame;
     const target = { connectionId, domainName, stage };
     const pk = cancelKey(connectionId, thread);
     const controller = new AbortController();
@@ -93,12 +94,19 @@ export function createHandler({
     try {
       db = await openDb();
       await requireKnownCorpus(db, corpus);
+      const history = await threadHistory(db, {
+        sessionId: sessionIdFor(connectionId, corpus),
+        thread,
+        limit: REWRITE_TURNS,
+      });
       const provider = await providerFor();
       const result = await runQuery({
         question: text,
         corpus,
         provider,
         db,
+        filters,
+        history,
         signal,
         onStage: (stageName, tool) => {
           poll();

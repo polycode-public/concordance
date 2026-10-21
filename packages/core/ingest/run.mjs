@@ -242,7 +242,7 @@ export async function readManifest(file) {
 
 /**
  * Parses sources.json: an array of { evidence_id, url, role, floor, statement_date, file },
- * optionally with witness_id and cipher_only. Returns a Map keyed by evidence id.
+ * optionally with witness_id, witness (the name) and cipher_only. Returns a Map keyed by evidence id.
  * @param {string} text
  * @param {string} [source]
  */
@@ -265,7 +265,7 @@ export function parseSources(text, source = "sources.json") {
     if (typeof entry?.evidence_id !== "string" || !entry.evidence_id) {
       throw new Error(`${where}: evidence_id is missing`);
     }
-    for (const field of ["url", "role", "file", "witness_id"]) optionalString(field);
+    for (const field of ["url", "role", "file", "witness_id", "witness"]) optionalString(field);
     if (entry.floor != null && !["string", "number"].includes(typeof entry.floor)) {
       throw new Error(`${where}: floor must be a string or a number`);
     }
@@ -304,7 +304,9 @@ export function roleText({ role, floor } = {}) {
 
 /**
  * Builds ingestDocument() meta from a manifest row and its sources entry. The witness id is
- * the sources witness_id, else the evidence id, until the witness register maps them.
+ * the sources witness_id, else the evidence id, until the witness register maps them. The
+ * witness name becomes the witness's alias, except for a cipher-only witness, whose aliases
+ * hold ciphers only.
  * @param {string} corpus
  * @param {object} row  a manifest row
  * @param {object} [source]  the sources.json entry for the row
@@ -320,6 +322,7 @@ export function documentMeta(corpus, row, source) {
     witnessId: source?.witness_id ?? row.evidence_id,
     role: roleText(source),
     cipherOnly: source?.cipher_only ?? false,
+    witnessName: source?.cipher_only ? null : source?.witness?.trim() || null,
     statementDate: source?.statement_date ?? null,
   };
 }
@@ -684,9 +687,17 @@ export async function ingestDocument({
     }
     if (meta.witnessId) {
       await client.query(
-        `INSERT INTO witnesses (id, role, cipher_only) VALUES ($1, $2, $3)
-         ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, cipher_only = EXCLUDED.cipher_only`,
-        [meta.witnessId, meta.role, meta.cipherOnly ?? false],
+        `INSERT INTO witnesses (id, role, cipher_only, aliases) VALUES ($1, $2, $3, $4::text[])
+         ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, cipher_only = EXCLUDED.cipher_only,
+           aliases = CASE WHEN EXCLUDED.cipher_only THEN '{}'::text[]
+                          ELSE ARRAY(SELECT DISTINCT a FROM unnest(witnesses.aliases || EXCLUDED.aliases) a
+                                      ORDER BY a) END`,
+        [
+          meta.witnessId,
+          meta.role,
+          meta.cipherOnly ?? false,
+          meta.cipherOnly || !meta.witnessName ? [] : [meta.witnessName],
+        ],
       );
     }
     await client.query(
