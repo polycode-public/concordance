@@ -2,12 +2,27 @@
 // Copyright 2026 Polycode Limited
 import { appendFileSync } from "node:fs";
 import { test, expect } from "@playwright/test";
+import { suggestionsFor } from "../../packages/ui/suggestions.mjs";
 
 const SITE_URL = (process.env.SITE_URL ?? "").replace(/\/$/, "");
 const ABSTENTION = "the corpus does not say";
 const TURN_TIMEOUT_MS = 60_000;
 
 const PILL_LISTS = ["#suggestions", "#documents-suggestions", "#evidence-suggestions"];
+const CORPUS_SELECT = "#corpus-select";
+const CORPUS_NAME = "#corpus-name";
+const PROMPT_PILLS = "#suggestions button.pill";
+const CITE_CHIPS = "button.cite";
+const DOCUMENT_IDS = "#documents li.document .reference";
+const FACTS_GROUP = "#facts-group";
+const FACTS_EMPTY = "#facts-empty";
+const FACTS_MESSAGE = "#facts-message";
+const UCPI_CORPUS = "ucpi";
+const UCPI_NAME = "Undercover Policing Inquiry";
+const GRENFELL_CORPUS = "grenfell";
+const GRENFELL_NAME = "Grenfell Tower Inquiry";
+const UCPI_DOCUMENT_ID = /^(UCPI|MPS)/;
+const GRENFELL_DOCUMENT_ID = /^(IWS|MET)/;
 const OFF_CORPUS = "What is the capital of France?";
 
 const REPORT_FILENAME = "first-awareness.md";
@@ -71,6 +86,12 @@ async function ask(page, submit, label) {
   const answer = (await turn.locator(".answer").innerText()).trim();
   const score = (await turn.locator(".score").innerText()).trim();
   return { turn, answer, score };
+}
+
+async function chooseCorpus(page, id, name, firstPill) {
+  await page.locator(CORPUS_SELECT).selectOption(id);
+  await expect(page.locator(CORPUS_NAME)).toContainText(name);
+  await expect(page.locator(PROMPT_PILLS).first()).toHaveText(firstPill);
 }
 
 async function typeQuestion(page, question) {
@@ -144,6 +165,41 @@ test("signs in, clicks every pill and asks one off-corpus question", async ({ pa
     title: (await page.locator("#viewer-title").innerText()).trim(),
     page: (await page.locator("#viewer-page").innerText()).trim(),
   };
+
+  const [ucpiPill] = suggestionsFor(UCPI_CORPUS);
+  await chooseCorpus(page, UCPI_CORPUS, UCPI_NAME, ucpiPill.text);
+  const ucpiPrompt = page.locator(PROMPT_PILLS).first();
+  const ucpiQuestion = (await ucpiPrompt.innerText()).trim();
+  const ucpi = await ask(page, () => ucpiPrompt.click(), ucpiQuestion);
+  const ucpiChips = ucpi.turn.locator(CITE_CHIPS);
+  expect(await ucpiChips.count(), `citation chips for "${ucpiQuestion}"`).toBeGreaterThan(0);
+  expect(ucpi.score).toMatch(/\d+ of \d+ sentences supported/);
+  const chipDocuments = await ucpiChips.evaluateAll((items) =>
+    items.map((chip) => chip.getAttribute("aria-label").split(": ")[1].split(",")[0].trim()),
+  );
+  for (const id of chipDocuments) {
+    expect(id, "a UCPI citation names a UCPI document").toMatch(UCPI_DOCUMENT_ID);
+    expect(id, "a UCPI citation names no Grenfell document").not.toMatch(GRENFELL_DOCUMENT_ID);
+  }
+  const listed = await page.locator(DOCUMENT_IDS).allInnerTexts();
+  expect(listed.length, "documents listed after the UCPI turn").toBeGreaterThan(0);
+  for (const id of listed.map((text) => text.trim())) {
+    expect(id, "a listed document is a UCPI document").toMatch(UCPI_DOCUMENT_ID);
+    expect(id, "a listed document is not a Grenfell document").not.toMatch(GRENFELL_DOCUMENT_ID);
+  }
+  await expect
+    .poll(
+      async () =>
+        (await page.locator(FACTS_GROUP).isEnabled()) ||
+        (await page.locator(FACTS_EMPTY).isVisible()),
+      { timeout: 30_000, message: "the UCPI contradictions panel shows groups or its empty state" },
+    )
+    .toBe(true);
+  await expect(page.locator(FACTS_MESSAGE)).not.toContainText("unavailable");
+  report.push({ question: `UCPI pass: ${ucpiQuestion}`, answer: ucpi.answer, score: ucpi.score });
+
+  const [grenfellPill] = suggestionsFor(GRENFELL_CORPUS);
+  await chooseCorpus(page, GRENFELL_CORPUS, GRENFELL_NAME, grenfellPill.text);
 
   await newConversation(page);
   const off = await ask(page, () => typeQuestion(page, OFF_CORPUS), OFF_CORPUS);
