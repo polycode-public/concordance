@@ -51,6 +51,70 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, aliases and named-witness scope
+
+The same command, store and gold set as the corrected-gold run below, with `RERANK=off`, after
+two changes. `scripts/backfill-aliases.mjs --apply` gave the 38 Grenfell witnesses their names as
+aliases (0 of 38 had one before), so `namedWitnesses` now fires. When a query names a witness, the
+vector rankings read only that witness's documents. One run, from 20:25:00Z to 20:35:03Z. Spend:
+about $0.70 by the day's Sonnet rate; Cost Explorer lags by hours. The run report is
+`evals/grenfell/runs/2026-10-21T20-35-03-729Z-bedrock-rerank-off.json`.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.448 |
+| citation recall           | 0.746 |
+| unsupported-sentence rate | 0.186 |
+| abstention correctness    | 0.920 |
+
+The 105 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 47    |
+| `page`        | 22    |
+| `paragraph`   | 18    |
+| `document`    | 17    |
+| `abstain-row` | 1     |
+
+The 63 gold locators: 47 cited, 12 retrieved but not cited (4 of them with the gold paragraph
+itself in the evidence blocks), 4 not retrieved at all (rows 0008, 0009, 0022, 0047).
+
+Against the corrected-gold run (precision 0.463, recall 0.698, unsupported 0.180, abstention
+0.920; 95 citations: 44 gold, 22 document, 15 page, 14 paragraph; 63 gold: 44 cited, 15 retrieved
+not cited, 4 not retrieved), recall rises 0.048, precision falls 0.015, the unsupported rate rises
+0.006 and abstention is the same. Gold citations rise from 44 to 47 and `document` misses fall
+from 22 to 17. Rows 0006, 0035 and 0036 lose all 9 of their `document` misses and cite gold, and
+the gold locators of rows 0006 and 0036 are now retrieved. Rows 0005, 0012 and 0030 no longer
+abstain. The model cites 105 locators against 95, and `page` and `paragraph` misses rise from 29
+to 40.
+
+The rows that still miss:
+
+| id            | miss                                     | cause in the run                                                                                        |
+| ------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| grenfell-0008 | 2 `document`, 1 gold not retrieved       | names Flat 131 and no witness                                                                           |
+| grenfell-0015 | 4 `document`                             | names Flat 136 and no witness                                                                           |
+| grenfell-0022 | 1 gold not retrieved                     | names no witness                                                                                        |
+| grenfell-0009 | 1 gold not retrieved (IWS00000990)       | "Hime Gashaw" does not match the alias "Hime Haymanot Gashaw", so the scope holds Richard Fletcher only |
+| grenfell-0047 | 1 gold not retrieved, abstains           | names Sener Macit; the gold is in Sue Pimblett's statement (MET00008034), which the scope keeps out     |
+| grenfell-0012 | 3 `document`                             | Sener Macit holds two ids; the model cites IWS00000069, the gold names IWS00001156                      |
+| grenfell-0023 | 7 `document`                             | as 0012; the question asks "across his statements", so the gold lacks the first statement               |
+| grenfell-0045 | 1 `document`                             | "Firefighter Hippel" and "Crew Manager Stern" match no full alias                                       |
+| grenfell-0038 | abstains, 2 gold retrieved but not cited | names both control room officers; the gold is in the evidence                                           |
+| grenfell-0042 | abstains, 1 gold retrieved but not cited | as in the run below                                                                                     |
+| grenfell-0020 | 1 `abstain-row`                          | an abstain row that the model answers                                                                   |
+
+The next changes the evidence names:
+
+1. Turn the scope into a fusion boost: keep the corpus-wide vector rankings and add the scoped
+   ones beside them. Rows 0009 and 0047 lose a gold locator because the scope keeps out a
+   statement that holds the answer.
+2. Match a witness by a part of the alias (a surname, or the first and last words of the name)
+   for rows 0009 and 0045.
+3. Match a flat number to the witness whose role names that flat, for rows 0008, 0015 and 0022.
+4. Correct the gold of row 0023 to add Sener Macit's first statement (IWS00000069).
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, corrected gold
 
 The same command and store as the miss-report run below, with `RERANK=off`, on the gold set of
