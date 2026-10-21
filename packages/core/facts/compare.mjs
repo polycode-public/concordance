@@ -8,16 +8,18 @@
 // partial run (stopped by its deadline) resumes where it stopped, because a pair already labelled
 // under this pipeline version and model is skipped. Nothing here writes accepted_facts.
 
-import { sha256Text } from "../ingest/run.mjs";
-import { byteBatches } from "./extract.mjs";
+import { sha256Text, toHalfvecLiteral } from "../ingest/run.mjs";
+import { WRITE_BATCH_BYTES, byteBatches } from "./extract.mjs";
 import {
   alignAssertions,
   alignFacts,
   claimText,
   eligible,
+  EMBED_BATCH,
   embedTexts,
   factText,
   pairKey,
+  unit,
 } from "./align.mjs";
 import {
   NLI_PROMPT_VERSION,
@@ -34,6 +36,8 @@ export const COMPARE_PIPELINE_VERSION = "compare-v4";
 export const LEASE_MINUTES = 16;
 const ASSERTION_PAGE = 400;
 const LABELLED_PAGE = 2000;
+/** A stored vector is about 8 KB as text and the Data API answers with at most 1 MB. */
+const STORED_VECTOR_PAGE = 40;
 
 export const RUN_SQL = Object.freeze({
   assertions: `
@@ -81,6 +85,13 @@ export const RUN_SQL = Object.freeze({
                 $8::text[], $9::text[], $10::text[], $11::bigint[], $12::text[], $13::real[])
       AS u(model, kind, a, b, fact, label, reason, span_a, span_b, event, topic, similarity)
   ON CONFLICT DO NOTHING`,
+  storedVectors: `
+  SELECT id, claim_embedding_sha256 AS sha, claim_embedding::text AS embedding
+    FROM assertions WHERE id = ANY($1::bigint[]) AND claim_embedding IS NOT NULL`,
+  storeVectors: `
+  UPDATE assertions a SET claim_embedding = u.embedding::halfvec, claim_embedding_sha256 = u.sha
+    FROM unnest($1::bigint[], $2::text[], $3::text[]) AS u(id, sha, embedding)
+   WHERE a.id = u.id`,
   finishRun: `
   UPDATE comparison_runs SET status = $2, counts = $3::jsonb, finished_at = now()
    WHERE id = $1::bigint`,
@@ -236,6 +247,91 @@ export function modelBatches(pairs, size = PAIRS_PER_CALL) {
 }
 
 /**
+ * The unit vector of each compared claim text and each accepted fact text. Vectors stored on the
+ * assertions are read back; the claims without a current one are embedded EMBED_BATCH at a time
+ * and stored after each batch. Stops before a batch that would start at the deadline.
+ * @returns {Promise<{ vectors: Map<string, Float32Array>, stopped: boolean }>}
+ */
+async function claimVectors({
+  db,
+  provider,
+  compared,
+  facts,
+  byId,
+  deadline,
+  signal,
+  now,
+  counts,
+}) {
+  const texts = new Map();
+  for (const a of compared) {
+    const text = claimText(a);
+    const entry = texts.get(text) ?? { sha: sha256Text(text), ids: [] };
+    entry.ids.push(a.id);
+    texts.set(text, entry);
+  }
+  const vectors = new Map();
+  const shaOf = new Map(compared.map((a) => [a.id, sha256Text(claimText(a))]));
+  for (let i = 0; i < compared.length; i += STORED_VECTOR_PAGE) {
+    const page = compared.slice(i, i + STORED_VECTOR_PAGE);
+    const { rows } = await db.query(RUN_SQL.storedVectors, [page.map((a) => a.id)]);
+    for (const r of rows) {
+      const a = page.find((x) => x.id === String(r.id));
+      if (a && r.sha === shaOf.get(a.id) && r.embedding) {
+        vectors.set(claimText(a), unit(JSON.parse(r.embedding)));
+      }
+    }
+  }
+  counts.claimsStored = vectors.size;
+  const missing = [...texts.keys()].filter((t) => !vectors.has(t));
+  counts.claimsRemaining = missing.length;
+  for (let i = 0; i < missing.length; i += EMBED_BATCH) {
+    if (now() >= deadline || signal?.aborted) return { vectors, stopped: true };
+    const slice = missing.slice(i, i + EMBED_BATCH);
+    const out = await provider.embed(slice);
+    if (out.length !== slice.length) {
+      throw new Error(`embed returned ${out.length} vectors for ${slice.length} texts`);
+    }
+    const rows = [];
+    slice.forEach((text, j) => {
+      vectors.set(text, unit(out[j]));
+      const literal = toHalfvecLiteral(out[j], out[j].length);
+      for (const assertionId of texts.get(text).ids) {
+        rows.push({ id: assertionId, sha: texts.get(text).sha, embedding: literal });
+      }
+    });
+    const writes = [];
+    let current = [];
+    let bytes = 0;
+    for (const row of rows) {
+      const size = row.embedding.length + 96;
+      if (current.length && bytes + size > WRITE_BATCH_BYTES) {
+        writes.push(current);
+        current = [];
+        bytes = 0;
+      }
+      current.push(row);
+      bytes += size;
+    }
+    if (current.length) writes.push(current);
+    for (const write of writes) {
+      await db.query(RUN_SQL.storeVectors, [
+        write.map((r) => r.id),
+        write.map((r) => r.sha),
+        write.map((r) => r.embedding),
+      ]);
+    }
+    counts.claimsEmbedded += slice.length;
+    counts.claimsRemaining -= slice.length;
+  }
+  const factTexts = facts
+    .map((f) => factText(f, f.assertionId ? byId.get(f.assertionId) : null))
+    .filter((t) => !vectors.has(t));
+  for (const [text, vector] of await embedTexts(provider, factTexts)) vectors.set(text, vector);
+  return { vectors, stopped: false };
+}
+
+/**
  * Runs alignment and labelling over one corpus.
  * @param {object} args
  * @param {string} args.corpus
@@ -360,13 +456,51 @@ async function labelRun({
 
   const compared = assertions.filter(eligible);
   const byId = new Map(assertions.map((a) => [a.id, a]));
-  const vectors = await embedTexts(provider, [
-    ...compared.map(claimText),
-    ...facts.map((f) => factText(f, f.assertionId ? byId.get(f.assertionId) : null)),
-  ]);
-  stage("claims-embedded", vectors.size, { compared: compared.length });
+  const counts = {
+    assertions: assertions.length,
+    compared: compared.length,
+    claimsStored: 0,
+    claimsEmbedded: 0,
+    claimsRemaining: 0,
+    pairs: 0,
+    alreadyLabelled: 0,
+    rules: 0,
+    modelCalls: 0,
+    modelLabelled: 0,
+    rejected: 0,
+    unanswered: 0,
+    written: 0,
+    remaining: 0,
+  };
+  progress.counts = counts;
+  const halt = () => now() >= deadline || signal?.aborted === true;
+  const stopPartial = async (at) => {
+    await db.query(RUN_SQL.finishRun, [runId, "partial", counts]);
+    stage("run-finished", counts.written, { status: "partial", stoppedAt: at });
+    return { status: "partial", runId, counts };
+  };
 
-  const cross = alignAssertions(compared, vectors, bounds);
+  const { vectors, stopped: embedStopped } = await claimVectors({
+    db,
+    provider,
+    compared,
+    facts,
+    byId,
+    deadline,
+    signal,
+    now,
+    counts,
+  });
+  stage("claims-embedded", vectors.size, {
+    compared: compared.length,
+    stored: counts.claimsStored,
+    embedded: counts.claimsEmbedded,
+    remaining: counts.claimsRemaining,
+  });
+  if (embedStopped) return stopPartial("embedding");
+
+  const cross = alignAssertions(compared, vectors, bounds, halt);
+  if (cross.stopped) return stopPartial("alignment");
   const accepted = alignFacts(facts, compared, byId, vectors, bounds);
   const all = [...cross.pairs, ...accepted.pairs];
   const open = all.filter((p) => !labelled.has(pairKey(p)));
@@ -377,20 +511,8 @@ async function labelRun({
     open: open.length,
   });
 
-  const counts = {
-    assertions: assertions.length,
-    compared: compared.length,
-    pairs: all.length,
-    alreadyLabelled: all.length - open.length,
-    rules: 0,
-    modelCalls: 0,
-    modelLabelled: 0,
-    rejected: 0,
-    unanswered: 0,
-    written: 0,
-    remaining: 0,
-  };
-  progress.counts = counts;
+  counts.pairs = all.length;
+  counts.alreadyLabelled = all.length - open.length;
   const forModel = [];
   const ruled = [];
   for (const pair of open) {

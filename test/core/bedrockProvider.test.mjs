@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBedrockProvider } from "../../packages/core/providers/bedrockProvider.mjs";
+import {
+  EMBED_RETRY_BUDGET_MS,
+  createBedrockProvider,
+} from "../../packages/core/providers/bedrockProvider.mjs";
 import { providerFromEnv } from "../../packages/core/providers/index.mjs";
 import {
   ReplyTruncatedError,
@@ -231,20 +234,22 @@ describe("bedrock provider", () => {
     expect(vector[0]).toBe(3);
     expect(client.calls).toHaveLength(3);
     expect(waits).toHaveLength(2);
+    expect(waits[0]).toBeGreaterThanOrEqual(500);
     expect(waits[0]).toBeLessThanOrEqual(1000);
+    expect(waits[1]).toBeGreaterThanOrEqual(1000);
     expect(waits[1]).toBeLessThanOrEqual(2000);
   });
 
-  it("rejects after eight attempts and names the count", async () => {
+  it("keeps retrying an embedding until its waits add up to the budget, then names the attempts", async () => {
     const client = throttlingClient(99, { InvokeModelCommand: titan(1024) });
     const waits = [];
     const sleep = async (ms) => void waits.push(ms);
     const p = createBedrockProvider({}, { sdk, client, sleep });
-    await expect(p.embed(["abc"])).rejects.toThrow(/8 attempts/);
-    expect(client.calls).toHaveLength(8);
-    expect(waits).toHaveLength(7);
-    waits.forEach((ms, i) => expect(ms).toBeLessThanOrEqual(Math.min(60000, 1000 * 2 ** i)));
-    expect(waits[6]).toBeGreaterThan(0);
+    await expect(p.embed(["abc"])).rejects.toThrow(/throttled after \d+ attempts/);
+    expect(waits.reduce((a, b) => a + b, 0)).toBeCloseTo(EMBED_RETRY_BUDGET_MS, 5);
+    expect(client.calls).toHaveLength(waits.length + 1);
+    expect(waits.length).toBeGreaterThanOrEqual(8);
+    waits.forEach((ms) => expect(ms).toBeLessThanOrEqual(20000));
   });
 
   function clockedClient(responders) {

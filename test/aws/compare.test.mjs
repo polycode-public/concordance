@@ -47,13 +47,16 @@ describe("the compare handler", () => {
     const { handler } = setup();
     const short = { getRemainingTimeInMillis: () => WRITE_MARGIN_MS - 1 };
     const first = await handler({ corpus: "grenfell" }, short);
-    expect(first).toMatchObject({ status: "partial", counts: { modelCalls: 0, remaining: 2 } });
+    expect(first).toMatchObject({
+      status: "partial",
+      counts: { claimsEmbedded: 0, modelCalls: 0, written: 0 },
+    });
     const long = { getRemainingTimeInMillis: () => 15 * 60_000 };
     const second = await handler({ corpus: "grenfell" }, long);
     expect(second).toMatchObject({
       status: "complete",
       runId: first.runId,
-      counts: { written: 2 },
+      counts: { written: 9 },
     });
   });
 

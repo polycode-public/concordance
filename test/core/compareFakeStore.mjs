@@ -74,6 +74,28 @@ export function createCompareStore(seed = {}) {
           })),
     ],
     [
+      RUN_SQL.storedVectors,
+      ([ids]) =>
+        t.assertions
+          .filter((a) => ids.map(String).includes(a.id) && a.claim_embedding)
+          .map((a) => ({
+            id: a.id,
+            sha: a.claim_embedding_sha256,
+            embedding: a.claim_embedding,
+          })),
+    ],
+    [
+      RUN_SQL.storeVectors,
+      ([ids, shas, embeddings]) => {
+        ids.forEach((id, i) => {
+          const a = assertion(id);
+          a.claim_embedding = embeddings[i];
+          a.claim_embedding_sha256 = shas[i];
+        });
+        return [];
+      },
+    ],
+    [
       RUN_SQL.facts,
       ([corpus]) =>
         t.accepted_facts

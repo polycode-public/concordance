@@ -453,13 +453,20 @@ describe("runComparison", () => {
     const store = createCompareStore(compareSeed());
     const { provider, prompts } = compareProvider();
     let clock = 0;
+    const db = {
+      query: async (text, params) => {
+        const result = await store.query(text, params);
+        if (text === RUN_SQL.insertComparisons) clock = 10;
+        return result;
+      },
+    };
     const first = await runComparison({
       corpus: "grenfell",
-      db: store,
+      db,
       provider,
       log: quiet,
       now: () => clock,
-      deadline: 0,
+      deadline: 5,
     });
     expect(first).toMatchObject({
       status: "partial",
@@ -475,6 +482,113 @@ describe("runComparison", () => {
     });
     expect(prompts).toHaveLength(1);
     expect(store.tables.assertion_comparisons).toHaveLength(9);
+  });
+
+  describe("claim vectors", () => {
+    const embeddedTexts = (provider) => {
+      const seen = [];
+      const embed = provider.embed;
+      provider.embed = async (texts) => {
+        seen.push(...texts);
+        return embed(texts);
+      };
+      return seen;
+    };
+
+    it("stores the vector of every claim it embeds", async () => {
+      const store = createCompareStore(compareSeed());
+      const { provider } = compareProvider();
+      await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      const claims = store.tables.assertions.filter((a) => a.claim_embedding);
+      expect(claims).toHaveLength(12);
+      for (const a of claims) {
+        expect(a.claim_embedding_sha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(JSON.parse(a.claim_embedding)).toHaveLength(9);
+      }
+    });
+
+    it("embeds only the claims that have no current vector", async () => {
+      const store = createCompareStore(compareSeed());
+      const { provider } = compareProvider();
+      await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      const [kept, stale, empty] = store.tables.assertions;
+      store.tables.comparison_runs.length = 0;
+      store.tables.assertion_comparisons.length = 0;
+      stale.claim_embedding_sha256 = "0".repeat(64);
+      empty.claim_embedding = null;
+      empty.claim_embedding_sha256 = null;
+      const seen = embeddedTexts(provider);
+      const lines = [];
+      const result = await runComparison({
+        corpus: "grenfell",
+        db: store,
+        provider,
+        log: (l) => lines.push(l),
+      });
+      const rows = store.tables.assertions;
+      const textOf = new Map(fixtureAssertions().map((a) => [a.id, claimText(a)]));
+      const expected = new Set([stale, empty].map((a) => textOf.get(a.id)));
+      expect(new Set(seen)).toEqual(expected);
+      expect(kept.claim_embedding).toBeTruthy();
+      expect(rows.every((a) => a.claim_embedding)).toBe(true);
+      expect(result.status).toBe("complete");
+      expect(
+        lines.map((l) => JSON.parse(l)).find((l) => l.stage === "claims-embedded"),
+      ).toMatchObject({
+        stored: 7,
+        embedded: 1,
+      });
+    });
+
+    it("writes partial before any embedding when the deadline has passed", async () => {
+      const store = createCompareStore(compareSeed());
+      const { provider } = compareProvider();
+      const seen = embeddedTexts(provider);
+      const first = await runComparison({
+        corpus: "grenfell",
+        db: store,
+        provider,
+        log: quiet,
+        deadline: 0,
+      });
+      expect(first).toMatchObject({
+        status: "partial",
+        counts: { claimsEmbedded: 0, claimsRemaining: 8, pairs: 0, written: 0 },
+      });
+      expect(seen).toEqual([]);
+      expect(store.tables.comparison_runs[0].status).toBe("partial");
+      const second = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      expect(second).toMatchObject({ status: "complete", runId: first.runId });
+    });
+
+    it("writes partial when the deadline passes during alignment, and the retry embeds nothing", async () => {
+      const store = createCompareStore(compareSeed());
+      const { provider } = compareProvider();
+      let clock = 0;
+      const embed = provider.embed;
+      provider.embed = async (texts) => {
+        const out = await embed(texts);
+        clock = 10;
+        return out;
+      };
+      const first = await runComparison({
+        corpus: "grenfell",
+        db: store,
+        provider,
+        log: quiet,
+        now: () => clock,
+        deadline: 5,
+      });
+      expect(first).toMatchObject({
+        status: "partial",
+        counts: { claimsEmbedded: 8, claimsRemaining: 0, pairs: 0, written: 0 },
+      });
+      expect(store.tables.assertion_comparisons).toHaveLength(0);
+      const seen = embeddedTexts(provider);
+      const second = await runComparison({ corpus: "grenfell", db: store, provider, log: quiet });
+      expect(second).toMatchObject({ status: "complete", runId: first.runId });
+      expect(seen).toEqual([]);
+    });
   });
 
   describe("a run in progress", () => {
