@@ -12,6 +12,57 @@ export function normaliseSpan(text) {
 
 const key = (text) => normaliseSpan(text).toLowerCase();
 
+/** Pronouns: a span that is only one of these names nobody in particular. */
+export const PRONOUNS = Object.freeze([
+  "he",
+  "she",
+  "they",
+  "him",
+  "her",
+  "them",
+  "himself",
+  "herself",
+  "themselves",
+  "it",
+  "you",
+  "we",
+  "us",
+  "someone",
+  "somebody",
+  "everyone",
+  "everybody",
+]);
+
+/** Demonstratives: a span that is only one of these points at something in its own statement. */
+export const DEMONSTRATIVES = Object.freeze(["this", "that", "these", "those"]);
+
+/** Possessives: a span that starts with one of these is the speaker's own, or a third party's. */
+export const POSSESSIVES = Object.freeze(["my", "our", "his", "her", "their"]);
+
+const BARE = new Set([...PRONOUNS, ...DEMONSTRATIVES]);
+const POSSESSIVE_SET = new Set(POSSESSIVES);
+
+/** The words of a span in lower case, without accents or punctuation other than an apostrophe. */
+const spanWords = (text) =>
+  normaliseSpan(text ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
+    .split(" ")
+    .filter(Boolean);
+
+/**
+ * True when a span means a different person or thing in each statement: a bare pronoun or
+ * demonstrative ("This"), or a possessive and its noun ("my flat", "their son"). Such a span
+ * never resolves to a shared register entry, because two witnesses' flats are two flats.
+ */
+export function indexicalSpan(text) {
+  const words = spanWords(text);
+  if (words.length === 1) return BARE.has(words[0]);
+  return words.length > 1 && POSSESSIVE_SET.has(words[0]);
+}
+
 /**
  * @typedef {{ type: 'witness', id: string, cipherOnly: boolean }} WitnessMatch
  * @typedef {{ type: 'entity', id: string, kind: string, canonical: string }} EntityMatch

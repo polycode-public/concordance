@@ -2,10 +2,9 @@
 // Copyright 2026 Polycode Limited
 import { describe, expect, it } from "vitest";
 import {
-  KIN_TERMS,
   alignAssertions,
   claimText,
-  kinSubject,
+  sameSubject,
   sharedAnchors,
   unnamedSubject,
 } from "../../packages/core/facts/align.mjs";
@@ -16,6 +15,12 @@ const DATES = {
   IWS00000913: "2017-12-05",
   IWS00000990: "2018-02-14",
   IWS00001157: "2018-03-20",
+  IWS00000434: "2017-12-12",
+  IWS00001091: "2018-02-02",
+  MET00007762: "2018-04-01",
+  MET00007787: "2018-04-03",
+  MET00008044: "2018-05-10",
+  MET000083321: "2018-05-12",
 };
 
 const TOWER = { objectEntityId: "300", objectEntityKind: "place" };
@@ -162,20 +167,24 @@ describe("cross pairs by an unnamed subject or an attribute", () => {
     expect(made.has(key(a, b))).toBe(true);
   });
 
-  it("names a person by a pronoun or a possessive kin term only when no entity resolves it", () => {
+  it("names nobody by a pronoun, a demonstrative or a possessive, whatever entity is stored", () => {
     for (const text of ["they", "We", "her", "my daughter", "our two children", "his wife's"]) {
       expect(unnamedSubject({ subjectText: text, subjectKind: "person" }), text).toBe(true);
     }
     expect(unnamedSubject({ subjectText: "my family", subjectKind: "group" })).toBe(true);
-    for (const text of ["Mrs Ash", "a firefighter", "the daughter", "my daughter's school"]) {
+    expect(unnamedSubject({ subjectText: "This", subjectKind: "thing" })).toBe(true);
+    expect(unnamedSubject({ subjectText: "their neighbours", subjectKind: "group" })).toBe(true);
+    for (const text of ["Mrs Ash", "a firefighter", "the daughter", "the bridgehead"]) {
       expect(unnamedSubject({ subjectText: text, subjectKind: "person" }), text).toBe(false);
     }
     expect(
       unnamedSubject({ subjectText: "my daughter", subjectKind: "person", subjectEntityId: "5" }),
+    ).toBe(true);
+    expect(
+      unnamedSubject({ subjectText: "this man", subjectKind: "person", subjectEntityId: "5" }),
     ).toBe(false);
+    expect(unnamedSubject({ subjectText: "this man", subjectKind: "person" })).toBe(true);
     expect(unnamedSubject({ subjectText: "we", subjectKind: "witness" })).toBe(false);
-    expect(KIN_TERMS).toContain("flatmate");
-    expect(kinSubject("their neighbours")).toBe(true);
   });
 
   it("pairs an attribute across witnesses only when both subjects resolve to one entry", () => {
@@ -195,5 +204,77 @@ describe("cross pairs by an unnamed subject or an attribute", () => {
     const about = { ...SHARED.tenure, subjectText: "Mr Oak", subjectEntityId: "90" };
     expect(sharedAnchors(own, about)).toEqual([]);
     expect(sharedAnchors(own, { ...about, subjectWitnessId: own.witnessId })).toEqual(["subject"]);
+  });
+});
+
+const DAUGHTER = ["my daughter", "person"];
+const MY_FLAT = ["My flat", "thing"];
+const THIS = ["This", "thing"];
+const BRIDGEHEAD = ["The Bridgehead", "thing"];
+const stored = (id) => ({ subjectEntityId: id });
+
+const INDEXICAL_PAIRS = {
+  "two daughters' ages": [
+    claim("30", "IWS00000913", DAUGHTER, ATTR, "was", "[6] years old", stored("15")),
+    claim("31", "IWS00000990", DAUGHTER, ATTR, "was", "6 years old", stored("15")),
+  ],
+  "two flats' bedrooms": [
+    claim("32", "IWS00000434", MY_FLAT, ATTR, "was", "a one bedroom flat", stored("137")),
+    claim("33", "IWS00001157", ["My flat", "thing"], ATTR, "had", "two bedrooms", stored("137")),
+  ],
+  "two flats' warmth": [
+    claim("34", "IWS00000169", MY_FLAT, "report", "was colder", "after the windows", stored("137")),
+    claim("35", "IWS00001091", ["my flat", "thing"], "report", "was warmer", null, stored("137")),
+  ],
+  "two control rooms": [
+    claim("36", "MET00007762", THIS, ATTR, "is", "a large control room", stored("836")),
+    claim("37", "MET00007787", THIS, ATTR, "is", "a small control room", stored("836")),
+  ],
+  "two flats a firefighter came to": [
+    claim("38", "IWS00000434", ["A firefighter", "person"], "report", "came to", "my flat", {
+      objectEntityId: "137",
+      objectEntityKind: "place",
+    }),
+    claim("39", "IWS00001157", ["The police", "group"], "report", "came to", "my flat", {
+      objectEntityId: "137",
+      objectEntityKind: "place",
+    }),
+  ],
+};
+
+const BRIDGEHEAD_PAIR = [
+  claim("40", "MET00008044", BRIDGEHEAD, "report", "is where", "entry to the building", {
+    subjectEntityId: "1673",
+  }),
+  claim("41", "MET000083321", ["The bridgehead", "thing"], "report", "is where", "everything", {
+    subjectEntityId: "1673",
+  }),
+];
+
+describe("cross pairs by an indexical subject or object", () => {
+  const assertions = [...Object.values(INDEXICAL_PAIRS).flat(), ...BRIDGEHEAD_PAIR];
+  const same = Float32Array.from([1, 0]);
+  const vectors = new Map(assertions.map((a) => [claimText(a), same]));
+  const { pairs } = alignAssertions(assertions, vectors, { maxPartners: 100, maxPerGroup: 1000 });
+  const made = new Set(pairs.map((p) => key(p.a, p.b)));
+  const unstored = (a) => ({ ...a, subjectEntityId: null, objectEntityId: null });
+
+  it.each(Object.entries(INDEXICAL_PAIRS))("makes no pair for %s", (_, [a, b]) => {
+    expect(sharedAnchors(a, b)).toEqual([]);
+    expect(sharedAnchors(unstored(a), unstored(b))).toEqual([]);
+    expect(made.has(key(a, b))).toBe(false);
+  });
+
+  it("keeps the pair of two officers on one bridgehead", () => {
+    const [a, b] = BRIDGEHEAD_PAIR;
+    expect(sharedAnchors(a, b)).toEqual(["subject"]);
+    expect(made.has(key(a, b))).toBe(true);
+  });
+
+  it("keeps one witness's own flat as one subject across two statements", () => {
+    const [a] = INDEXICAL_PAIRS["two flats' bedrooms"];
+    const later = { ...a, id: "42", documentId: `${a.witnessId}-2`, objectText: "two bedrooms" };
+    expect(sameSubject(unstored(a), unstored(later))).toBe(true);
+    expect(sharedAnchors(unstored(a), unstored(later))).toContain("subject");
   });
 });

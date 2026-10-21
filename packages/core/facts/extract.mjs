@@ -19,7 +19,7 @@ import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
 import { InvalidReplyError } from "../providers/jsonReply.mjs";
 import { sha256Text } from "../ingest/run.mjs";
 import { CLAIM_KINDS, PRONOUN_SUBJECTS, pronounSubject } from "./align.mjs";
-import { loadRegisters, normaliseSpan } from "./registers.mjs";
+import { indexicalSpan, loadRegisters, normaliseSpan } from "./registers.mjs";
 
 export const EXTRACT_PROMPT_VERSION = "assertions-v5";
 export const EXTRACT_PIPELINE_VERSION = "facts-v1";
@@ -403,11 +403,12 @@ function entityFor(registers, span, kindHint) {
 /**
  * The register entry a subject names: a known entity, or the entity named by a witness's id. A
  * subject the registers do not know gets none, because a description such as "a firefighter"
- * from two witnesses is no evidence of one person. The witness's own first person and a pronoun
- * name no entry.
+ * from two witnesses is no evidence of one person. The witness's own first person, a pronoun and
+ * an indexical span such as "my flat" or "This" name no entry.
  */
 export function subjectEntityFor(registers, row) {
-  if (!row.subject_text || row.subjectKind === "witness" || pronounSubject(row.subject_text)) {
+  const text = row.subject_text;
+  if (!text || row.subjectKind === "witness" || pronounSubject(text) || indexicalSpan(text)) {
     return null;
   }
   return entityFor(registers, row.subject_text, null);
