@@ -212,11 +212,22 @@ const flatNumbers = (textWords) =>
   );
 
 /**
+ * The flats where the holder of a role lives: the flats a role names when it starts with the word
+ * "resident". A firefighter's or a relative's role can name a flat that is not theirs.
+ * @param {string | null | undefined} role
+ * @returns {string[]}
+ */
+export function residentFlats(role) {
+  const roleWords = role ? words(role) : [];
+  return roleWords[0] === "resident" ? flatNumbers(roleWords) : [];
+}
+
+/**
  * Finds the witnesses a query names by id, by any alias, by the surname of an alias or by the
  * first and last words of an alias, compared word by word without case. The longest name is
  * matched first, a full name before a part of a name of the same length, and each word of the
  * query is part of at most one name; a name that several witnesses share names them all. When
- * the query names "flat <number>", the witnesses whose role names that flat are named too, as
+ * the query names "flat <number>", the residents of that flat by their role are named too, as
  * one group; the flat words stay in the query.
  * @param {string} query
  * @param {{ id: string, names: string[], role?: string | null }[]} witnesses
@@ -258,7 +269,7 @@ export function namedWitnesses(query, witnesses) {
   const nameGroups = [...matched.values()];
   const witnessIds = [...matched.keys()];
   for (const flat of new Set(flatNumbers(queryWords))) {
-    const residents = witnesses.filter((w) => w.role && flatNumbers(words(w.role)).includes(flat));
+    const residents = witnesses.filter((w) => residentFlats(w.role).includes(flat));
     if (!residents.length) continue;
     nameGroups.push(residents.flatMap((w) => w.names));
     for (const w of residents) if (!witnessIds.includes(w.id)) witnessIds.push(w.id);

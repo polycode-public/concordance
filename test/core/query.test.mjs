@@ -20,6 +20,7 @@ import {
   halfvecLiteral,
   namedWitnessScope,
   namedWitnesses,
+  residentFlats,
   quotedPhrases,
   retrieve,
 } from "../../packages/core/retrieval/hybrid.mjs";
@@ -638,6 +639,49 @@ describe("witness names and quoted phrases", () => {
       witnessIds: ["IWS1", "IWS2"],
     });
     expect(namedWitnesses("flat 999 and flatmates 131", people).witnessIds).toEqual([]);
+  });
+
+  it("reads the flats of a resident's role and none of another role that names a flat", () => {
+    expect(residentFlats("resident, floor 16, flat 133, floor 16")).toEqual(["133"]);
+    expect(residentFlats("Resident of Flat 136")).toEqual(["136"]);
+    expect(residentFlats("London Fire Brigade, firefighter; Flat 133")).toEqual([]);
+    expect(
+      residentFlats(
+        "London Fire Brigade, control room officer; took Sener Macit's call from Flat 133, floor 16",
+      ),
+    ).toEqual([]);
+    expect(residentFlats("relative of the Flat 175 household, floor 20, floor 20")).toEqual([]);
+    expect(residentFlats(null)).toEqual([]);
+  });
+
+  it("names the residents of a flat and not a firefighter whose role names it", () => {
+    const people = [
+      {
+        id: "IWS1",
+        names: ["IWS1", "Sener Macit"],
+        role: "resident, floor 16, flat 133, floor 16",
+      },
+      {
+        id: "MET1",
+        names: ["MET1", "Dean Nelson"],
+        role: "London Fire Brigade, firefighter; Flat 133",
+      },
+      {
+        id: "MET2",
+        names: ["MET2", "Aldo Diana"],
+        role: "London Fire Brigade, crew manager; Flat 133",
+      },
+    ];
+    expect(namedWitnesses("Why did Crew Manager Diana's crew not reach Flat 133?", people)).toEqual(
+      {
+        rest: "why did crew manager s crew not reach flat 133",
+        nameGroups: [
+          ["MET2", "Aldo Diana"],
+          ["IWS1", "Sener Macit"],
+        ],
+        witnessIds: ["MET2", "IWS1"],
+      },
+    );
   });
 
   it("reads straight and curly quoted phrases", () => {
