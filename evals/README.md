@@ -11,6 +11,14 @@ question through the query pipeline and reports four metrics:
 - **unsupported-sentence rate**: the share of answer sentences with no `[En]` tag.
 - **abstention correctness**: the share of rows where the system answers or abstains as `expected` says.
 
+Each run also writes a miss report to `evals/<corpus>/runs/<timestamp>-<provider>-rerank-<RERANK>.json`
+(gitignored; `--report=<path>` sets another path) and prints its path as `report`. For each row
+the report gives every distinct cited locator a `kind`: `gold`, `paragraph` (the page of a gold
+locator, another paragraph), `page` (the document of a gold locator, another page), `document`
+(no gold locator names the document) or `abstain-row`. For each gold locator it records `cited`,
+`retrieved` (an evidence block comes from its document) and `retrievedParagraph`. The `summary`
+block counts both over all rows.
+
 The default provider is `laptop`. With an empty gold file the runner prints
 `0 gold rows in <path>; nothing to score` and exits 0.
 
@@ -42,6 +50,56 @@ witness said and cites the statement paragraph. Each row records that locator. A
 invented, paraphrased from memory or written from model output.
 
 ## Results
+
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, miss report
+
+The same command and store as the run below, with `RERANK=off`, run once from 14:06:10Z to
+14:17:49Z with the miss report on.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.360 |
+| citation recall           | 0.500 |
+| unsupported-sentence rate | 0.201 |
+| abstention correctness    | 0.860 |
+
+The 86 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 31    |
+| `page`        | 29    |
+| `document`    | 18    |
+| `paragraph`   | 7     |
+| `abstain-row` | 1     |
+
+The 62 gold locators: 31 cited, 27 retrieved but not cited (14 of them with the gold paragraph
+itself in the evidence blocks), 4 not retrieved at all (rows 0006, 0008, 0022, 0036).
+
+Example rows, checked against the statement text with `pdftotext`:
+
+| Row             | Gold names                                                                                                | The model cited                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `grenfell-0021` | IWS00000913 p.3 ¶11 (the fire engines arrive), IWS00000990 p.1 ¶2 (on whose behalf the statement is made) | IWS00000913 p.4 ¶20 and IWS00000990 p.3 ¶14, the two paragraphs that say the smoke rushed in when the door opened |
+| `grenfell-0017` | IWS00000835 p.2 ¶11 (the neighbours in flats 171 to 176)                                                  | IWS00000835 p.8 ¶54 and ¶55, where the couple agree not to stay put                                               |
+| `grenfell-0009` | IWS00000913 p.20 ¶109, p.7 ¶37 and IWS00000990 p.1 ¶2                                                     | p.20 ¶109 (gold) and p.19 ¶102, which also says they would ignore the sign                                        |
+| `grenfell-0015` | IWS00001157 p.6 ¶26 and p.10 ¶55                                                                          | p.6 ¶26 (gold) and four paragraphs of Edward Daffarn and IWS00000113                                              |
+| `grenfell-0036` | IWS00000608 p.11 ¶69 (the firefighter on the 11th floor); never retrieved                                 | three firefighter statements (MET00012483, MET000083321, MET000083300)                                            |
+| `grenfell-0030` | IWS00001091 p.8 ¶42, in the evidence blocks                                                               | nothing: the model abstained                                                                                      |
+
+The evidence points first at the gold set. Three gold locators name a paragraph that does not
+say what the row asks: IWS00000835 p.2 ¶11 (rows 0016, 0017, 0022, 0025), IWS00000990 p.1 ¶2
+(rows 0008, 0009, 0021, 0024) and IWS00000913 p.3 ¶11 (rows 0007, 0008, 0021, 0022). These nine
+rows hold 21 of the 55 non-gold citations, and the four spot-checked ones (IWS00000913 p.4 ¶20,
+IWS00000990 p.3 ¶14, IWS00000835 p.8 ¶55, IWS00000913 p.19 ¶102) support the answer. So 15 of
+the 29 `page` misses sit in rows whose gold is wrong, and neighbour expansion in
+`packages/core/retrieval/expand.mjs` and block choice in `evidence.mjs` are not yet shown to be at
+fault. The 18 `document` misses (rows 0006, 0015, 0036 hold 10) point at the rewrite in
+`packages/core/retrieval/rewrite.mjs` and the fusion in `rrf.mjs` and `hybrid.mjs`, which rank the firefighter and other residents'
+statements above the named witness. Six answer rows (0005, 0027, 0030, 0032, 0035, 0042) abstain
+with a gold document in the evidence, four of them with the gold paragraph, which points at the
+answer prompt. The first change: check every gold locator against the statement text, correct
+the ones that name the wrong paragraph from the inquiry report's quote, and score again.
 
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off and on
 

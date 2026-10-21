@@ -3,8 +3,9 @@
 //
 // Scores the query pipeline against a gold set:
 //   node evals/run.mjs --provider=laptop|bedrock --gold=evals/<corpus>/gold.jsonl
-// The corpus is the gold file's directory name unless --corpus= names it.
-import { readFile } from "node:fs/promises";
+// The corpus is the gold file's directory name unless --corpus= names it. Each run also writes a
+// per-row miss report to evals/<corpus>/runs/ unless --report= names the path.
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +14,7 @@ const EXPECTED = new Set(["answer", "abstain"]);
 export function parseArgs(argv) {
   const args = { provider: "laptop", gold: "evals/grenfell/gold.jsonl" };
   for (const arg of argv) {
-    const match = /^--(provider|gold|corpus)=(.+)$/.exec(arg);
+    const match = /^--(provider|gold|corpus|report)=(.+)$/.exec(arg);
     if (!match) throw new Error(`unknown argument ${arg}`);
     args[match[1]] = match[2];
   }
@@ -66,6 +67,83 @@ export function locatorMatches(gold, cited) {
 
 const locatorKey = (l) => (typeof l === "string" ? l : JSON.stringify(l));
 
+const distinctCitations = (citations) => [
+  ...new Map(citations.map((c) => [locatorKey(c.locator), c.locator])).values(),
+];
+
+const sameDocument = (gold, cited) =>
+  typeof gold !== "string" && typeof cited !== "string" && gold.document === cited.document;
+
+/** The miss kind of one cited locator against the gold locators of its row. */
+function citedKind(golds, cited) {
+  if (golds.length === 0) return "abstain-row";
+  if (golds.some((g) => locatorMatches(g, cited))) return "gold";
+  const documentGolds = golds.filter((g) => sameDocument(g, cited));
+  if (documentGolds.length === 0) return "document";
+  if (documentGolds.some((g) => g.page === cited.page)) return "paragraph";
+  return "page";
+}
+
+/**
+ * Classifies one scored row for the miss report: each distinct cited locator gets a kind, and each
+ * gold locator records whether the answer cites it and whether retrieval returned its document
+ * and its paragraph.
+ * @param {{ row: object, result: { abstained: boolean, citations: { locator: unknown }[],
+ *   checks: { sentences: number, supported: number },
+ *   evidenceBlocks?: { documentId: string, locator: { paragraph?: unknown } }[] } }} scored
+ */
+export function classifyRow({ row, result }) {
+  const golds = row.gold_locators;
+  const citations = distinctCitations(result.citations);
+  const blocks = result.evidenceBlocks ?? [];
+  return {
+    id: row.id,
+    question: row.question,
+    expected: row.expected,
+    abstained: result.abstained,
+    sentences: result.checks.sentences,
+    supported: result.checks.supported,
+    gold: golds.map((g) => {
+      const documentBlocks =
+        typeof g === "string" ? [] : blocks.filter((b) => b.documentId === g.document);
+      return {
+        locator: g,
+        cited: citations.some((c) => locatorMatches(g, c)),
+        retrieved: documentBlocks.length > 0,
+        retrievedParagraph:
+          g.paragraph !== null &&
+          g.paragraph !== undefined &&
+          documentBlocks.some((b) => b.locator?.paragraph === g.paragraph),
+      };
+    }),
+    cited: citations.map((c) => ({ locator: c, kind: citedKind(golds, c) })),
+  };
+}
+
+/** Builds the miss report: the summary counts over all rows, then each classified row. */
+export function missReport(scored) {
+  const rows = scored.map(classifyRow);
+  const citedByKind = { gold: 0, paragraph: 0, page: 0, document: 0, "abstain-row": 0 };
+  const gold = {
+    total: 0,
+    cited: 0,
+    retrievedNotCited: 0,
+    notRetrieved: 0,
+    paragraphRetrievedNotCited: 0,
+  };
+  for (const r of rows) {
+    for (const c of r.cited) citedByKind[c.kind]++;
+    for (const g of r.gold) {
+      gold.total++;
+      if (g.cited) gold.cited++;
+      else if (g.retrieved) gold.retrievedNotCited++;
+      else gold.notRetrieved++;
+      if (!g.cited && g.retrievedParagraph) gold.paragraphRetrievedNotCited++;
+    }
+  }
+  return { summary: { citedByKind, gold }, rows };
+}
+
 /**
  * Aggregates per-row results into the four tracked metrics.
  * @param {{ row: object, result: { abstained: boolean, citations: { locator: unknown }[],
@@ -81,9 +159,7 @@ export function score(scored) {
   let abstainCorrect = 0;
   for (const { row, result } of scored) {
     const golds = row.gold_locators;
-    const citations = [
-      ...new Map(result.citations.map((c) => [locatorKey(c.locator), c.locator])).values(),
-    ];
+    const citations = distinctCitations(result.citations);
     cited += citations.length;
     for (const c of citations) if (golds.some((g) => locatorMatches(g, c))) citedCorrect++;
     gold += golds.length;
@@ -100,6 +176,12 @@ export function score(scored) {
     unsupportedSentenceRate: ratio(unsupported, sentences),
     abstentionCorrectness: ratio(abstainCorrect, scored.length),
   };
+}
+
+function defaultReportPath(goldPath, provider) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const rerank = process.env.RERANK || "off";
+  return path.join(path.dirname(goldPath), "runs", `${stamp}-${provider}-rerank-${rerank}.json`);
 }
 
 /**
@@ -138,9 +220,27 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
       scored.push({ row, result });
     }
     const metrics = score(scored);
+    const reportPath = path.resolve(args.report ?? defaultReportPath(goldPath, args.provider));
+    const header = {
+      provider: args.provider,
+      corpus: args.corpus,
+      gold: args.gold,
+      rerank: process.env.RERANK || "off",
+    };
+    await mkdir(path.dirname(reportPath), { recursive: true });
+    await writeFile(
+      reportPath,
+      JSON.stringify({ ...header, metrics, ...missReport(scored) }, null, 2) + "\n",
+    );
     console.log(
       JSON.stringify(
-        { provider: args.provider, corpus: args.corpus, gold: args.gold, ...metrics },
+        {
+          provider: args.provider,
+          corpus: args.corpus,
+          gold: args.gold,
+          ...metrics,
+          report: reportPath,
+        },
         null,
         2,
       ),
