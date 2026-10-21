@@ -9,13 +9,15 @@
 // thing as the shared subject, or a shared object entity of kind place, vehicle or unit anchor it:
 // two witnesses who each went to bed are two events, so a shared predicate is no anchor. Two
 // first-person claims of two witnesses pair only when both are observations of a shared event. A
-// person or group named only by a pronoun or by a possessive kin term ("my daughter") with no
-// register entry is somebody different in each statement, so it makes no cross pair at all. A
+// subject that is a bare pronoun or demonstrative ("This") or starts with a possessive ("my
+// daughter", "my flat") is somebody or something different in each statement, whatever entity a
+// stored row gives it, so it makes no cross pair at all; nor does a person or group named only by
+// a pronoun such as "this man" with no register entry. A
 // claim about someone's age, health, home, family or job is about that one person: it pairs across
 // witnesses only when both subjects resolve to one register entry, never by an event, an object or
 // words. A witness assertion against an accepted fact makes an accepted pair. Every bound is a
 // constant here.
-import { normaliseSpan } from "./registers.mjs";
+import { PRONOUNS, indexicalSpan, normaliseSpan } from "./registers.mjs";
 
 /** Cosine at or above which an anchored pair is a candidate. */
 export const ALIGN_SIMILARITY = 0.6;
@@ -41,21 +43,7 @@ export const CLAIM_KINDS = Object.freeze(["attribute", "action", "observation", 
  * sentences are not one person or thing by their words.
  */
 export const PRONOUN_SUBJECTS = Object.freeze([
-  "he",
-  "she",
-  "they",
-  "him",
-  "her",
-  "them",
-  "himself",
-  "herself",
-  "themselves",
-  "it",
-  "you",
-  "someone",
-  "somebody",
-  "everyone",
-  "everybody",
+  ...PRONOUNS,
   ...["this", "that", "the", "a"].flatMap((d) =>
     ["man", "woman", "person", "lady", "gentleman", "boy", "girl"].map((n) => `${d} ${n}`),
   ),
@@ -71,86 +59,16 @@ export const pronounSubject = (text) =>
       .replace(/[^\p{L}\p{N}' ]+/gu, ""),
   );
 
-/** The kin and household nouns that, after a possessive, name somebody of the witness's own. */
-export const KIN_TERMS = Object.freeze([
-  "daughter",
-  "son",
-  "child",
-  "children",
-  "kids",
-  "baby",
-  "husband",
-  "wife",
-  "partner",
-  "boyfriend",
-  "girlfriend",
-  "fiance",
-  "fiancee",
-  "mother",
-  "father",
-  "mum",
-  "mom",
-  "dad",
-  "parent",
-  "parents",
-  "brother",
-  "sister",
-  "sibling",
-  "grandmother",
-  "grandfather",
-  "grandson",
-  "granddaughter",
-  "grandchildren",
-  "nan",
-  "aunt",
-  "uncle",
-  "cousin",
-  "niece",
-  "nephew",
-  "family",
-  "relative",
-  "neighbour",
-  "neighbor",
-  "flatmate",
-  "friend",
-  "carer",
-  "household",
-]);
-
-const KIN_SET = new Set(KIN_TERMS);
-const POSSESSIVES = new Set(["my", "our", "his", "her", "their"]);
-const PLURAL_PRONOUNS = new Set(["we", "us"]);
-
-const subjectWords = (text) =>
-  normaliseSpan(text ?? "")
-    .normalize("NFD")
-    .replace(/\p{M}+/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
-    .split(" ")
-    .filter(Boolean);
-
-/** True when a subject span is a possessive followed by a kin or household noun as its head. */
-export function kinSubject(text) {
-  const words = subjectWords(text);
-  if (words.length < 2 || !POSSESSIVES.has(words[0])) return false;
-  const head = words.at(-1).replace(/'s$/, "");
-  return KIN_SET.has(head) || (head.endsWith("s") && KIN_SET.has(head.slice(0, -1)));
-}
-
 /**
- * True when a person or group subject names nobody the registers know: a pronoun, or a possessive
- * kin term, with no subject entity.
+ * True when a subject names nobody the registers can share between witnesses: an indexical span
+ * ("my daughter", "This") whatever its stored entity, or a person or group named only by a
+ * pronoun with no subject entity.
  */
 export function unnamedSubject(a) {
+  if (!a.subjectKind || firstPerson(a)) return false;
+  if (indexicalSpan(a.subjectText)) return true;
   if (a.subjectKind !== "person" && a.subjectKind !== "group") return false;
-  if (a.subjectEntityId) return false;
-  const words = subjectWords(a.subjectText);
-  return (
-    pronounSubject(a.subjectText) ||
-    (words.length === 1 && PLURAL_PRONOUNS.has(words[0])) ||
-    kinSubject(a.subjectText)
-  );
+  return !a.subjectEntityId && pronounSubject(a.subjectText);
 }
 
 const LEADING_WORDS = new Set([
@@ -267,7 +185,9 @@ export function sharedAnchors(a, b) {
     }
     if (event) out.push("event");
     if (sameSubject(a, b)) out.push("subject");
-    if (sameObjectEntity && CROSS_OBJECT_KINDS.includes(a.objectEntityKind)) out.push("object");
+    const sharedObject =
+      sameObjectEntity && !indexicalSpan(a.objectText) && !indexicalSpan(b.objectText);
+    if (sharedObject && CROSS_OBJECT_KINDS.includes(a.objectEntityKind)) out.push("object");
     return out;
   }
   if (sameEvent(a, b)) out.push("event");

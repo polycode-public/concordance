@@ -11,7 +11,9 @@ import {
   extractAssertions,
   extractPrompt,
   sentenceWindows,
+  subjectEntityFor,
 } from "../../packages/core/facts/extract.mjs";
+import { createRegisters } from "../../packages/core/facts/registers.mjs";
 import { InvalidReplyError } from "../../packages/core/providers/jsonReply.mjs";
 import { ReplyTruncatedError } from "../../packages/core/providers/modelProvider.mjs";
 import { CLAIM_KINDS } from "../../packages/core/facts/align.mjs";
@@ -1081,5 +1083,28 @@ describe("extractAssertions", () => {
       expect(again.firsts).toEqual([0, 3, 6]);
       expect(store.tables.assertions).toHaveLength(COUNT);
     });
+  });
+});
+
+describe("subjectEntityFor", () => {
+  const registers = createRegisters({
+    witnesses: [],
+    entities: [
+      { id: 15, kind: "person", canonical: "my daughter" },
+      { id: 137, kind: "thing", canonical: "my flat" },
+      { id: 836, kind: "thing", canonical: "This" },
+      { id: 1673, kind: "thing", canonical: "the bridgehead" },
+    ],
+  });
+  const row = (subject_text, subjectKind) => ({ subject_text, subjectKind });
+
+  it("gives a possessive or demonstrative subject no entity even when the register has one", () => {
+    expect(subjectEntityFor(registers, row("my daughter", "person"))).toBeNull();
+    expect(subjectEntityFor(registers, row("My flat", "thing"))).toBeNull();
+    expect(subjectEntityFor(registers, row("This", "thing"))).toBeNull();
+  });
+
+  it("resolves a named subject to its register entity", () => {
+    expect(subjectEntityFor(registers, row("The Bridgehead", "thing"))).toEqual({ id: "1673" });
   });
 });

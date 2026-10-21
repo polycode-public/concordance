@@ -2,7 +2,11 @@
 // Copyright 2026 Polycode Limited
 import { describe, expect, it } from "vitest";
 import {
+  DEMONSTRATIVES,
+  POSSESSIVES,
+  PRONOUNS,
   createRegisters,
+  indexicalSpan,
   isIdentityRevealingPair,
   loadRegisters,
   normaliseSpan,
@@ -127,5 +131,34 @@ describe("identity-revealing pairs", () => {
       ["IWS1", "IWS2"],
       ["IWS1", "IWS3"],
     ]);
+  });
+});
+
+describe("indexicalSpan", () => {
+  it("is true for a bare pronoun or demonstrative and for a possessive and its noun", () => {
+    for (const text of [
+      "This",
+      "that",
+      "It",
+      "we",
+      "my flat",
+      "My  daughter",
+      "their son",
+      "Our block",
+    ]) {
+      expect(indexicalSpan(text), text).toBe(true);
+    }
+  });
+
+  it("is false for a named or described span and for a demonstrative and its noun", () => {
+    for (const text of ["the bridgehead", "Flat 16", "my", "this control room", "Mrs Ash", ""]) {
+      expect(indexicalSpan(text), text).toBe(false);
+    }
+  });
+
+  it("keeps the lists apart from the possessives", () => {
+    expect(POSSESSIVES).toEqual(["my", "our", "his", "her", "their"]);
+    expect(DEMONSTRATIVES).toEqual(["this", "that", "these", "those"]);
+    expect(PRONOUNS).toContain("they");
   });
 });
