@@ -51,6 +51,105 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, blocks at one locator and a longer walk
+
+The same command and store as the lexical-boost run below, with `RERANK=off`, after four changes.
+One run, from 23:21:29Z to 23:30:19Z. Spend: about $0.70 by the day's Sonnet rate; Cost Explorer
+lags by hours. The run report is `evals/grenfell/runs/2026-10-21T23-30-19-836Z-bedrock-rerank-off.json`.
+
+1. A passage block holds text of its own locator only. A passage hit took its previous and next
+   passage at any locator: in IWS00000069 a hit in ¶88 showed the last sentence of ¶87 under the
+   locator of ¶88, and ¶87 was then covered and had no block of its own.
+2. The block walk reads the first 40 fused hits, up from 12, and stops at 12 blocks or the
+   character budget. The first 12 hits often sit in one or two sections and collapse into a few
+   blocks: row 0012 had 4 blocks and 5.9k of the 24k characters. Retrieval only, over the 50
+   questions: 56 of the 67 gold locators are in the first evidence, up from 46 (rows 0002, 0005,
+   0012, 0015, 0018, 0023, 0025, 0032, 0038, 0047), and no row loses one.
+3. Two gold rows add locators that say what the report says. Row 0007 quotes the whole of finding
+   11.71 and adds IWS00000913 p4 ¶16, p4 ¶18 and p21 ¶111. Row 0045 adds Jamal Stern's
+   MET00012483 p12. Row 0006 stays: Stern's p11 tells the rescue from his side and does not say
+   the tap on the leg. The gold set holds 71 locators.
+4. The miss report lists the evidence blocks and the tool calls of each row.
+
+A weight on the named rankings is rejected. Retrieval only, with change 2 in place:
+
+| Fusion                                        | Gold in the first evidence | Rows that lose a gold locator      |
+| --------------------------------------------- | -------------------------- | ---------------------------------- |
+| every named ranking at weight 1               | 56 of 67                   | none                               |
+| named rankings at weight 0.75                 | 53                         | 0002, 0032, 0038                   |
+| named rankings at weight 0.5                  | 51                         | 0002, 0015, 0032, 0036, 0038, 0044 |
+| only `namedPassage` and `namedLexicalPassage` | 53                         | 0025, 0038, 0044                   |
+
+Row 0047's gold page is in the evidence in all four (block 7 at weight 1), so change 2 is its fix.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.540 |
+| citation recall           | 0.859 |
+| unsupported-sentence rate | 0.143 |
+| abstention correctness    | 0.980 |
+
+The 113 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 61    |
+| `paragraph`   | 27    |
+| `page`        | 21    |
+| `document`    | 3     |
+| `abstain-row` | 1     |
+
+The 71 gold locators: 61 cited, 9 retrieved but not cited (5 of them with the gold paragraph
+itself in the evidence blocks), 1 not retrieved at all (row 0022).
+
+Against the lexical-boost run (precision 0.530, recall 0.791, unsupported 0.140, abstention 0.960;
+100 citations: 53 gold, 27 page, 16 paragraph, 3 document, 1 abstain-row; 67 gold: 53 cited, 12
+retrieved not cited, 2 not retrieved: rows 0022 and 0047), precision rises 0.010, recall rises
+0.068 on 4 more gold locators, the unsupported rate rises 0.003 and abstention rises 0.020. Gold
+citations rise from 53 to 61: 4 from the gold rows (row 0007 three, row 0045 one) and 4 from
+retrieval (rows 0015, 0018, 0038, 0047). Row 0047 no longer abstains and cites MET00008034 p8. Row
+0038 cites both its gold locators. Row 0012 cites ¶87 and no longer cites IWS00001156 ¶14, which
+is in its evidence. Non-gold citations rise from 47 to 52: `page` misses fall from 27 to 21 and
+`paragraph` misses rise from 16 to 27. Of the 52, 36 are blocks of the first retrieval and 16 are
+blocks that a tool call added; 41 of the 50 rows call `witness_claims`, which adds up to 50 claims
+of one statement.
+
+The rows that still miss:
+
+| id            | miss                                                 | cause in the run                                                                                                                |
+| ------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| grenfell-0023 | 10 `page` and `paragraph`                            | a list across two statements; every gold locator is cited                                                                       |
+| grenfell-0012 | 4 `paragraph`, 1 gold in the evidence not cited      | cites IWS00000069 ¶85, ¶86, ¶88 and ¶89 around the gold ¶87 (cited); IWS00001156 ¶14 is in the evidence and not cited           |
+| grenfell-0001 | 4 `page` and `paragraph`                             | cites four more paragraphs of IWS00000490 beside the gold, after `witness_claims` for that statement                            |
+| grenfell-0022 | 1 gold not retrieved, 4 misses                       | names no witness and no flat; Petra Doulova's statement (IWS00000835 p9 ¶61) is not retrieved                                   |
+| grenfell-0003 | 3 `page` and `paragraph`                             | cites three more paragraphs of IWS00000490 beside both gold locators                                                            |
+| grenfell-0034 | 3 `page` and `paragraph`                             | cites IWS00000608 ¶49, ¶51 and ¶52 beside the gold                                                                              |
+| grenfell-0013 | 2 `paragraph`, 2 gold retrieved not cited            | ¶103 (the buckets of water) is not in the evidence; the model searches for the bedroom fire and cites IWS00000069 ¶102 and ¶105 |
+| grenfell-0009 | 2 `page` and `paragraph`, 1 gold retrieved not cited | cites IWS00000913 ¶102 and IWS00000990 ¶72                                                                                      |
+| grenfell-0024 | 2 `page` and `paragraph`, 1 gold retrieved not cited | the same two paragraphs as row 0009, from `matrix_cell`                                                                         |
+| grenfell-0015 | 2 `document`                                         | cites Edward Daffarn's IWS00000169 ¶50 and ¶51; every gold locator is cited                                                     |
+| grenfell-0039 | 2 `page`                                             | cites Watson's MET00008044 p4 and p5 beside the gold p3, with no tool call; check them against finding 10.106                   |
+| grenfell-0017 | 2 `paragraph`                                        | cites IWS00000835 ¶53 and ¶54 beside the gold                                                                                   |
+| grenfell-0025 | 2 `page`                                             | cites IWS00000835 p1 and p1 ¶1 (the statement's opening)                                                                        |
+| grenfell-0048 | 2 `page`                                             | cites MET00018800 p8 and p11 beside the gold                                                                                    |
+| grenfell-0020 | 1 `abstain-row`                                      | an abstain row that the model answers from the improvement works budget in IWS00000169 p126                                     |
+
+Rows 0002, 0004, 0007, 0010, 0011, 0016 and 0032 have one `page` or `paragraph` miss each; rows
+0002, 0005, 0010 and 0014 have one gold locator in the evidence that is not cited.
+
+The next changes the evidence names:
+
+1. Gold checks of the rows whose question asks more than their quote holds, as row 0007 did: read
+   each finding paragraph in full for rows 0001, 0003, 0034, 0039 and 0048, and add a locator only
+   where the statement says what the finding says.
+2. `witness_claims` without a predicate returns 50 claims of a statement, and 16 non-gold citations
+   come from tool blocks. Rank its claims by the question, or cap them, and measure the misses.
+3. Row 0013: ¶103 is not in the fused list of the question. The question asks what happened
+   "immediately before" they left and the statement says "bucket" and "water"; read the context
+   line of the chunk and the rewrite of the query.
+4. Row 0020: decide whether a question about a part of a cost is answered by the whole budget, then
+   change the prompt or the row.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, lexical boost and resident flat match
 
 The same command and store as the fusion-boost run below, with `RERANK=off`, after three changes.
