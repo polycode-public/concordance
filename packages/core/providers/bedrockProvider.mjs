@@ -29,6 +29,18 @@ const EMBED_RETRY_CAP_MS = 20000;
 const EXTRACT_INTERVAL_MS = 1500;
 const EXTRACT_MAX_TOKENS = 8192;
 
+/** The fewest tokens a cache checkpoint's whole prefix may hold, by model family. */
+export const CACHE_MIN_TOKENS = Object.freeze([
+  Object.freeze({ family: "claude-sonnet-4-5", tokens: 1024 }),
+  Object.freeze({ family: "claude-haiku-4-5", tokens: 4096 }),
+]);
+
+/** True when the model id has a cache minimum and the prefix text is at least that long. */
+export function prefixFitsCache(modelId, prefixText) {
+  const min = CACHE_MIN_TOKENS.find((m) => modelId.includes(m.family));
+  return Boolean(min) && prefixText.length / CHARS_PER_TOKEN >= min.tokens;
+}
+
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isThrottle(error) {
@@ -37,6 +49,24 @@ function isThrottle(error) {
     error?.name === "TooManyRequestsException" ||
     error?.$metadata?.httpStatusCode === 429
   );
+}
+
+/**
+ * Converse reports the tokens outside the cache as inputTokens; the usage here counts every input
+ * token in inputTokens and names the cached share beside it.
+ */
+function bedrockUsage({
+  inputTokens,
+  outputTokens,
+  cacheReadInputTokens = 0,
+  cacheWriteInputTokens = 0,
+}) {
+  return {
+    inputTokens: inputTokens + cacheReadInputTokens + cacheWriteInputTokens,
+    outputTokens,
+    cacheReadTokens: cacheReadInputTokens,
+    cacheWriteTokens: cacheWriteInputTokens,
+  };
 }
 
 /**
@@ -49,8 +79,7 @@ async function readReply(stream, signal, onText) {
   for await (const event of stream) {
     signal?.throwIfAborted();
     if (event.metadata?.usage) {
-      const { inputTokens, outputTokens } = event.metadata.usage;
-      usage = { inputTokens, outputTokens };
+      usage = bedrockUsage(event.metadata.usage);
     }
     const index =
       event.contentBlockStart?.contentBlockIndex ?? event.contentBlockDelta?.contentBlockIndex ?? 0;
@@ -234,7 +263,7 @@ export function createBedrockProvider(
     }) {
       signal?.throwIfAborted();
       const { mod, runtime } = await connect();
-      const system = messages.filter((m) => m.role === "system").map((m) => ({ text: m.content }));
+      const systemTexts = messages.filter((m) => m.role === "system").map((m) => m.content);
       const history = messages
         .filter((m) => m.role !== "system")
         .map((m) => ({ role: m.role, content: [{ text: m.content }] }));
@@ -249,6 +278,13 @@ export function createBedrockProvider(
             })),
           }
         : null;
+      const cachePrefix = [...systemTexts, JSON.stringify(toolConfig?.tools ?? [])].join("");
+      const system = [
+        ...systemTexts.map((text) => ({ text })),
+        ...(systemTexts.length && prefixFitsCache(chatModel, cachePrefix)
+          ? [{ cachePoint: { type: "default" } }]
+          : []),
+      ];
       const answer = answerStream(onToken);
       const toolCalls = [];
       let usage = null;

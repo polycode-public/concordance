@@ -35,4 +35,36 @@ describe("the list prices", () => {
       costOf({ model: "claude-haiku-4-5", inputTokens: 2000, outputTokens: 1000 }),
     ).toBeCloseTo(0.002 + 0.005, 10);
   });
+
+  it("prices cache reads and writes apart from the uncached input", () => {
+    const sonnet = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    expect(
+      costOf({
+        model: sonnet,
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 600_000,
+        cacheWriteTokens: 100_000,
+      }),
+    ).toBeCloseTo(0.3 * 3 + 0.6 * 0.3 + 0.1 * 3.75, 10);
+    expect(
+      costOf({
+        model: "claude-haiku-4-5",
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.1, 10);
+  });
+
+  it("has no cost for cache tokens on a model with no cache price", () => {
+    expect(
+      costOf({
+        model: "amazon.titan-embed-text-v2:0",
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadTokens: 5,
+      }),
+    ).toBeNull();
+  });
 });
