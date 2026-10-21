@@ -22,6 +22,10 @@ const CHARS_PER_TOKEN = 4;
 const RETRY_ATTEMPTS = 8;
 const RETRY_BASE_MS = 1000;
 const RETRY_CAP_MS = 60000;
+/** An embedding call that keeps being throttled waits this long in all before it gives up. */
+export const EMBED_RETRY_BUDGET_MS = 60000;
+const EMBED_RETRY_BASE_MS = 1000;
+const EMBED_RETRY_CAP_MS = 20000;
 const EXTRACT_INTERVAL_MS = 1500;
 const EXTRACT_MAX_TOKENS = 8192;
 
@@ -147,6 +151,33 @@ export function createBedrockProvider(
     }
   }
 
+  /**
+   * Runs call(); on throttling waits between half and all of a doubling delay, so concurrent
+   * callers sharing the quota are spread out, until the waits add up to EMBED_RETRY_BUDGET_MS.
+   */
+  async function withEmbedRetry(call) {
+    let waited = 0;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await call();
+      } catch (error) {
+        if (!isThrottle(error)) throw error;
+        if (waited >= EMBED_RETRY_BUDGET_MS) {
+          throw new Error(`throttled after ${attempt} attempts: ${error.message}`, {
+            cause: error,
+          });
+        }
+        const ceiling = Math.min(EMBED_RETRY_CAP_MS, EMBED_RETRY_BASE_MS * 2 ** (attempt - 1));
+        const wait = Math.min(
+          ceiling / 2 + (Math.random() * ceiling) / 2,
+          EMBED_RETRY_BUDGET_MS - waited,
+        );
+        waited += wait;
+        await sleep(wait);
+      }
+    }
+  }
+
   async function embedOne(text, { mod, runtime }) {
     const command = new mod.InvokeModelCommand({
       modelId: embedModel,
@@ -154,7 +185,7 @@ export function createBedrockProvider(
       accept: "application/json",
       body: JSON.stringify({ inputText: text, dimensions: embedDim, normalize: true }),
     });
-    const response = await withRetry(() => runtime.send(command));
+    const response = await withEmbedRetry(() => runtime.send(command));
     const { embedding } = JSON.parse(new TextDecoder().decode(response.body));
     if (!Array.isArray(embedding) || embedding.length !== embedDim) {
       throw new Error(

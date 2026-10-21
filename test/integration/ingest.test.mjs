@@ -224,6 +224,7 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
       ["IWS00000002"],
     );
     expect(rows.map((r) => r.locator)).toEqual([{ page: 1, paragraph: null }]);
+    await db.query("DELETE FROM documents WHERE id = $1", ["IWS00000002"]);
   });
 
   it("replaces the chunks when the pipeline version changes", async () => {

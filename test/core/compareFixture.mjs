@@ -347,11 +347,14 @@ export function promptPairs(prompt) {
 }
 
 /** A fake provider whose model pass answers from MODEL_LABELS, or from `answer` when given. */
-export function compareProvider({ answer } = {}) {
+export function compareProvider({ answer, dimensions = 9 } = {}) {
   const prompts = [];
   const provider = createFakeProvider({
     tokens: [],
-    embedFor,
+    embedFor: (text) => {
+      const v = embedFor(text);
+      return [...v, ...new Array(dimensions - v.length).fill(0)];
+    },
     extractJson: ({ prompt }) => {
       prompts.push(prompt);
       const pairs = promptPairs(prompt);

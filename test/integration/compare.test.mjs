@@ -60,7 +60,7 @@ describe.skipIf(!enabled)("the comparison run and facts views (CONCORDANCE_DB_TE
     runComparison({
       corpus: "grenfell",
       db: store,
-      provider: compareProvider().provider,
+      provider: compareProvider({ dimensions: 1024 }).provider,
       log: () => {},
     });
   const request =

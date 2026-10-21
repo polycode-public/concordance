@@ -52,7 +52,7 @@ describe.skipIf(!enabled)("the store tools (CONCORDANCE_DB_TESTS=1)", () => {
       await runComparison({
         corpus: CORPUS,
         db: s,
-        provider: compareProvider().provider,
+        provider: compareProvider({ dimensions: 1024 }).provider,
         log: () => {},
       });
     }

@@ -286,7 +286,7 @@ export const eligible = (a) =>
   Boolean(a.witnessId) &&
   (a.confidence === null || a.confidence === undefined || a.confidence >= MIN_CONFIDENCE);
 
-function unit(vector) {
+export function unit(vector) {
   const v = Float32Array.from(vector);
   let norm = 0;
   for (let i = 0; i < v.length; i++) norm += v[i] * v[i];
@@ -318,13 +318,16 @@ export const groupKey = ({ eventId, topic }) => (eventId ? `event:${eventId}` : 
 /** The identity of a pair, the same in memory and in the store. */
 export const pairKey = ({ kind, a, b, fact }) => `${kind}:${a.id}:${b?.id ?? 0}:${fact?.id ?? 0}`;
 
+/** Texts sent to one embed call; a run that stops loses at most this many vectors. */
+export const EMBED_BATCH = 64;
+
 /**
  * Embeds the distinct texts once and returns a lookup of unit vectors.
  * @param {{ embed: (texts: string[]) => Promise<number[][]> }} provider
  * @param {string[]} texts
  * @param {number} [batch]
  */
-export async function embedTexts(provider, texts, batch = 256) {
+export async function embedTexts(provider, texts, batch = EMBED_BATCH) {
   const distinct = [...new Set(texts)];
   const vectors = new Map();
   for (let i = 0; i < distinct.length; i += batch) {
@@ -344,6 +347,8 @@ export async function embedTexts(provider, texts, batch = 256) {
  * @param {object[]} assertions eligible assertions
  * @param {Map<string, Float32Array>} vectors by claimText
  * @param {object} [bounds]
+ * @param {() => boolean} [shouldStop] checked once per assertion; true ends the scan at once
+ * @returns {{ pairs: object[], candidates: number, dropped: number, stopped?: true }}
  */
 export function alignAssertions(
   assertions,
@@ -354,11 +359,13 @@ export function alignAssertions(
     maxPartners = MAX_PARTNERS,
     maxPerGroup = MAX_PAIRS_PER_GROUP,
   } = {},
+  shouldStop,
 ) {
   const items = assertions.map((a) => ({ a, v: vectors.get(claimText(a)) }));
   for (const { a, v } of items) if (!v) throw new Error(`assertion ${a.id} has no claim vector`);
   const candidates = [];
   for (let i = 0; i < items.length; i++) {
+    if (shouldStop?.()) return { pairs: [], candidates: 0, dropped: 0, stopped: true };
     const x = items[i];
     for (let j = i + 1; j < items.length; j++) {
       const y = items[j];
