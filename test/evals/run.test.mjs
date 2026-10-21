@@ -205,6 +205,24 @@ describe("evals runner", () => {
     ]);
   });
 
+  it("lists the evidence blocks and the tool calls of a row", () => {
+    const report = classifyRow({
+      row: { id: "g4", question: "q?", expected: "answer", gold_locators: [loc("IWS1", 3, 11)] },
+      result: {
+        abstained: false,
+        citations: [],
+        checks: {
+          sentences: 0,
+          supported: 0,
+          tools: [{ name: "search_chunks", input: { phrase: "smoke" }, rows: 2, ms: 40 }],
+        },
+        evidenceBlocks: [{ evidence: 1, ...block("IWS1", 3, 11) }],
+      },
+    });
+    expect(report.evidence).toEqual([{ evidence: 1, document: "IWS1", page: 3, paragraph: 11 }]);
+    expect(report.tools).toEqual([{ name: "search_chunks", input: { phrase: "smoke" }, rows: 2 }]);
+  });
+
   it("counts cited locators by kind and gold locators by cited and retrieved", () => {
     const { summary } = missReport([
       {
