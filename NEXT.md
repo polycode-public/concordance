@@ -15,8 +15,6 @@ The board runs in five sections, in this order. The section is the classificatio
 
 - [ ] **O3. The UCPI resume for HN43.** HN43's extraction stopped at 370 assertions over 592 sections after a Bedrock `ServiceUnavailableException`. In flight: execution `090a8a87-a921-4a89-af07-32c879389556` of the ingest state machine (`{"corpus":"ucpi"}`, started 2026-10-21 20:32Z after deploy run 39670178164). Remainder: when it ends, read HN43's assertion count through the Data API (`SELECT count(*) FROM assertions a JOIN chunks c ON c.id = a.source_chunk_id WHERE c.document_id = 'HN43'`) and the execution's status, and update the deployed line here. **Size** 0 files. **Model** Haiku.
 
-- [ ] **A5. The board run's job summary is the render only.** PR #62 merged (`c28e4042`): the render starts with the line `# Board` and the workflow's "Require a usable render" step keeps only the text from that line. In flight: the render-only run 39672099228 on `c28e4042`, dispatched 2026-10-21 20:40Z. Remainder: read its job summary; it starts at `# Board` and the row closes, or the defect is boarded here. **Size** 0 files. **Model** Haiku.
-
 ## Machine-only
 
 ## Machine-ask
