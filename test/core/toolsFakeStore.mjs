@@ -48,7 +48,7 @@ export function toolStore(store) {
             };
           }),
     ],
-    [/SELECT w.id, w.aliases FROM witnesses w/, () => []],
+    [/SELECT w.id, w.aliases, w.role, w.cipher_only FROM witnesses w/, () => []],
     [
       /SELECT id FROM events WHERE lower\(name\) = lower\(\$1\)/,
       ([name]) => t.events.filter((e) => e.name.toLowerCase() === name.toLowerCase()),

@@ -51,6 +51,73 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, fusion boost, name and flat matches
+
+The same command and store as the aliases run below, with `RERANK=off`, after four changes. One
+run, from 20:42:05Z to 20:51:25Z. Spend: about $0.70 by the day's Sonnet rate; Cost Explorer lags
+by hours. The run report is `evals/grenfell/runs/2026-10-21T20-51-25-724Z-bedrock-rerank-off.json`.
+
+1. The named-witness scope is a fusion boost. When a query names a witness, `retrieve()` keeps the
+   corpus-wide vector rankings and adds vector rankings over the named witnesses' documents
+   beside them. A page witness filter stays a hard scope.
+2. `namedWitnesses` also matches the surname of an alias, and the first and last words of an alias
+   of three or more words, after the full names.
+3. A question that names "flat <number>" names the witnesses whose role names that flat, never a
+   cipher-only witness.
+4. Row 0023's gold adds paragraph 87 of Sener Macit's first statement (IWS00000069, page 15). The
+   gold set holds 64 locators.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.495 |
+| citation recall           | 0.797 |
+| unsupported-sentence rate | 0.145 |
+| abstention correctness    | 0.960 |
+
+The 103 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 51    |
+| `page`        | 22    |
+| `paragraph`   | 18    |
+| `document`    | 11    |
+| `abstain-row` | 1     |
+
+The 64 gold locators: 51 cited, 11 retrieved but not cited (4 of them with the gold paragraph
+itself in the evidence blocks), 2 not retrieved at all (rows 0022 and 0047).
+
+Against the aliases run (precision 0.448, recall 0.746, unsupported 0.186, abstention 0.920; 105
+citations: 47 gold, 22 page, 18 paragraph, 17 document, 1 abstain-row; 63 gold: 47 cited, 12
+retrieved not cited, 4 not retrieved: rows 0008, 0009, 0022, 0047), precision rises 0.047, recall
+rises 0.051, the unsupported rate falls 0.041 and abstention rises 0.040. Gold citations rise from
+47 to 51 and `document` misses fall from 17 to 11. Rows 0008, 0023 and 0045 cite every gold
+locator; row 0023 has no `document` miss against 7 before. Rows 0038 and 0042 no longer abstain
+and cite their gold. Row 0009 retrieves all three gold locators, and row 0015 falls from 4
+`document` misses to 1. Row 0047 no longer abstains; its gold is still not retrieved. Row 0006
+now abstains.
+
+The rows that still miss:
+
+| id            | miss                                     | cause in the run                                                                                                                                |
+| ------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| grenfell-0047 | 2 `document`, 1 gold not retrieved       | the lexical rankings still need a name of Sener Macit; Sue Pimblett's page 8 (MET00008034) never names him, so only the vector path can find it |
+| grenfell-0022 | 1 `document`, 1 gold not retrieved       | names no witness and no flat; Petra Doulova's statement (IWS00000835) is not retrieved                                                          |
+| grenfell-0006 | abstains, 1 gold retrieved but not cited | names Edward Daffarn; the gold page is in the evidence and the gold paragraph is not                                                            |
+| grenfell-0012 | 3 `document`                             | Sener Macit holds two ids; the model cites IWS00000069, the gold names IWS00001156                                                              |
+| grenfell-0013 | 3 `document`, 1 gold retrieved not cited | as 0012                                                                                                                                         |
+| grenfell-0015 | 1 `document`                             | the flat match names Walid Wahbi (IWS00000113) beside Hamid Wahbi; the model cites him, the gold names Hamid Wahbi only                         |
+| grenfell-0048 | 1 `document`                             | the question names Flat 133, so the flat match names Dean Nelson (MET00010926), whose role names Flat 133; the model cites him                  |
+| grenfell-0020 | 1 `abstain-row`                          | an abstain row that the model answers                                                                                                           |
+
+The next changes the evidence names:
+
+1. Turn the lexical name groups into a boost too: keep a corpus-wide lexical ranking beside the
+   one that needs a witness name, for row 0047.
+2. Check rows 0012 and 0013 against Sener Macit's first statement (IWS00000069), as row 0023 was.
+3. Hold the flat match to resident roles, for row 0048, and check whether row 0015's finding also
+   rests on Walid Wahbi's statement.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, aliases and named-witness scope
 
 The same command, store and gold set as the corrected-gold run below, with `RERANK=off`, after
