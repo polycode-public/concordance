@@ -3,8 +3,8 @@
 //
 // One Map item of the ingest state machine: one manifest row of one corpus, from the original
 // PDF in the corpus bucket to its chunks in the store. A throw fails this item only. A run that
-// reaches the margin before the context lines are done returns status "partial" with the lines
-// it stored; the state machine invokes the item again until the status is not "partial".
+// reaches the margin before the context lines and the vectors are done returns status "partial"
+// with what it stored; the state machine invokes the item again until the status is not "partial".
 
 import { createHash } from "node:crypto";
 import {
@@ -73,7 +73,7 @@ export function createHandler({
     const provider = await providerFor();
     const db = await openDb();
     try {
-      const { status, counts, contexts } = await ingestDocument({
+      const { status, counts, contexts, embeddings, contextsSkipped } = await ingestDocument({
         pages,
         meta,
         provider,
@@ -83,7 +83,14 @@ export function createHandler({
         log,
       });
       log(JSON.stringify({ evidenceId: row.evidence_id, status, ms: now() - started }));
-      return { evidenceId: row.evidence_id, status, counts, ...(contexts && { contexts }) };
+      return {
+        evidenceId: row.evidence_id,
+        status,
+        counts,
+        ...(contexts && { contexts }),
+        ...(embeddings && { embeddings }),
+        ...(contextsSkipped && { contextsSkipped }),
+      };
     } finally {
       await db.close();
     }

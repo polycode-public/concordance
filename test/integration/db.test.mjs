@@ -50,10 +50,12 @@ describe.skipIf(!enabled)("database schema (CONCORDANCE_DB_TESTS=1)", () => {
       "0009_assertion_claims.sql",
       "0010_corpus_scope.sql",
       "0011_claim_embeddings.sql",
+      "0012_ingest_progress.sql",
+      "0013_ingest_vectors.sql",
     ]);
     expect(await migrate(client, { log: (l) => log.push(l) })).toEqual([]);
-    const applied = log.slice(0, 11);
-    expect(log.slice(11)).toEqual(applied.map((line) => line.replace(/^\S+\s+/, "skip    ")));
+    const applied = log.slice(0, 13);
+    expect(log.slice(13)).toEqual(applied.map((line) => line.replace(/^\S+\s+/, "skip    ")));
   });
 
   it("creates the tables, the triples view and the search indexes", async () => {

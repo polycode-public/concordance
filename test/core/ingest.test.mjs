@@ -15,6 +15,7 @@ import {
   abstractInput,
   batches,
   documentMeta,
+  EMBED_BATCH_SIZE,
   ingestDocument,
   MIN_TEXT_PAGE_FRACTION,
   LEVEL_BATCH_BYTES,
@@ -27,6 +28,7 @@ import {
   toHalfvecLiteral,
 } from "../../packages/core/ingest/run.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
+import { InvalidReplyError } from "../../packages/core/providers/jsonReply.mjs";
 
 describe("splitPages", () => {
   it("splits on form feeds and drops the empty page after the last one", () => {
@@ -370,8 +372,8 @@ describe("ingestDocument statements", () => {
       "text-extracted",
       "sections-split",
       "context-lines-done",
-      "abstract-done",
       "embeddings-done",
+      "abstract-done",
       "rows-written",
     ]);
     stages.forEach((l) => {
@@ -385,7 +387,12 @@ describe("ingestDocument statements", () => {
     const { db, result } = await run();
     expect(result.counts).toMatchObject({ section: paragraphs, sentence: paragraphs });
     const inserts = db.statements.filter((s) => /INSERT INTO chunks/.test(s.text));
-    expect(inserts.length).toBeGreaterThan(4);
+    expect(inserts.length).toBeGreaterThanOrEqual(4);
+    const vectorWrites = db.statements.filter((x) => /INSERT INTO ingest_vectors/.test(x.text));
+    expect(vectorWrites.length).toBeGreaterThan(4);
+    for (const statement of vectorWrites) {
+      expect(dataApiRequestBytes(statement)).toBeLessThan(64 * 1024);
+    }
     for (const statement of inserts) {
       expect(dataApiRequestBytes(statement)).toBeLessThan(64 * 1024);
     }
@@ -559,5 +566,135 @@ describe("ingestDocument long statements", () => {
     expect(prompts.filter((p) => p.field === "context")).toHaveLength(2);
     expect(statements.some((s) => /INSERT INTO ingest_progress/.test(s.text))).toBe(false);
     expect(statements.some((s) => /DELETE FROM ingest_progress/.test(s.text))).toBe(true);
+  });
+
+  it("retries a prose reply once and stores the line it gets", async () => {
+    const { prompts, db, provider } = setup();
+    let first = true;
+    const inner = provider.extractJson;
+    provider.extractJson = async (args) => {
+      if (args.schema.required[0] === "context" && first) {
+        first = false;
+        throw new InvalidReplyError("prose");
+      }
+      return inner(args);
+    };
+    const result = await ingestDocument({
+      pages: [{ page: 1, text: "1. One.\n2. Two." }],
+      meta,
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(result.status).toBe("ingested");
+    expect(result.contextsSkipped).toBeUndefined();
+    expect(prompts.filter((p) => p.field === "context")).toHaveLength(2);
+  });
+
+  it("stores an empty line and counts it when a context call answers prose twice", async () => {
+    const { statements, db, provider } = setup();
+    const inner = provider.extractJson;
+    provider.extractJson = async (args) => {
+      if (args.schema.required[0] === "context") throw new InvalidReplyError("prose");
+      return inner(args);
+    };
+    const result = await ingestDocument({
+      pages: [{ page: 1, text: "1. One.\n2. Two." }],
+      meta,
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(result.status).toBe("ingested");
+    expect(result.contextsSkipped).toBe(2);
+    const sections = statements.find(
+      (s) => /INSERT INTO chunks/.test(s.text) && s.params[1] === "section",
+    );
+    expect(sections.params[8]).toEqual([null, null]);
+  });
+
+  it("never swallows an error that is not a prose reply", async () => {
+    const { db, provider } = setup();
+    provider.extractJson = async () => {
+      throw new Error("throttled");
+    };
+    await expect(
+      ingestDocument({
+        pages: [{ page: 1, text: "1. One." }],
+        meta,
+        provider,
+        db,
+        log: () => {},
+      }),
+    ).rejects.toThrow("throttled");
+  });
+
+  it("stores each vector batch and returns partial when the signal fires between batches", async () => {
+    const { statements, db, provider } = setup();
+    const controller = new AbortController();
+    let calls = 0;
+    const inner = provider.embed;
+    provider.embed = async (texts) => {
+      if (++calls === 2) controller.abort();
+      return inner(texts);
+    };
+    const result = await ingestDocument({
+      pages: pagesOf(40),
+      meta,
+      provider,
+      db,
+      signal: controller.signal,
+      log: () => {},
+    });
+    expect(result.status).toBe("partial");
+    expect(result.embeddings).toEqual({ done: 2 * EMBED_BATCH_SIZE, total: expect.any(Number) });
+    const writes = statements.filter((s) => /INSERT INTO ingest_vectors/.test(s.text));
+    expect(writes.flatMap((s) => s.params[1])).toEqual(
+      Array.from({ length: 2 * EMBED_BATCH_SIZE }, (_, i) => i),
+    );
+    for (const statement of writes) {
+      expect(dataApiRequestBytes(statement)).toBeLessThan(64 * 1024);
+    }
+    expect(statements.some((s) => /INSERT INTO documents/.test(s.text))).toBe(false);
+  });
+
+  it("resumes the embeddings after the stored vectors and embeds the rest", async () => {
+    const stored = {
+      source_sha256: meta.sha256,
+      pipeline_version: "ingest-v2",
+      model: "fake-extract",
+      prompt_version: "context-v1",
+      section_count: 3,
+      contexts: ["One.", "Two.", "Three."],
+    };
+    const { statements, db, provider } = setup(stored);
+    const query = db.query;
+    db.query = async (text, params) => {
+      if (/FROM ingest_vectors/.test(text)) return { rows: [{ n: 4 }] };
+      return query(text, params);
+    };
+    const embedded = [];
+    const inner = provider.embed;
+    provider.embed = async (texts) => {
+      embedded.push(texts.length);
+      return inner(texts);
+    };
+    const result = await ingestDocument({
+      pages: [{ page: 1, text: "1. One.\n2. Two.\n3. Three." }],
+      meta,
+      provider,
+      db,
+      extractModel: "fake-extract",
+      log: () => {},
+    });
+    expect(result.status).toBe("ingested");
+    const sectionCount = 3;
+    const bodyTotal = sectionCount * 3;
+    expect(embedded).toEqual([bodyTotal - 4, 1]);
+    expect(statements.some((s) => /DELETE FROM ingest_vectors/.test(s.text))).toBe(true);
+    const writes = statements.filter((s) => /INSERT INTO ingest_vectors/.test(s.text));
+    expect(writes.flatMap((s) => s.params[1])).toEqual(
+      Array.from({ length: bodyTotal - 4 }, (_, i) => i + 4),
+    );
   });
 });

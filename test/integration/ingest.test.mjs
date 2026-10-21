@@ -109,7 +109,7 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
     const result = await ingestDocument({ pages: PAGES, meta: META, provider, db, log: () => {} });
     expect(result).toEqual({ status: "ingested", counts: EXPECTED });
     expect(prompts).toHaveLength(EXPECTED.section + 1);
-    expect(embedCalls).toEqual([24]);
+    expect(embedCalls).toEqual([EXPECTED.section + EXPECTED.passage + EXPECTED.sentence, 1]);
     expect(await levelCounts()).toEqual(EXPECTED);
 
     const docs = await db.query("SELECT * FROM documents");
@@ -254,5 +254,54 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
     expect(witnesses.rows).toEqual([
       { id: META.witnessId, role: "resident, floor 19", cipher_only: true },
     ]);
+  });
+
+  it("keeps a half-embedded document out of the chunks and finishes it on the next run", async () => {
+    const meta = { ...META, evidenceId: "IWS00000003", sha256: "f".repeat(64) };
+    const pages = [
+      {
+        page: 1,
+        text: Array.from({ length: 40 }, (_, i) => `${i + 1}. I saw smoke on floor ${i + 1}.`).join(
+          "\n",
+        ),
+      },
+    ];
+    const controller = new AbortController();
+    const interrupted = {
+      ...provider,
+      embed: async (texts) => {
+        controller.abort();
+        return provider.embed(texts);
+      },
+    };
+    const first = await ingestDocument({
+      pages,
+      meta,
+      provider: interrupted,
+      db,
+      signal: controller.signal,
+      log: () => {},
+    });
+    expect(first.status).toBe("partial");
+    const stored = await db.query(
+      "SELECT count(*)::int AS n FROM ingest_vectors WHERE document_id = $1",
+      [meta.evidenceId],
+    );
+    expect(stored.rows[0].n).toBe(first.embeddings.done);
+    const chunks = await db.query("SELECT count(*)::int AS n FROM chunks WHERE document_id = $1", [
+      meta.evidenceId,
+    ]);
+    expect(chunks.rows[0].n).toBe(0);
+
+    const second = await ingestDocument({ pages, meta, provider, db, log: () => {} });
+    expect(second.status).toBe("ingested");
+    const left = await db.query("SELECT count(*)::int AS n FROM ingest_vectors");
+    expect(left.rows[0].n).toBe(0);
+    const unembedded = await db.query(
+      "SELECT count(*)::int AS n FROM chunks WHERE document_id = $1 AND embedding IS NULL",
+      [meta.evidenceId],
+    );
+    expect(unembedded.rows[0].n).toBe(0);
+    await db.query("DELETE FROM documents WHERE id = $1", [meta.evidenceId]);
   });
 });

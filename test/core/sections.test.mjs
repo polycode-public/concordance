@@ -347,4 +347,27 @@ describe("splitNumberedParagraphs", () => {
       expect(sections.map((s) => s.page)).toEqual([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
     });
   });
+
+  it("drops the document reference that ends each page", () => {
+    const pages = [
+      "1. I saw smoke.\n2. I left.\nUCPI0000036956-WEB-1",
+      "3. I went home.\nUCPI0000036956-WEB-2",
+      "UCPI0000036956-WEB-3",
+    ];
+    expect(splitNumberedParagraphs(pages)).toEqual([
+      { paragraph: 1, page: 1, text: "I saw smoke." },
+      { paragraph: 2, page: 1, text: "I left." },
+      { paragraph: 3, page: 2, text: "I went home." },
+    ]);
+  });
+
+  it("drops a page number suffix and OCR letters read for zeros", () => {
+    const pages = ["1. I saw smoke.\nUCPI0000036979-115", "2. I left.\nUCPIOOOOO36979-WEB-2\n"];
+    expect(splitNumberedParagraphs(pages).map((s) => s.text)).toEqual(["I saw smoke.", "I left."]);
+  });
+
+  it("makes no section of a page that holds only the reference", () => {
+    const pages = ["UCPIOOOOO36956-WEB-1", "UCPI0000036956-12"];
+    expect(splitNumberedParagraphs(pages)).toEqual([]);
+  });
 });
