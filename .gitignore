@@ -16,6 +16,7 @@ corpora/*/text/
 corpora/*/chunks/
 corpora/*/media/
 corpora/*/notes/
+evals/*/runs/
 models/
 test/browser/.shots/
 .page-assets/

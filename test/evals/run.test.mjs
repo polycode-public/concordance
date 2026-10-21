@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026 Polycode Limited
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { locatorMatches, parseArgs, parseGold, run, score } from "../../evals/run.mjs";
+import {
+  classifyRow,
+  locatorMatches,
+  missReport,
+  parseArgs,
+  parseGold,
+  run,
+  score,
+} from "../../evals/run.mjs";
 
 let dir;
 beforeEach(async () => {
@@ -120,5 +128,161 @@ describe("evals runner", () => {
       unsupportedSentenceRate: 0.4,
       abstentionCorrectness: 0.5,
     });
+  });
+
+  const loc = (document, page, paragraph) => ({ document, page, paragraph });
+  const block = (documentId, page, paragraph) => ({ documentId, locator: { page, paragraph } });
+
+  it("classifies each distinct cited locator by miss kind", () => {
+    const report = classifyRow({
+      row: {
+        id: "g1",
+        question: "q?",
+        expected: "answer",
+        gold_locators: [loc("IWS1", 3, 11)],
+      },
+      result: {
+        abstained: false,
+        citations: [
+          { locator: loc("IWS1", 4, 11) },
+          { locator: loc("IWS1", 3, 11) },
+          { locator: loc("IWS1", 3, 12) },
+          { locator: loc("IWS1", 5, 20) },
+          { locator: loc("IWS2", 3, 11) },
+          { locator: loc("IWS2", 3, 11) },
+        ],
+        checks: { sentences: 3, supported: 2 },
+      },
+    });
+    expect(report).toMatchObject({
+      id: "g1",
+      expected: "answer",
+      abstained: false,
+      sentences: 3,
+      supported: 2,
+    });
+    expect(report.cited.map((c) => c.kind)).toEqual([
+      "gold",
+      "gold",
+      "paragraph",
+      "page",
+      "document",
+    ]);
+  });
+
+  it("marks every citation of a row that expects abstain as abstain-row", () => {
+    const report = classifyRow({
+      row: { id: "g2", question: "q?", expected: "abstain", gold_locators: [] },
+      result: {
+        abstained: false,
+        citations: [{ locator: loc("IWS1", 1, 1) }],
+        checks: { sentences: 1, supported: 1 },
+      },
+    });
+    expect(report.cited).toEqual([{ locator: loc("IWS1", 1, 1), kind: "abstain-row" }]);
+    expect(report.gold).toEqual([]);
+  });
+
+  it("flags whether retrieval returned each gold document and paragraph", () => {
+    const report = classifyRow({
+      row: {
+        id: "g3",
+        question: "q?",
+        expected: "answer",
+        gold_locators: [loc("IWS1", 3, 11), loc("IWS1", 3, 12), loc("IWS2", 1, 2)],
+      },
+      result: {
+        abstained: false,
+        citations: [{ locator: loc("IWS1", 3, 11) }],
+        checks: { sentences: 1, supported: 1 },
+        evidenceBlocks: [block("IWS1", 3, 11), block("IWS3", 1, 2)],
+      },
+    });
+    expect(report.gold).toEqual([
+      { locator: loc("IWS1", 3, 11), cited: true, retrieved: true, retrievedParagraph: true },
+      { locator: loc("IWS1", 3, 12), cited: false, retrieved: true, retrievedParagraph: false },
+      { locator: loc("IWS2", 1, 2), cited: false, retrieved: false, retrievedParagraph: false },
+    ]);
+  });
+
+  it("counts cited locators by kind and gold locators by cited and retrieved", () => {
+    const { summary } = missReport([
+      {
+        row: { id: "g1", question: "q?", expected: "answer", gold_locators: [loc("A", 1, 1)] },
+        result: {
+          abstained: false,
+          citations: [{ locator: loc("A", 1, 1) }, { locator: loc("B", 1, 1) }],
+          checks: { sentences: 1, supported: 1 },
+          evidenceBlocks: [block("A", 1, 1)],
+        },
+      },
+      {
+        row: {
+          id: "g2",
+          question: "q?",
+          expected: "answer",
+          gold_locators: [loc("A", 2, 5), loc("C", 1, 1)],
+        },
+        result: {
+          abstained: false,
+          citations: [{ locator: loc("A", 2, 6) }],
+          checks: { sentences: 1, supported: 1 },
+          evidenceBlocks: [block("A", 2, 5)],
+        },
+      },
+    ]);
+    expect(summary).toEqual({
+      citedByKind: { gold: 1, paragraph: 1, page: 0, document: 1, "abstain-row": 0 },
+      gold: {
+        total: 3,
+        cited: 1,
+        retrievedNotCited: 1,
+        notRetrieved: 1,
+        paragraphRetrievedNotCited: 1,
+      },
+    });
+  });
+
+  it("writes the miss report to the --report path and prints that path", async () => {
+    const gold = path.join(dir, "gold.jsonl");
+    await writeFile(gold, row("g1", "answer", [loc("A", 1, 1)]) + "\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const reportPath = path.join(dir, "out", "report.json");
+    const metrics = await run([`--gold=${gold}`, `--report=${reportPath}`], {
+      db: { query: vi.fn() },
+      providerFor: async () => ({}),
+      runQuery: async () => ({
+        abstained: false,
+        citations: [{ locator: loc("A", 1, 2) }],
+        checks: { sentences: 1, supported: 1 },
+        evidenceBlocks: [block("A", 1, 2)],
+      }),
+    });
+    expect(metrics.citationPrecision).toBe(0);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    expect(report.metrics).toEqual(metrics);
+    expect(report.summary.citedByKind.paragraph).toBe(1);
+    expect(report.rows[0].id).toBe("g1");
+    expect(JSON.parse(log.mock.calls[0][0]).report).toBe(reportPath);
+  });
+
+  it("writes the miss report under runs beside the gold file by default", async () => {
+    const gold = path.join(dir, "gold.jsonl");
+    await writeFile(gold, row("g1", "abstain") + "\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubEnv("RERANK", "");
+    await run([`--gold=${gold}`, "--provider=bedrock"], {
+      db: { query: vi.fn() },
+      providerFor: async () => ({}),
+      runQuery: async () => ({
+        abstained: true,
+        citations: [],
+        checks: { sentences: 0, supported: 0 },
+      }),
+    });
+    vi.unstubAllEnvs();
+    const files = await readdir(path.join(dir, "runs"));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[\d-]+Z-bedrock-rerank-off\.json$/);
   });
 });
