@@ -13,6 +13,7 @@ import {
   batches,
   documentMeta,
   ingestDocument,
+  MIN_TEXT_PAGE_FRACTION,
   LEVEL_BATCH_BYTES,
   levelBatches,
   parseArgs,
@@ -92,6 +93,21 @@ describe("sources", () => {
       ]),
     );
     expect(map.get("IWS1")).toMatchObject({ role: "resident", floor: 18 });
+  });
+
+  it("reads cipher_only as a boolean that defaults to false", () => {
+    const map = parseSources(
+      JSON.stringify([{ evidence_id: "A", cipher_only: true }, { evidence_id: "B" }]),
+    );
+    expect(documentMeta("ucpi", ROW, map.get("A")).cipherOnly).toBe(true);
+    expect(documentMeta("ucpi", ROW, map.get("B")).cipherOnly).toBe(false);
+    expect(documentMeta("ucpi", ROW, undefined).cipherOnly).toBe(false);
+  });
+
+  it("rejects a non-boolean cipher_only", () => {
+    expect(() => parseSources(JSON.stringify([{ evidence_id: "A", cipher_only: "yes" }]))).toThrow(
+      /cipher_only must be a boolean/,
+    );
   });
 
   it("rejects a malformed statement date", () => {
@@ -271,6 +287,34 @@ const dataApiRequestBytes = ({ text, params }) =>
     }),
   );
 
+describe("ingestDocument text layer", () => {
+  const meta = {
+    evidenceId: "IWS2",
+    corpus: "grenfell",
+    sha256: "d".repeat(64),
+    witnessId: "IWS2",
+  };
+  const attempt = (pages) => {
+    const db = recordingDb();
+    const provider = createFakeProvider({ tokens: [], embedDim: 1024 });
+    return { db, promise: ingestDocument({ pages, meta, provider, db, log: () => {} }) };
+  };
+  const blank = (n) => Array.from({ length: n }, (_, i) => ({ page: i + 1, text: "  \n" }));
+
+  it("refuses pages with no text and writes nothing", async () => {
+    const { db, promise } = attempt(blank(4));
+    await expect(promise).rejects.toThrow(/IWS2: no text layer; 4 of 4 pages have no text/);
+    expect(db.statements.filter((s) => /INSERT|DELETE|UPDATE/.test(s.text))).toEqual([]);
+  });
+
+  it("refuses a document with fewer text pages than the threshold", async () => {
+    const pages = [...blank(8), { page: 9, text: "1. Smoke." }];
+    const { promise } = attempt(pages);
+    expect(MIN_TEXT_PAGE_FRACTION).toBe(0.25);
+    await expect(promise).rejects.toThrow(/8 of 9 pages have no text/);
+  });
+});
+
 describe("ingestDocument statements", () => {
   const paragraphs = 30;
   const pages = [
@@ -305,6 +349,15 @@ describe("ingestDocument statements", () => {
     const result = await ingestDocument({ pages, meta, provider, db, log });
     return { db, result };
   };
+
+  it("upserts the witness with its role and cipher flag", async () => {
+    const { db } = await run();
+    const witness = db.statements.find((s) => /INSERT INTO witnesses/.test(s.text));
+    expect(witness.text).toMatch(
+      /ON CONFLICT \(id\) DO UPDATE SET role = EXCLUDED\.role, cipher_only = EXCLUDED\.cipher_only/,
+    );
+    expect(witness.params).toEqual(["IWS1", null, false]);
+  });
 
   it("logs one structured line per stage with the document id, count and elapsed time", async () => {
     const lines = [];
