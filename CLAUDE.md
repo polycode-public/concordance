@@ -230,7 +230,7 @@ Profile `polycode-sandbox`; log in with `aws sso login --profile polycode-sandbo
 - **Read-only AWS calls are always permitted** (describe, get, list, logs).
 - **Always ask before writing to AWS.** Present the command, say what it does, wait for "yes".
   The path for infrastructure is CDK code, a pull request, `deploy.yml` on `main`.
-- The project's cloud ceiling is the sandbox's $75 monthly budget (the operator's figure of
+- The project's cloud ceiling is the sandbox's $100 monthly budget (the operator's figure of
   2026-10-21, up from the specification's $25 ingest cap once the second corpus and the
   fire-brigade statements joined), carried by two budgets: one on the `project=concordance` tag
   and one on the Bedrock services the model calls bill to. Nothing deployed may cost money at idle.
