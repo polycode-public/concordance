@@ -110,8 +110,9 @@ async function tsqueryRanking(db, tsquery, level, limit, scope) {
 }
 
 /**
- * Chunk ids of one corpus at one level, best lexical match first. Every word of the query must
- * match; each group of witness names must match by one of its names.
+ * Chunk ids of one corpus at one level, best lexical match first. Any word of the query may
+ * match, and ts_rank puts the chunks that match more of them first; each group of witness names
+ * must match by one of its names.
  * @param {{ query: Function }} db
  * @param {string} query
  * @param {string} level
@@ -121,11 +122,14 @@ async function tsqueryRanking(db, tsquery, level, limit, scope) {
  */
 export function lexicalRanking(db, query, level, limit, scope, nameGroups = []) {
   const plain = (p, text) => `plainto_tsquery('english', ${p(text)})`;
+  const anyWord = words(query)
+    .filter((w) => w !== "or")
+    .join(" or ");
   return tsqueryRanking(
     db,
     (p) =>
       [
-        plain(p, query),
+        `websearch_to_tsquery('english', ${p(anyWord)})`,
         ...nameGroups.map((names) => `(${names.map((n) => plain(p, n)).join(" || ")})`),
       ].join(" && "),
     level,
@@ -189,7 +193,8 @@ const words = (text) =>
 
 /**
  * Finds the witnesses a query names by id or by any alias, compared word by word without case.
- * The longest name is matched first and each word of the query names at most one witness.
+ * The longest name is matched first and each word of the query is part of at most one name; a
+ * name that several witnesses share names them all.
  * @param {string} query
  * @param {{ id: string, names: string[] }[]} witnesses
  * @returns {{ rest: string, nameGroups: string[][] }}
@@ -198,17 +203,24 @@ const words = (text) =>
 export function namedWitnesses(query, witnesses) {
   const queryWords = words(query);
   const used = new Array(queryWords.length).fill(false);
-  const candidates = witnesses
-    .flatMap((w) => w.names.map((name) => ({ witness: w, nameWords: words(name) })))
-    .filter((c) => c.nameWords.length > 0)
-    .sort((a, b) => b.nameWords.length - a.nameWords.length);
+  const byName = new Map();
+  for (const w of witnesses) {
+    for (const name of w.names) {
+      const nameWords = words(name);
+      if (!nameWords.length) continue;
+      const k = nameWords.join(" ");
+      if (!byName.has(k)) byName.set(k, { nameWords, holders: [] });
+      if (!byName.get(k).holders.includes(w)) byName.get(k).holders.push(w);
+    }
+  }
+  const names = [...byName.values()].sort((a, b) => b.nameWords.length - a.nameWords.length);
   const matched = new Map();
-  for (const { witness, nameWords } of candidates) {
+  for (const { nameWords, holders } of names) {
     for (let i = 0; i + nameWords.length <= queryWords.length; i++) {
       const span = nameWords.every((w, j) => !used[i + j] && queryWords[i + j] === w);
       if (!span) continue;
       for (let j = 0; j < nameWords.length; j++) used[i + j] = true;
-      matched.set(witness.id, witness.names);
+      for (const w of holders) matched.set(w.id, w.names);
     }
   }
   return {

@@ -242,6 +242,51 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
     expect(versions.rows).toEqual([{ pipeline_version: "ingest-test-v2" }]);
   });
 
+  it("writes the witness name as an alias, keeps it on a later ingest and clears it for a cipher", async () => {
+    const named = {
+      ...META,
+      evidenceId: "IWS00000010",
+      witnessId: "IWS00000010",
+      sha256: "1".repeat(64),
+    };
+    const aliases = async () =>
+      (await db.query("SELECT aliases FROM witnesses WHERE id = 'IWS00000010'")).rows[0].aliases;
+    await ingestDocument({
+      pages: PAGES,
+      meta: { ...named, witnessName: "Ada Lovelace" },
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(await aliases()).toEqual(["Ada Lovelace"]);
+    await ingestDocument({
+      pages: PAGES,
+      meta: { ...named, sha256: "2".repeat(64), witnessName: null },
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(await aliases()).toEqual(["Ada Lovelace"]);
+    await ingestDocument({
+      pages: PAGES,
+      meta: { ...named, sha256: "3".repeat(64), witnessName: "A. Lovelace" },
+      provider,
+      db,
+      log: () => {},
+    });
+    expect((await aliases()).sort()).toEqual(["A. Lovelace", "Ada Lovelace"]);
+    await ingestDocument({
+      pages: PAGES,
+      meta: { ...named, sha256: "4".repeat(64), witnessName: "Ada Lovelace", cipherOnly: true },
+      provider,
+      db,
+      log: () => {},
+    });
+    expect(await aliases()).toEqual([]);
+    await db.query("DELETE FROM documents WHERE id = 'IWS00000010'");
+    await db.query("DELETE FROM witnesses WHERE id = 'IWS00000010'");
+  });
+
   it("updates the witness role and cipher flag on a later ingest", async () => {
     const changed = {
       ...META,

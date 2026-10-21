@@ -97,6 +97,20 @@ describe("createRegisters", () => {
     ).toThrow("the name x belongs to witnesses A and B");
   });
 
+  it("resolves a name two named witnesses share to neither, and each id to its witness", () => {
+    const r = createRegisters({
+      witnesses: [
+        { id: "IWS1", cipher_only: false, aliases: ["Marion Telfer"] },
+        { id: "IWS2", cipher_only: false, aliases: ["marion telfer"] },
+        { id: "IWS3", cipher_only: false, aliases: ["Marion  Telfer", "M. Telfer"] },
+      ],
+    });
+    expect(r.resolve("Marion Telfer")).toBeNull();
+    expect(r.resolve("M. Telfer")).toMatchObject({ id: "IWS3" });
+    expect(r.resolve("IWS2")).toMatchObject({ id: "IWS2" });
+    expect(r.ambiguousNames).toEqual(["marion telfer"]);
+  });
+
   it("loads both registers from the store", async () => {
     const db = {
       query: async (text) => ({

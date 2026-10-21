@@ -76,14 +76,22 @@ export function indexicalSpan(text) {
 export function createRegisters({ witnesses = [], entities = [] }) {
   const witnessByName = new Map();
   const cipherNames = new Set();
+  // One person who gave several statements is several witness rows with one name, so a name
+  // two named witnesses share resolves to neither. A cipher shared with another witness throws.
+  const ambiguous = new Set();
   for (const w of witnesses) {
     const match = { type: "witness", id: w.id, cipherOnly: Boolean(w.cipher_only) };
     for (const name of [w.id, ...(w.aliases ?? [])]) {
       const k = key(name);
-      if (!k) continue;
+      if (!k || ambiguous.has(k)) continue;
       const other = witnessByName.get(k);
       if (other && other.id !== w.id) {
-        throw new Error(`the name ${name} belongs to witnesses ${other.id} and ${w.id}`);
+        if (other.cipherOnly || match.cipherOnly || k === key(other.id) || k === key(w.id)) {
+          throw new Error(`the name ${name} belongs to witnesses ${other.id} and ${w.id}`);
+        }
+        witnessByName.delete(k);
+        ambiguous.add(k);
+        continue;
       }
       witnessByName.set(k, match);
       if (match.cipherOnly) cipherNames.add(k);
@@ -112,6 +120,9 @@ export function createRegisters({ witnesses = [], entities = [] }) {
   return {
     /** Entity names left out of the index because the entity names a cipher. */
     ignoredAliases,
+
+    /** Witness names left out of the index because two named witnesses share them. */
+    ambiguousNames: [...ambiguous],
 
     /**
      * The witness or entity a span names, compared without case, or null. A witness wins

@@ -190,9 +190,22 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
     expect(result.retrievedIds).not.toContain(ids.p1);
   });
 
+  it("finds the smoke passage for a question in natural words", async () => {
+    const question = "what did the witness say about the smoke";
+    const before = await client.query(
+      `SELECT id FROM chunks WHERE tsv @@ plainto_tsquery('english', $1)`,
+      [question],
+    );
+    expect(before.rows).toEqual([]);
+    const ranked = await lexicalRanking(db, question, "passage", 40, { corpus: "grenfell" });
+    expect(new Set(ranked.slice(0, 2))).toEqual(new Set([ids.p2, ids.q1]));
+    expect(ranked.slice(2)).toEqual(expect.arrayContaining([ids.p1]));
+  });
+
   it("matches a witness named by an alias through the witness id in the header", async () => {
     const scope = { corpus: "grenfell" };
-    expect(await lexicalRanking(db, "Ada Lovelace smoke", "passage", 40, scope)).toEqual([]);
+    const unexpanded = await lexicalRanking(db, "Ada Lovelace smoke", "passage", 40, scope);
+    expect(new Set(unexpanded)).toEqual(new Set([ids.p2, ids.q1]));
     const { rankings } = await retrieve({
       queries: ["Ada Lovelace and the smoke"],
       corpus: "grenfell",
@@ -217,7 +230,7 @@ describe.skipIf(!enabled)("query pipeline (CONCORDANCE_DB_TESTS=1)", () => {
     expect(exact.phrasePassage).toEqual([ids.p2]);
     const reversed = await run('"smoke full"');
     expect(reversed.phrasePassage).toEqual([]);
-    expect(reversed.lexicalPassage).toEqual([ids.p2]);
+    expect(reversed.lexicalPassage).toEqual([ids.p2, ids.q1]);
     expect((await run("full of smoke")).phrasePassage).toBeUndefined();
   });
 

@@ -449,8 +449,8 @@ describe("query rewrite", () => {
     expect(provider.embedded).toEqual([["where IWS9 went from floor 4", "IWS9 stairs floor 4"]]);
     const lexical = db.calls.filter((c) => /tsv @@/.test(c.text));
     expect(lexical).toHaveLength(4);
-    expect(new Set(lexical.map((c) => c.params.find((p) => /IWS9/.test(p))))).toEqual(
-      new Set(["where IWS9 went from floor 4", "IWS9 stairs floor 4"]),
+    expect(new Set(lexical.map((c) => c.params.find((p) => /iws9/.test(p))))).toEqual(
+      new Set(["where or iws9 or went or from or floor or 4", "iws9 or stairs or floor or 4"]),
     );
     expect(stages.slice(0, 2)).toEqual(["rewriting", "retrieving"]);
     expect(result.queryRewrites).toEqual(["where IWS9 went from floor 4", "IWS9 stairs floor 4"]);
@@ -625,11 +625,11 @@ describe("witness names and quoted phrases", () => {
     const lexical = calls.filter((c) => /plainto_tsquery/.test(c.text));
     expect(lexical).toHaveLength(2);
     expect(lexical[0].text).toContain(
-      "plainto_tsquery('english', $2) && (plainto_tsquery('english', $3) || plainto_tsquery('english', $4))",
+      "websearch_to_tsquery('english', $2) && (plainto_tsquery('english', $3) || plainto_tsquery('english', $4))",
     );
     expect(lexical[0].params.slice(0, 4)).toEqual([
       "grenfell",
-      "did see the fire door",
+      "did or see or the or fire or door",
       "IWS9",
       "Ada Lovelace",
     ]);
