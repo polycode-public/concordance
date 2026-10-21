@@ -13,9 +13,9 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Machine-only
 
-## Machine-ask
+- [ ] **A5. The board run's job summary is the render only.** Run 39608306185 (A4's render-only run, green, 17 turns, $0.054) posted a usable board, but its result field opened with the agent's working prose ("Good. Now I have enough information to render", then a numbered analysis) before the render, so the job summary reads as a transcript. Add to `.github/prompts/board-ci.md` that the final message is the render alone, starting at the mode line, with the would-have-changed list as its last part. Proof: a render-only dispatch (the operator's command: `gh workflow run agent-board.yml --repo polycode-public/concordance -f write-back=false`) whose summary starts at the mode line. **Size** 1 file. **Model** Haiku.
 
-- [ ] **A4. Secrets for the agent workflows, then one render-only board run (Phase 0).** The secrets `AGENT_TOKEN` and `AUTO_MERGE_TOKEN` are set from the operator's token (2026-10-20). The ask: `gh workflow run agent-board.yml --repo polycode-public/concordance -f write-back=false` is the operator's (the session's dispatch was refused by the permission classifier); then the session reads the run's job summary and boards any defect as this row's remainder. The kill switch is the SSM parameter `/concordance/sandbox/agents/kill-switch` (`off`). **Size** 0 files. **Model** Haiku.
+## Machine-ask
 
 ## Human-driven
 
