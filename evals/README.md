@@ -43,6 +43,25 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, `assertions-v5`, 38 statements
+
+Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
+store polycode-sandbox Aurora with 38 Grenfell statements (the 11 residents' plus 7 more residents
+and 20 fire-brigade statements) and the store tools offered. 25 rows, 37 gold locators, every one
+with a paragraph, matched by document and paragraph.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.193 |
+| citation recall           | 0.297 |
+| unsupported-sentence rate | 0.236 |
+| abstention correctness    | 0.880 |
+
+Not comparable with the runs below: every gold locator now names a paragraph, so a citation of
+the right page and the wrong paragraph is a miss, and the store holds 27 more statements, which
+compete in retrieval for the same questions. Three rows abstained or answered against their
+expectation. About $0.35 by the day's Sonnet rate; Cost Explorer lags by hours.
+
 ### 2026-10-20, bedrock, `answer-closed-world-v3`, `ingest-v2`, `assertions-v4`
 
 Chat model `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`, embeddings `amazon.titan-embed-text-v2:0`,
