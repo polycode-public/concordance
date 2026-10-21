@@ -7,6 +7,14 @@
 // A second map, after a second budget check, runs assertion extraction over the same rows, one
 // Lambda run a document. A failed document is recorded in the result and the map goes on. A
 // document whose context lines outlast one run is invoked again until it finishes.
+//
+// The extraction runs in one of two modes. A run with at least the Bedrock minimum of batch
+// records (one record a window of ten sentences), or one whose input says "extraction": "batch",
+// writes one JSONL file a document under the corpus bucket's batch prefix and starts a Bedrock
+// batch inference job, which bills half the on-demand price. The state machine polls the job,
+// then maps a load over the documents through the same checks and writer as the on-demand path.
+// A smaller run, such as a single new document, or one that says "on-demand", maps the on-demand
+// extraction over the rows. A job that fails, or outlasts its deadline, ends the execution failed.
 // Nothing runs or costs money until an execution starts.
 
 import path from "node:path";
@@ -18,11 +26,16 @@ import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
+import { EXTRACTION_BATCH_PREFIX } from "./dataStack.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AWS_DIR = path.join(ROOT, "packages", "aws");
 
 export const MAX_CONCURRENT_DOCUMENTS = 1;
+/** The extraction model: the EU cross-Region inference profile, which batch inference takes. */
+export const EXTRACT_PROFILE = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+/** The wait between two status polls of the batch job. */
+export const BATCH_POLL_INTERVAL = Duration.minutes(5);
 
 // The bundle is ESM; pg and other CommonJS dependencies call require().
 const REQUIRE_BANNER =
@@ -112,6 +125,93 @@ export class IngestStack extends Stack {
       },
     });
 
+    const extractFoundationModel = EXTRACT_PROFILE.slice(EXTRACT_PROFILE.indexOf(".") + 1);
+    const extractModelArns = [
+      `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${EXTRACT_PROFILE}`,
+      `arn:aws:bedrock:*::foundation-model/${extractFoundationModel}`,
+    ];
+    const batchObjects = corpusBucket.arnForObjects(`${EXTRACTION_BATCH_PREFIX}*`);
+    const jobArns = `arn:aws:bedrock:${this.region}:${this.account}:model-invocation-job/*`;
+
+    // Bedrock assumes this role to read the batch records and write the results.
+    const batchRole = new iam.Role(this, "ExtractionBatchRole", {
+      assumedBy: new iam.ServicePrincipal("bedrock.amazonaws.com", {
+        conditions: {
+          StringEquals: { "aws:SourceAccount": this.account },
+          ArnLike: { "aws:SourceArn": jobArns },
+        },
+      }),
+      description: "Bedrock batch inference for the assertion extraction",
+    });
+    batchRole.applyRemovalPolicy(RemovalPolicy.DESTROY);
+    batchRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: [batchObjects],
+      }),
+    );
+    batchRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:ListBucket"],
+        resources: [corpusBucket.bucketArn],
+      }),
+    );
+    batchRole.addToPolicy(
+      new iam.PolicyStatement({ actions: ["bedrock:InvokeModel"], resources: extractModelArns }),
+    );
+
+    const batchEnvironment = {
+      MODEL_PROVIDER: "bedrock",
+      BEDROCK_EXTRACT_MODEL: EXTRACT_PROFILE,
+      DB_RESOURCE_ARN: dbResourceArn,
+      DB_SECRET_ARN: dbSecretArn,
+      DB_NAME: dbName,
+      CORPUS_BUCKET: corpusBucket.bucketName,
+    };
+    const startExtractionBatchFn = fn("startExtractionBatch", {
+      timeout: Duration.minutes(5),
+      memorySize: 1024,
+      environment: { ...batchEnvironment, BATCH_ROLE_ARN: batchRole.roleArn },
+    });
+    const getExtractionBatchFn = fn("getExtractionBatch", { environment: {} });
+    const loadExtractionBatchFn = fn("loadExtractionBatch", {
+      timeout: Duration.minutes(15),
+      memorySize: 1024,
+      environment: batchEnvironment,
+    });
+    startExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ["s3:PutObject"], resources: [batchObjects] }),
+    );
+    startExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock:CreateModelInvocationJob"],
+        resources: [jobArns, ...extractModelArns],
+      }),
+    );
+    startExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["iam:PassRole"],
+        resources: [batchRole.roleArn],
+        conditions: { StringEquals: { "iam:PassedToService": "bedrock.amazonaws.com" } },
+      }),
+    );
+    getExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock:GetModelInvocationJob"],
+        resources: [jobArns],
+      }),
+    );
+    loadExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ["s3:GetObject"], resources: [batchObjects] }),
+    );
+    loadExtractionBatchFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:ListBucket"],
+        resources: [corpusBucket.bucketArn],
+        conditions: { StringLike: { "s3:prefix": [`${EXTRACTION_BATCH_PREFIX}*`] } },
+      }),
+    );
+
     checkBudgetFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["budgets:ViewBudget"],
@@ -133,7 +233,13 @@ export class IngestStack extends Stack {
         }),
       );
     }
-    for (const f of [checkBudgetFn, ingestDocumentFn, extractAssertionsFn]) {
+    for (const f of [
+      checkBudgetFn,
+      ingestDocumentFn,
+      extractAssertionsFn,
+      startExtractionBatchFn,
+      loadExtractionBatchFn,
+    ]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -152,7 +258,7 @@ export class IngestStack extends Stack {
         }),
       );
     }
-    for (const f of [ingestDocumentFn, extractAssertionsFn]) {
+    for (const f of [ingestDocumentFn, extractAssertionsFn, loadExtractionBatchFn]) {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock:InvokeModel"],
@@ -173,6 +279,8 @@ export class IngestStack extends Stack {
       lambdaFunction: listManifestFn,
       payload: sfn.TaskInput.fromObject({ corpus: sfn.JsonPath.stringAt("$.corpus") }),
       payloadResponseOnly: true,
+      // The manifest sits beside the execution input, so the run's extraction options stay.
+      resultPath: "$.manifest",
     });
 
     const ingestDocument = new tasks.LambdaInvoke(this, "IngestDocument", {
@@ -206,7 +314,7 @@ export class IngestStack extends Stack {
     );
 
     const documents = new sfn.Map(this, "IngestDocuments", {
-      itemsPath: "$.items",
+      itemsPath: "$.manifest.items",
       maxConcurrency: MAX_CONCURRENT_DOCUMENTS,
       itemSelector: {
         corpus: sfn.JsonPath.stringAt("$.corpus"),
@@ -245,7 +353,7 @@ export class IngestStack extends Stack {
     extractDocumentAssertions.addCatch(recordExtractionFailure, { resultPath: "$.error" });
 
     const extractions = new sfn.Map(this, "ExtractAssertions", {
-      itemsPath: "$.items",
+      itemsPath: "$.manifest.items",
       maxConcurrency: MAX_CONCURRENT_DOCUMENTS,
       itemSelector: {
         corpus: sfn.JsonPath.stringAt("$.corpus"),
@@ -255,12 +363,110 @@ export class IngestStack extends Stack {
     });
     extractions.itemProcessor(extractDocumentAssertions);
 
+    const done = new sfn.Succeed(this, "Done");
+    extractions.next(done);
+
+    const startExtractionBatch = new tasks.LambdaInvoke(this, "StartExtractionBatch", {
+      lambdaFunction: startExtractionBatchFn,
+      payloadResponseOnly: true,
+      resultPath: "$.batch",
+    });
+    const recordBatchFailure = sfn.Pass.jsonata(this, "RecordBatchFailure", {
+      outputs: {
+        jobArn: "{% $states.input.batch.jobArn %}",
+        error: "{% $states.input.error.Error %}",
+        cause: "{% $substring($states.input.error.Cause, 0, 300) %}",
+      },
+    });
+    recordBatchFailure.next(
+      new sfn.Fail(this, "ExtractionBatchFailed", { errorPath: "$.error", causePath: "$.cause" }),
+    );
+    startExtractionBatch.addCatch(recordBatchFailure, { resultPath: "$.error" });
+
+    const waitForBatch = new sfn.Wait(this, "WaitForExtractionBatch", {
+      time: sfn.WaitTime.duration(BATCH_POLL_INTERVAL),
+    });
+    const getExtractionBatch = new tasks.LambdaInvoke(this, "GetExtractionBatch", {
+      lambdaFunction: getExtractionBatchFn,
+      payload: sfn.TaskInput.fromObject({
+        batch: {
+          jobArn: sfn.JsonPath.stringAt("$.batch.jobArn"),
+          startedAt: sfn.JsonPath.numberAt("$.batch.startedAt"),
+        },
+      }),
+      payloadResponseOnly: true,
+      resultPath: "$.batchStatus",
+    });
+    // A poll that Bedrock throttles is tried again; the job runs on regardless.
+    getExtractionBatch.addRetry({
+      errors: ["ThrottlingException", "InternalServerException"],
+      interval: Duration.seconds(30),
+      maxAttempts: 3,
+      backoffRate: 2,
+    });
+    getExtractionBatch.addCatch(recordBatchFailure, { resultPath: "$.error" });
+
+    const loadDocumentAssertions = new tasks.LambdaInvoke(this, "LoadDocumentAssertions", {
+      lambdaFunction: loadExtractionBatchFn,
+      payloadResponseOnly: true,
+      resultPath: "$.result",
+    });
+    loadDocumentAssertions.addRetry({
+      errors: ["ThrottlingException"],
+      interval: Duration.seconds(30),
+      maxAttempts: 2,
+      backoffRate: 2,
+    });
+    loadDocumentAssertions.addCatch(
+      sfn.Pass.jsonata(this, "RecordBatchLoadFailure", {
+        outputs: {
+          evidenceId: "{% $states.input.document.evidenceId %}",
+          error: "{% $states.input.error.Error %}",
+          cause: "{% $substring($states.input.error.Cause, 0, 300) %}",
+        },
+      }),
+      { resultPath: "$.error" },
+    );
+    loadDocumentAssertions.next(
+      new sfn.Choice(this, "LoadComplete")
+        .when(sfn.Condition.stringEquals("$.result.status", "partial"), loadDocumentAssertions)
+        .otherwise(sfn.Pass.jsonata(this, "LoadResult", { outputs: "{% $states.input.result %}" })),
+    );
+    const loads = new sfn.Map(this, "LoadExtractionBatch", {
+      itemsPath: "$.batch.documents",
+      maxConcurrency: MAX_CONCURRENT_DOCUMENTS,
+      itemSelector: {
+        corpus: sfn.JsonPath.stringAt("$.corpus"),
+        batch: {
+          jobArn: sfn.JsonPath.stringAt("$.batch.jobArn"),
+          prefix: sfn.JsonPath.stringAt("$.batch.prefix"),
+          replace: sfn.JsonPath.objectAt("$.batch.replace"),
+        },
+        document: sfn.JsonPath.objectAt("$$.Map.Item.Value"),
+      },
+      resultPath: "$.extractions",
+    });
+    loads.itemProcessor(loadDocumentAssertions);
+    loads.next(done);
+
+    waitForBatch
+      .next(getExtractionBatch)
+      .next(
+        new sfn.Choice(this, "ExtractionBatchDone")
+          .when(sfn.Condition.booleanEquals("$.batchStatus.done", true), loads)
+          .otherwise(waitForBatch),
+      );
+
     const definition = checkBudget
       .next(listManifest)
       .next(documents)
       .next(checkBudgetBeforeExtraction)
-      .next(extractions)
-      .next(new sfn.Succeed(this, "Done"));
+      .next(startExtractionBatch)
+      .next(
+        new sfn.Choice(this, "ExtractionMode")
+          .when(sfn.Condition.stringEquals("$.batch.mode", "batch"), waitForBatch)
+          .otherwise(extractions),
+      );
 
     this.stateMachine = new sfn.StateMachine(this, "IngestStateMachine", {
       stateMachineType: sfn.StateMachineType.STANDARD,
@@ -283,5 +489,12 @@ export class IngestStack extends Stack {
     new CfnOutput(this, "ExtractAssertionsFunctionName", {
       value: extractAssertionsFn.functionName,
     });
+    new CfnOutput(this, "StartExtractionBatchFunctionName", {
+      value: startExtractionBatchFn.functionName,
+    });
+    new CfnOutput(this, "LoadExtractionBatchFunctionName", {
+      value: loadExtractionBatchFn.functionName,
+    });
+    new CfnOutput(this, "ExtractionBatchRoleArn", { value: batchRole.roleArn });
   }
 }

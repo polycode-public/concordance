@@ -488,13 +488,82 @@ const ASSERTION_COLUMNS = [
 ];
 
 /**
+ * What an extraction of one document starts from: its row, its sentences and their windows, the
+ * hash of its sentence set, whether that set is already extracted under this model, prompt and
+ * pipeline version, and the first window still to run. With replace, a finished extraction counts
+ * as not done, so the document runs again from its first window; stored progress still resumes.
+ * @param {object} args
+ * @param {string} args.documentId
+ * @param {{ query: Function }} args.db
+ * @param {string} args.extractModel
+ * @param {number} [args.window]
+ * @param {string} [args.pipelineVersion]
+ * @param {boolean} [args.replace]
+ */
+export async function extractionState({
+  documentId,
+  db,
+  extractModel,
+  window = EXTRACT_WINDOW,
+  pipelineVersion = EXTRACT_PIPELINE_VERSION,
+  replace = false,
+}) {
+  if (!documentId) throw new Error("documentId is required");
+  if (!extractModel) throw new Error(`${documentId}: the extraction model id is unknown`);
+  const {
+    rows: [document],
+  } = await db.query("SELECT id, witness_id, corpus FROM documents WHERE id = $1", [documentId]);
+  if (!document) throw new Error(`${documentId} is not ingested`);
+  const sentences = await loadSentences(db, documentId);
+  if (!sentences.length)
+    throw new Error(
+      `${documentId} has no sentence chunks; its pages had no text layer (scanned pages need OCR)`,
+    );
+  const windows = sentenceWindows(sentences, window);
+  const sourceSha256 = sha256Text(JSON.stringify(sentences.map((s) => [s.id, s.text])));
+  const state = {
+    document,
+    sentences,
+    events: sharedEventsFor(document.corpus),
+    windows,
+    sourceSha256,
+    done: false,
+    first: 0,
+  };
+  if (!replace) {
+    const done = await db.query(
+      `SELECT 1 FROM provenance WHERE source_sha256 = $1 AND step = $2 AND tool_version = $3
+          AND model = $4 AND prompt_version = $5`,
+      [sourceSha256, EXTRACT_STEP, pipelineVersion, extractModel, EXTRACT_PROMPT_VERSION],
+    );
+    if (done.rows.length) return { ...state, done: true, first: windows.length };
+  }
+  const {
+    rows: [progress],
+  } = await db.query(SELECT_PROGRESS, [documentId]);
+  const resumes =
+    progress &&
+    progress.source_sha256 === sourceSha256 &&
+    progress.tool_version === pipelineVersion &&
+    progress.model === extractModel &&
+    progress.prompt_version === EXTRACT_PROMPT_VERSION &&
+    Number(progress.window_size) === window &&
+    Number(progress.windows_done) < windows.length;
+  return { ...state, first: resumes ? Number(progress.windows_done) : 0 };
+}
+
+/**
  * Extracts the assertions of one ingested document. Each window's rows are written in their
  * own transaction together with a progress row, so a stopped run keeps what it stored and the
  * next run resumes after the last stored window. When the abort signal fires the run stores
  * the window in hand and returns status "partial". The finished provenance row is written in
  * the transaction of the last window. A document whose sentence set was already extracted
- * with this model, prompt and pipeline version is skipped; one extracted under another
- * version, or whose sentences changed, is replaced from the first window.
+ * with this model, prompt and pipeline version is skipped, unless replace is set; one extracted
+ * under another version, or whose sentences changed, is replaced from the first window.
+ *
+ * A window with an entry in replies takes its reply from there, a batch result read back from
+ * S3, in place of a model call; a window without one calls the model. A reply that is cut off
+ * or is not JSON splits the window into model calls, as a model reply does.
  * @param {object} args
  * @param {string} args.documentId
  * @param {import('../providers/modelProvider.mjs').ModelProvider} args.provider
@@ -502,6 +571,9 @@ const ASSERTION_COLUMNS = [
  * @param {number} [args.window]
  * @param {string} [args.pipelineVersion]
  * @param {string} [args.extractModel]
+ * @param {boolean} [args.replace]
+ * @param {Map<number, () => object>} [args.replies] by window index; each throws as extractJson does
+ * @param {string} [args.sourceSha256] the sentence-set hash the replies were made from
  * @param {AbortSignal} [args.signal]
  * @param {(line: string) => void} [args.log]
  * @param {() => number} [args.now]
@@ -513,6 +585,9 @@ export async function extractAssertions({
   window = EXTRACT_WINDOW,
   pipelineVersion = EXTRACT_PIPELINE_VERSION,
   extractModel = provider.extractModel,
+  replace = false,
+  replies,
+  sourceSha256: repliesSha256,
   signal,
   log = console.log,
   now = Date.now,
@@ -525,47 +600,24 @@ export async function extractAssertions({
       JSON.stringify({ evidenceId: documentId, stage: name, count, ...extra, ms: now() - started }),
     );
 
-  const {
-    rows: [document],
-  } = await db.query("SELECT id, witness_id, corpus FROM documents WHERE id = $1", [documentId]);
-  if (!document) throw new Error(`${documentId} is not ingested`);
-  const sentences = await loadSentences(db, documentId);
-  if (!sentences.length)
-    throw new Error(
-      `${documentId} has no sentence chunks; its pages had no text layer (scanned pages need OCR)`,
-    );
-  const events = sharedEventsFor(document.corpus);
-  stage("sentences-loaded", sentences.length);
-
-  const windows = sentenceWindows(sentences, window);
-  const sourceSha256 = sha256Text(JSON.stringify(sentences.map((s) => [s.id, s.text])));
-  const zero = { sentences: sentences.length, calls: 0, kept: 0, rejected: 0, written: 0 };
-  const done = await db.query(
-    `SELECT 1 FROM provenance WHERE source_sha256 = $1 AND step = $2 AND tool_version = $3
-        AND model = $4 AND prompt_version = $5`,
-    [sourceSha256, EXTRACT_STEP, pipelineVersion, extractModel, EXTRACT_PROMPT_VERSION],
+  const { document, sentences, events, windows, sourceSha256, done, first } = await extractionState(
+    { documentId, db, extractModel, window, pipelineVersion, replace },
   );
-  if (done.rows.length) {
+  stage("sentences-loaded", sentences.length);
+  if (repliesSha256 !== undefined && repliesSha256 !== sourceSha256) {
+    throw new Error(
+      `${documentId}: the sentences changed after the batch records were written (${repliesSha256} is now ${sourceSha256})`,
+    );
+  }
+  const zero = { sentences: sentences.length, calls: 0, kept: 0, rejected: 0, written: 0 };
+  if (done) {
     stage("skipped", 0);
     return {
       status: "skipped",
-      counts: zero,
+      counts: replies ? { ...zero, batchReplies: 0 } : zero,
       windows: { done: windows.length, total: windows.length },
     };
   }
-
-  const {
-    rows: [progress],
-  } = await db.query(SELECT_PROGRESS, [documentId]);
-  const resumes =
-    progress &&
-    progress.source_sha256 === sourceSha256 &&
-    progress.tool_version === pipelineVersion &&
-    progress.model === extractModel &&
-    progress.prompt_version === EXTRACT_PROMPT_VERSION &&
-    Number(progress.window_size) === window &&
-    Number(progress.windows_done) < windows.length;
-  const first = resumes ? Number(progress.windows_done) : 0;
   if (first > 0) stage("resumed", first);
 
   const registers = await loadRegisters(db);
@@ -577,6 +629,7 @@ export async function extractAssertions({
   const rejected = {};
   let overridden = 0;
   let calls = 0;
+  let batchReplies = 0;
   let keptCount = 0;
   let written = 0;
   let entityCount = 0;
@@ -744,12 +797,15 @@ export async function extractAssertions({
     // windows, down to one sentence.
     const extractWindow = async (w, depth) => {
       let result;
+      const reply = depth === 1 ? replies?.get(next) : undefined;
       try {
-        result = await provider.extractJson({
-          prompt: extractPrompt(w, events),
-          schema: ASSERTION_SCHEMA,
-          signal,
-        });
+        result = reply
+          ? reply()
+          : await provider.extractJson({
+              prompt: extractPrompt(w, events),
+              schema: ASSERTION_SCHEMA,
+              signal,
+            });
       } catch (err) {
         const splitReason =
           err instanceof ReplyTruncatedError
@@ -758,7 +814,8 @@ export async function extractAssertions({
               ? "invalid"
               : null;
         if (splitReason && !signal?.aborted) {
-          calls++;
+          if (reply) batchReplies++;
+          else calls++;
           const sentencesIn = `${w.targets[0].ordinal}-${w.targets.at(-1).ordinal}`;
           if (w.targets.length === 1) {
             throw new Error(
@@ -791,7 +848,8 @@ export async function extractAssertions({
         if (!signal?.aborted) throw err;
         return false;
       }
-      calls++;
+      if (reply) batchReplies++;
+      else calls++;
       collect(w, result);
       return true;
     };
@@ -804,6 +862,7 @@ export async function extractAssertions({
   }
   const rejectedCount = Object.values(rejected).reduce((a, b) => a + b, 0);
   stage("calls-made", calls);
+  if (replies) stage("batch-replies-used", batchReplies);
   stage("assertions-kept", keptCount);
   if (overridden) stage("kind-overridden", overridden);
   stage("assertions-rejected", rejectedCount, { reasons: rejected });
@@ -814,6 +873,7 @@ export async function extractAssertions({
     kept: keptCount,
     rejected: rejectedCount,
     written,
+    ...(replies ? { batchReplies } : {}),
   };
   if (stopped) {
     stage("stopped", next, { windows: windows.length });
