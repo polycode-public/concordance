@@ -14,6 +14,7 @@ import {
   joinOverlapping,
   loadDocuments,
   neighbourIds,
+  sameLocator,
   withDocuments,
 } from "../../packages/core/retrieval/expand.mjs";
 import {
@@ -62,11 +63,13 @@ describe("joinOverlapping", () => {
 });
 
 describe("buildEvidence", () => {
+  const atPage2 = { locator: { page: 2, paragraph: 20 } };
+
   it("adds the previous and next passage to a passage hit and keeps its locator", () => {
     const rows = rowsOf(
-      chunk("1", "passage", { next_id: "2" }),
+      chunk("1", "passage", { next_id: "2", ...atPage2 }),
       chunk("2", "passage", { prev_id: "1", next_id: "3" }),
-      chunk("3", "passage", { prev_id: "2" }),
+      chunk("3", "passage", { prev_id: "2", ...atPage2 }),
     );
     const [block, ...rest] = buildEvidence(["2"], rows);
     expect(rest).toEqual([]);
@@ -101,12 +104,34 @@ describe("buildEvidence", () => {
 
   it("skips a neighbour that an earlier block already holds", () => {
     const rows = rowsOf(
-      chunk("1", "passage", { next_id: "2" }),
-      chunk("2", "passage", { prev_id: "1", next_id: "3" }),
-      chunk("3", "passage", { prev_id: "2" }),
+      chunk("1", "passage", { next_id: "2", ...atPage2 }),
+      chunk("2", "passage", { prev_id: "1", next_id: "3", ...atPage2 }),
+      chunk("3", "passage", { prev_id: "2", ...atPage2 }),
     );
     const blocks = buildEvidence(["1", "3"], rows);
     expect(blocks.map((b) => b.chunkIds)).toEqual([["1", "2"], ["3"]]);
+  });
+
+  it("leaves a neighbour at another paragraph out of the block, free for a block of its own", () => {
+    const rows = rowsOf(
+      chunk("1", "passage", { next_id: "2", locator: { page: 15, paragraph: 87 } }),
+      chunk("2", "passage", { prev_id: "1", next_id: "3", locator: { page: 15, paragraph: 88 } }),
+      chunk("3", "passage", { prev_id: "2", locator: { page: 15, paragraph: 88 } }),
+    );
+    const blocks = buildEvidence(["2", "1"], rows);
+    expect(blocks.map((b) => [b.chunkId, b.chunkIds, b.locator.paragraph])).toEqual([
+      ["2", ["2", "3"], 88],
+      ["1", ["1"], 87],
+    ]);
+  });
+
+  it("walks past hits that an earlier section holds until the blocks fill", () => {
+    const held = Array.from({ length: 14 }, (_, i) =>
+      chunk(String(100 + i), "passage", { parent_id: "10" }),
+    );
+    const rows = rowsOf(chunk("10", "section"), ...held, chunk("5", "passage"));
+    const blocks = buildEvidence([...held.map((h) => h.id), "5"], rows);
+    expect(blocks.map((b) => b.chunkId)).toEqual(["10", "5"]);
   });
 
   it("stops at the character cap and keeps fusion order", () => {
@@ -138,6 +163,15 @@ describe("buildEvidence", () => {
     expect(() => buildEvidence(["1"], rowsOf(chunk("1", "passage", { locator: null })))).toThrow(
       /no locator/,
     );
+  });
+
+  it("compares every locator field of two chunks", () => {
+    const at = (locator) => ({ locator });
+    expect(sameLocator(at({ page: 4, paragraph: null }), at({ page: 4, paragraph: null }))).toBe(
+      true,
+    );
+    expect(sameLocator(at({ page: 4, paragraph: 14 }), at({ page: 4, paragraph: 15 }))).toBe(false);
+    expect(sameLocator(at({ page: 4 }), at({ page: 4, line: 2 }))).toBe(false);
   });
 
   it("names the neighbours and parents still to load", () => {

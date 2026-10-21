@@ -19,9 +19,9 @@ import { loadChunks, retrieve } from "./retrieval/hybrid.mjs";
 
 export const REPORT_PROMPT_VERSION = "report-closed-world-v1";
 
-/** A report draws on more of the corpus than a turn: the turn's caps are 12, 12 and 6000. */
+/** A report draws on more of the corpus than a turn: the turn's caps are 40, 12 and 6000. */
 export const REPORT_LIMITS = Object.freeze({
-  maxHits: 30,
+  maxHits: 100,
   maxBlocks: 30,
   maxChars: 16000 * CHARS_PER_TOKEN,
 });
