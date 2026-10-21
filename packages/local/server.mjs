@@ -21,6 +21,7 @@ import {
   reportsResponse,
   requestReport as defaultRequestReport,
 } from "../core/reports.mjs";
+import { REWRITE_TURNS } from "../core/retrieval/rewrite.mjs";
 import {
   LAPTOP_USER,
   conversationTurns,
@@ -28,6 +29,7 @@ import {
   listConversations,
   recordSession,
   recordTurn,
+  threadHistory,
 } from "../core/sessions.mjs";
 import { SpendInputError, historyDays, readSpendHistory } from "../core/spend.mjs";
 import { PAGE_ASSETS } from "../../scripts/stage-page-assets.mjs";
@@ -619,7 +621,7 @@ export async function createServer({
       }
     }
 
-    async function runTurn({ thread, turnId, text, corpus }) {
+    async function runTurn({ thread, turnId, text, corpus, filters }) {
       if (!db) {
         send(serverFrame.error(NO_DATABASE, thread, turnId));
         return;
@@ -637,12 +639,20 @@ export async function createServer({
       let finished = null;
       try {
         await requireKnownCorpus(db, corpus);
+        await session.written;
+        const history = await threadHistory(db, {
+          sessionId: session.id,
+          thread,
+          limit: REWRITE_TURNS,
+        });
         signal.throwIfAborted();
         const result = await runQuery({
           question: text,
           corpus,
           provider,
           db,
+          filters,
+          history,
           signal,
           onStage: (stage, tool) => {
             if (!live()) return;

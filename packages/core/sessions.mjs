@@ -74,17 +74,23 @@ export async function recordSession(db, { id, userId, corpus }) {
 }
 
 /**
- * Writes the session_turns row of one finished turn: done, cancelled or error.
+ * Writes the session_turns row of one finished turn: done, cancelled or error. A finished
+ * result also stores its query rewrites, the fused chunk ids of its retrieval and its reranker
+ * scores.
  * @param {{ query: Function }} db
  * @param {{ sessionId: string, thread: string, turnId: string, userText: string,
- *   result?: { answer: string, abstained: boolean, checks: object } | null, frames: object[] }} turn
+ *   result?: { answer: string, abstained: boolean, checks: object, queryRewrites?: string[],
+ *     retrievedIds?: string[], rerankerScores?: Record<string, number> } | null,
+ *   frames: object[] }} turn
  */
 export async function recordTurn(db, { sessionId, thread, turnId, userText, result, frames }) {
   const checks = result ? { ...result.checks, abstained: result.abstained } : {};
   await db.query(
     `INSERT INTO session_turns
-       (session_id, thread, turn_id, user_text, prompt_version, model_id, raw_output, checks, frames)
-     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)`,
+       (session_id, thread, turn_id, user_text, prompt_version, model_id, raw_output, checks, frames,
+        query_rewrites, retrieved_ids, reranker_scores)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::bigint[],
+             $12::jsonb)`,
     [
       sessionId,
       thread,
@@ -95,8 +101,32 @@ export async function recordTurn(db, { sessionId, thread, turnId, userText, resu
       result?.answer ?? null,
       JSON.stringify(checks),
       JSON.stringify(storedFrames(frames)),
+      JSON.stringify(result?.queryRewrites ?? []),
+      result?.retrievedIds ?? [],
+      JSON.stringify(result?.rerankerScores ?? {}),
     ],
   );
+}
+
+/**
+ * The last finished turns of one thread, oldest first, as the query rewrite reads them. A turn
+ * that was cancelled or failed has no answer and is left out.
+ * @param {{ query: Function }} db
+ * @param {{ sessionId: string, thread: string, limit: number }} which
+ * @returns {Promise<{ question: string, answer: string }[]>}
+ */
+export async function threadHistory(db, { sessionId, thread, limit }) {
+  if (!isUuid(sessionId)) throw new Error(`session id ${JSON.stringify(sessionId)} is not a UUID`);
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error(`history limit ${limit} is not a count`);
+  const { rows } = await db.query(
+    `SELECT user_text, raw_output FROM session_turns
+      WHERE session_id = $1::uuid AND thread = $2 AND raw_output IS NOT NULL
+      ORDER BY id DESC
+      LIMIT ${limit}`,
+    [sessionId, thread],
+  );
+  return rows.reverse().map((r) => ({ question: r.user_text, answer: r.raw_output }));
 }
 
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;

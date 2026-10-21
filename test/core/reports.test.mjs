@@ -247,7 +247,7 @@ describe("runReport", () => {
     expect(ranked).toHaveLength(4);
     for (const c of ranked) {
       expect(c.text).toContain("document_id = ANY(");
-      expect(c.params.at(-1)).toEqual(["IWS2"]);
+      expect(c.params).toContainEqual(["IWS2"]);
     }
     expect(report.citations).toEqual([
       { evidence: 1, locator: { document: "IWS2", page: 2, paragraph: 4 } },

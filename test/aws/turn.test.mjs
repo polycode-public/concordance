@@ -71,12 +71,18 @@ function fakeDb() {
   const db = {
     closed: false,
     writes: [],
+    history: [],
+    historyReads: [],
     query: async (text, params) => {
       if (/^INSERT/.test(text)) {
         db.writes.push({ text, params });
         return { rows: [] };
       }
       if (/DISTINCT corpus FROM documents/.test(text)) return { rows: [{ corpus: "grenfell" }] };
+      if (/FROM session_turns/.test(text)) {
+        db.historyReads.push(params);
+        return { rows: db.history };
+      }
       return { rows: BLOCKS };
     },
     close: async () => {
@@ -191,6 +197,38 @@ describe("turn function", () => {
     });
     expect(db.closed).toBe(true);
     expect(cancels.finished).toEqual([["c1#t1", "u1"]]);
+  });
+
+  it("passes the frame's filters to the query", async () => {
+    let heard;
+    const { handler } = setup({
+      runQuery: (args) => {
+        heard = args.filters;
+        return stubQuery(args);
+      },
+    });
+    await handler({ ...EVENT, frame: { ...EVENT.frame, filters: { role: "Resident" } } });
+    expect(heard).toEqual({ role: "Resident" });
+  });
+
+  it("passes the thread's last finished turns to the query, oldest first", async () => {
+    let heard;
+    const { handler, db } = setup({
+      runQuery: (args) => {
+        heard = args.history;
+        return stubQuery(args);
+      },
+    });
+    db.history = [
+      { user_text: "And the lobby?", raw_output: "Smoke [E1]." },
+      { user_text: "Were the stairs dark?", raw_output: "Dark [E1]." },
+    ];
+    await handler(EVENT);
+    expect(db.historyReads).toEqual([[sessionIdFor("c1", "grenfell"), "t1"]]);
+    expect(heard).toEqual([
+      { question: "Were the stairs dark?", answer: "Dark [E1]." },
+      { question: "And the lobby?", answer: "Smoke [E1]." },
+    ]);
   });
 
   it("posts a tool frame for each tool call of the answer", async () => {

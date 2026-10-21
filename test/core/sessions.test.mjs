@@ -8,6 +8,7 @@ import {
   listConversations,
   recordSession,
   recordTurn,
+  threadHistory,
   sessionIdFor,
   storedFrames,
   TURN_PAGE,
@@ -80,6 +81,9 @@ describe("the session log", () => {
         answer: "Dark [E1].",
         abstained: false,
         checks: { model: "m1", promptVersion: "p9", supported: 1 },
+        queryRewrites: ["the stairs on floor 4"],
+        retrievedIds: ["7", "3"],
+        rerankerScores: { 7: 3, 3: 1 },
       },
       frames,
     });
@@ -91,7 +95,7 @@ describe("the session log", () => {
       result: null,
       frames: [{ type: "cancelled", thread: "t", turnId: "v" }],
     });
-    expect(db.calls[0].text).toMatch(/\$8::jsonb, \$9::jsonb\)/);
+    expect(db.calls[0].text).toMatch(/\$10::jsonb, \$11::bigint\[\],\s+\$12::jsonb\)/);
     expect(db.calls[0].params).toEqual([
       SESSION,
       "t",
@@ -102,6 +106,9 @@ describe("the session log", () => {
       "Dark [E1].",
       JSON.stringify({ model: "m1", promptVersion: "p9", supported: 1, abstained: false }),
       JSON.stringify(frames),
+      JSON.stringify(["the stairs on floor 4"]),
+      ["7", "3"],
+      JSON.stringify({ 3: 1, 7: 3 }),
     ]);
     expect(db.calls[1].params.slice(4)).toEqual([
       PROMPT_VERSION,
@@ -109,7 +116,28 @@ describe("the session log", () => {
       null,
       "{}",
       JSON.stringify([{ type: "cancelled", thread: "t", turnId: "v" }]),
+      "[]",
+      [],
+      "{}",
     ]);
+  });
+
+  it("reads the last finished turns of a thread oldest first", async () => {
+    const db = recordingDb(() => ({
+      rows: [
+        { user_text: "And the lobby?", raw_output: "Smoke [E1]." },
+        { user_text: "Were the stairs dark?", raw_output: "Dark [E1]." },
+      ],
+    }));
+    expect(await threadHistory(db, { sessionId: SESSION, thread: "t", limit: 3 })).toEqual([
+      { question: "Were the stairs dark?", answer: "Dark [E1]." },
+      { question: "And the lobby?", answer: "Smoke [E1]." },
+    ]);
+    expect(db.calls[0].text).toMatch(/raw_output IS NOT NULL\s+ORDER BY id DESC\s+LIMIT 3/);
+    expect(db.calls[0].params).toEqual([SESSION, "t"]);
+    await expect(threadHistory(db, { sessionId: "x", thread: "t", limit: 3 })).rejects.toThrow(
+      /UUID/,
+    );
   });
 
   it("lists a user's conversations in one corpus newest first, at most 100", async () => {

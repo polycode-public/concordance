@@ -37,6 +37,61 @@ export class ProtocolError extends Error {
 
 const isId = (v) => typeof v === "string" && v.length > 0 && v.length <= 128;
 
+export const MAX_FILTER_WITNESSES = 50;
+const MAX_ROLE = 128;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+const isIsoDate = (v) =>
+  typeof v === "string" &&
+  ISO_DATE.test(v) &&
+  new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+
+/**
+ * Validates the optional filters of a turn and returns them with empty fields left out, or null
+ * when none is set. The shape is
+ * `{ witnesses?: string[], role?: string, from?: 'YYYY-MM-DD', to?: 'YYYY-MM-DD' }`:
+ * `witnesses` are witness ids, `role` is a substring of the role shown with each document, and
+ * `from` and `to` bound the statement date, both ends included.
+ * @param {unknown} filters
+ * @returns {{ witnesses?: string[], role?: string, from?: string, to?: string } | null}
+ */
+export function parseTurnFilters(filters) {
+  if (filters == null) return null;
+  if (typeof filters !== "object" || Array.isArray(filters)) {
+    throw new ProtocolError("turn filters must be an object");
+  }
+  const unknown = Object.keys(filters).filter(
+    (k) => !["witnesses", "role", "from", "to"].includes(k),
+  );
+  if (unknown.length) throw new ProtocolError(`unknown turn filter ${unknown[0]}`);
+  const out = {};
+  if (filters.witnesses != null) {
+    if (!Array.isArray(filters.witnesses) || !filters.witnesses.every(isId)) {
+      throw new ProtocolError("filter witnesses must be an array of witness ids");
+    }
+    if (filters.witnesses.length > MAX_FILTER_WITNESSES) {
+      throw new ProtocolError(`filter names more than ${MAX_FILTER_WITNESSES} witnesses`);
+    }
+    if (filters.witnesses.length) out.witnesses = [...new Set(filters.witnesses)];
+  }
+  if (filters.role != null) {
+    if (typeof filters.role !== "string" || filters.role.length > MAX_ROLE) {
+      throw new ProtocolError(`filter role must be text of at most ${MAX_ROLE} characters`);
+    }
+    if (filters.role.trim()) out.role = filters.role.trim();
+  }
+  for (const end of ["from", "to"]) {
+    if (filters[end] == null) continue;
+    if (!isIsoDate(filters[end]))
+      throw new ProtocolError(`filter ${end} must be a YYYY-MM-DD date`);
+    out[end] = filters[end];
+  }
+  if (out.from && out.to && out.from > out.to) {
+    throw new ProtocolError("filter from is after filter to");
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 const corpusOf = (frame) => {
   if (!isCorpusId(frame.corpus)) throw new ProtocolError(`${frame.type} needs a corpus id`);
   return frame.corpus;
@@ -44,10 +99,10 @@ const corpusOf = (frame) => {
 
 /**
  * Parses and validates one client frame. Throws ProtocolError when the frame is
- * malformed.
+ * malformed. A turn may carry `filters` (see parseTurnFilters).
  * @param {string | Buffer} json
  * @returns {{ type: 'turn', thread: string, turnId: string, text: string, attachments: unknown[],
- *     corpus: string }
+ *     corpus: string, filters: ReturnType<typeof parseTurnFilters> }
  *   | { type: 'cancel', thread: string, turnId: string }
  *   | { type: 'open', docId: string, locator: unknown, corpus: string }
  *   | { type: 'report', thread: string, requestId: string, topic: string, documentIds: string[],
@@ -80,6 +135,7 @@ export function parseClientFrame(json) {
         text: frame.text,
         attachments,
         corpus: corpusOf(frame),
+        filters: parseTurnFilters(frame.filters),
       };
     }
     case "cancel":

@@ -5,6 +5,12 @@ import { createOllamaProvider } from "../../packages/core/providers/ollamaProvid
 import { providerFromEnv } from "../../packages/core/providers/index.mjs";
 import { assertProvider } from "../../packages/core/providers/modelProvider.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
+import {
+  RERANK_SCHEMA,
+  batchScores,
+  modelReranker,
+} from "../../packages/core/providers/rerank.mjs";
+import { RERANK_PASSAGE_CHARS } from "../../packages/core/prompt.mjs";
 
 function ndjsonResponse(lines, { delayMs = 0 } = {}) {
   const encoder = new TextEncoder();
@@ -36,6 +42,76 @@ describe("providerFromEnv", () => {
 
   it("rejects an unknown provider", () => {
     expect(() => providerFromEnv({ MODEL_PROVIDER: "other" })).toThrow(/unknown MODEL_PROVIDER/);
+  });
+
+  it("adds the model reranker only with RERANK=model", () => {
+    expect(providerFromEnv({}).rerank).toBeUndefined();
+    expect(providerFromEnv({ RERANK: "off" }).rerank).toBeUndefined();
+    expect(providerFromEnv({ RERANK: "model" }).rerank).toBeTypeOf("function");
+    expect(providerFromEnv({ MODEL_PROVIDER: "bedrock", RERANK: "model" }).rerank).toBeTypeOf(
+      "function",
+    );
+    expect(() => providerFromEnv({ RERANK: "cohere" })).toThrow(/unknown RERANK cohere/);
+  });
+});
+
+describe("modelReranker", () => {
+  const passages = Array.from({ length: 25 }, (_, i) => ({
+    id: String(100 + i),
+    header: `[h ${i}]`,
+    text: `passage ${i} ${"x".repeat(2000)}`,
+  }));
+
+  it("scores ten passages to one extraction call and keeps passage order", async () => {
+    const prompts = [];
+    const reranker = modelReranker({
+      async extractJson({ prompt, schema }) {
+        prompts.push({ prompt, schema });
+        const count = (prompt.match(/^\[P\d+\]/gm) ?? []).length;
+        return {
+          scores: Array.from({ length: count }, (_, i) => ({ passage: count - i, score: i % 4 })),
+        };
+      },
+    });
+    const scored = await reranker("Were the stairs dark?", passages);
+    expect(prompts).toHaveLength(3);
+    expect(prompts.map((p) => (p.prompt.match(/^\[P\d+\]/gm) ?? []).length)).toEqual([10, 10, 5]);
+    expect(prompts[0].schema).toBe(RERANK_SCHEMA);
+    expect(prompts[0].prompt).toContain("Question: Were the stairs dark?");
+    expect(prompts[0].prompt).toContain("[P1] [h 0]\npassage 0 ");
+    expect(prompts[0].prompt).not.toContain("x".repeat(RERANK_PASSAGE_CHARS));
+    expect(scored).toHaveLength(25);
+    expect(scored.map((s) => s.id)).toEqual(passages.map((p) => p.id));
+    expect(scored[9]).toEqual({ id: "109", score: 0 });
+    expect(scored[0]).toEqual({ id: "100", score: 1 });
+  });
+
+  it("throws when a passage has no score, two scores or one out of range", () => {
+    expect(() => batchScores({ scores: [{ passage: 1, score: 2 }] }, 2)).toThrow(/passage 2/);
+    expect(() =>
+      batchScores(
+        {
+          scores: [
+            { passage: 1, score: 2 },
+            { passage: 1, score: 3 },
+          ],
+        },
+        2,
+      ),
+    ).toThrow(/named passage 1/);
+    expect(() => batchScores({ scores: [{ passage: 1, score: 4 }] }, 1)).toThrow(/score 4/);
+    expect(() => batchScores({}, 1)).toThrow(/no score/);
+    expect(
+      batchScores(
+        {
+          scores: [
+            { passage: 2, score: 0 },
+            { passage: 1, score: 3 },
+          ],
+        },
+        2,
+      ),
+    ).toEqual([3, 0]);
   });
 });
 

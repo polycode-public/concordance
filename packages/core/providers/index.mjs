@@ -3,13 +3,28 @@
 import { assertProvider } from "./modelProvider.mjs";
 import { createOllamaProvider } from "./ollamaProvider.mjs";
 import { createBedrockProvider } from "./bedrockProvider.mjs";
+import { modelReranker } from "./rerank.mjs";
+
+export const RERANK_MODES = Object.freeze(["off", "model"]);
 
 /**
- * Selects the model provider from MODEL_PROVIDER: 'laptop' (the default) or 'bedrock'.
+ * Selects the model provider from MODEL_PROVIDER: 'laptop' (the default) or 'bedrock'. With
+ * RERANK=model the provider also has rerank(), which scores passages on its extraction model;
+ * RERANK=off (the default) leaves it out, so retrieval keeps the fused order.
  * @param {Record<string, string | undefined>} [env]
  * @returns {import('./modelProvider.mjs').ModelProvider}
  */
 export function providerFromEnv(env = process.env) {
+  const rerank = env.RERANK || "off";
+  if (!RERANK_MODES.includes(rerank)) {
+    throw new Error(`unknown RERANK ${rerank}; use ${RERANK_MODES.join(" or ")}`);
+  }
+  const provider = modelProviderFromEnv(env);
+  if (rerank === "model") provider.rerank = modelReranker(provider);
+  return provider;
+}
+
+function modelProviderFromEnv(env) {
   const kind = env.MODEL_PROVIDER || "laptop";
   switch (kind) {
     case "laptop":

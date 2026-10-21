@@ -7,10 +7,13 @@ import { runToolCall } from "./toolLoop.mjs";
  * honours the abort signal. embed() returns a vector of embedDim zeros with a 1 in the last
  * position, or embedFor(text) when given. extractJson() returns extractJson(args) when given,
  * else an empty object. When a chat offers tools, chat() first runs each round of toolRounds
- * in order, then streams the tokens.
+ * in order, then streams the tokens. With rerank given, the provider has rerank(), which
+ * records each call in rerankCalls and returns rerank(question, passages).
  * @param {{ tokens: string[], delayMs?: number, embedDim?: number,
  *   embedFor?: (text: string) => number[],
  *   extractJson?: (args: { prompt: string, schema?: object }) => object,
+ *   rerank?: (question: string, passages: { id: string, text: string }[]) =>
+ *     { id: string, score: number }[],
  *   toolRounds?: { name: string, input: object }[][] }} options
  */
 export function createFakeProvider({
@@ -19,11 +22,13 @@ export function createFakeProvider({
   embedDim = 4,
   embedFor,
   extractJson,
+  rerank,
   toolRounds = [],
 }) {
   const calls = [];
+  const rerankCalls = [];
   const unitVector = Array.from({ length: embedDim }, (_, i) => (i === embedDim - 1 ? 1 : 0));
-  return {
+  const provider = {
     name: "fake",
     embedModel: "fake-embed",
     embedDim,
@@ -76,4 +81,12 @@ export function createFakeProvider({
       return { ...result, toolCalls };
     },
   };
+  if (rerank) {
+    provider.rerankCalls = rerankCalls;
+    provider.rerank = async (question, passages) => {
+      rerankCalls.push({ question, passages });
+      return rerank(question, passages);
+    };
+  }
+  return provider;
 }
