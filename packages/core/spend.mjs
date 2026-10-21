@@ -11,7 +11,7 @@ export const MAX_DAYS = 366;
 
 export const HISTORY_SQL = `
   SELECT corpus, to_char(day, 'YYYY-MM-DD') AS day, model, source, requests, input_tokens,
-         output_tokens
+         output_tokens, cache_read_tokens, cache_write_tokens
     FROM usage_daily
    WHERE day > (now() AT TIME ZONE 'UTC')::date - $1::int
    ORDER BY day, corpus, model, source`;
@@ -39,7 +39,8 @@ const isoDay = (date) => date.toISOString().slice(0, 10);
  * The history as the page draws it: every day of the window, one series per corpus with a point
  * per day, and the models that had no list price.
  * @param {{ corpus: string, day: string, model: string | null, source: string,
- *   requests: number | string, input_tokens: number | string, output_tokens: number | string }[]} rows
+ *   requests: number | string, input_tokens: number | string, output_tokens: number | string,
+ *   cache_read_tokens: number | string, cache_write_tokens: number | string }[]} rows
  * @param {{ days: number, today: Date }} window
  */
 export function spendHistory(rows, { days, today }) {
@@ -52,6 +53,8 @@ export function spendHistory(rows, { days, today }) {
   for (const r of rows) {
     const inputTokens = Number(r.input_tokens);
     const outputTokens = Number(r.output_tokens);
+    const cacheReadTokens = Number(r.cache_read_tokens);
+    const cacheWriteTokens = Number(r.cache_write_tokens);
     const requests = Number(r.requests);
     const series = byCorpus.get(r.corpus) ?? new Map();
     byCorpus.set(r.corpus, series);
@@ -61,7 +64,13 @@ export function spendHistory(rows, { days, today }) {
     point.outputTokens += outputTokens;
     point.requests += requests;
     if (inputTokens + outputTokens === 0) continue;
-    const cost = costOf({ model: r.model, inputTokens, outputTokens });
+    const cost = costOf({
+      model: r.model,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    });
     if (cost === null) unpriced.add(r.model ?? "unknown");
     else point.cost += cost;
   }
@@ -78,7 +87,9 @@ export function spendHistory(rows, { days, today }) {
 }
 
 export const MONTH_SQL = `
-  SELECT model, sum(input_tokens)::bigint AS input_tokens, sum(output_tokens)::bigint AS output_tokens
+  SELECT model, sum(input_tokens)::bigint AS input_tokens, sum(output_tokens)::bigint AS output_tokens,
+         sum(cache_read_tokens)::bigint AS cache_read_tokens,
+         sum(cache_write_tokens)::bigint AS cache_write_tokens
     FROM usage_daily
    WHERE day >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
    GROUP BY model`;
@@ -97,6 +108,8 @@ export async function readMonthEstimate(db) {
         model: r.model,
         inputTokens: Number(r.input_tokens),
         outputTokens: Number(r.output_tokens),
+        cacheReadTokens: Number(r.cache_read_tokens),
+        cacheWriteTokens: Number(r.cache_write_tokens),
       }) ?? 0),
     0,
   );

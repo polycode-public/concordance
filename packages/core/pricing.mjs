@@ -49,6 +49,10 @@ export const LIST_PRICES = Object.freeze([
 
 const PER_TOKEN = 1 / 1_000_000;
 
+/** Bedrock regional endpoints carry 10 percent over global; the geography profiles are regional. */
+export const REGIONAL_PREMIUM = 1.1;
+const REGIONAL_PROFILE = /^(eu|us|jp|au)\./;
+
 /**
  * The list price of a model id, or null when the table has none.
  * @param {string | null | undefined} model
@@ -76,7 +80,10 @@ export function costOf({
   if (!price) return null;
   if (cacheReadTokens + cacheWriteTokens > 0 && price.cacheRead === undefined) return null;
   const uncached = inputTokens - cacheReadTokens - cacheWriteTokens;
+  const premium =
+    price.family.startsWith("claude-") && REGIONAL_PROFILE.test(model) ? REGIONAL_PREMIUM : 1;
   return (
+    premium *
     (uncached * price.input +
       cacheReadTokens * (price.cacheRead ?? 0) +
       cacheWriteTokens * (price.cacheWrite ?? 0) +
