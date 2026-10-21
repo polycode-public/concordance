@@ -12,7 +12,7 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 
 - "To be a contraction there must be at leaste 1 contradicting fact so we don't need these zeros." (2026-10-20, on the Contradictions panel's group list; row U13)
 
-- "Please add a task to add tools or MCPs which are available to the llm for access to computations on the data for anything we can do without incurring a lot of cost and build whatn we can based on how the current data is stored and more inference based stuff using F11." (2026-10-20; rows T1 and T2)
+- "Please add a task to add tools or MCPs which are available to the llm for access to computations on the data for anything we can do without incurring a lot of cost and build whatn we can based on how the current data is stored and more inference based stuff using F11." (2026-10-20; the store tools landed as T1; the inference tools and the MCP twin were dropped on 2026-10-21)
 
 - "Please create a task to give this a domain name. I think concordance.polycode.co.uk" (2026-10-20; row A6)
 
@@ -138,21 +138,14 @@ guard, the abstention threshold tuned on the gold set, the session log and repla
 on the page. Exit: unsupported-sentence rate reported per answer; `test.yml` fails when citation
 precision on the gold set drops below the committed floor.
 
-### Phase 5: facts and consistency (F9, F10, F11)
+### Phase 5: facts and consistency (F9)
 
 Assertion extraction with a JSON schema that forbids values absent from the text, the entity and
-event registers, alignment by claim similarity and entity overlap, NLI labelling, grouping, the
-contradiction matrix, self-consistency ordered by statement date, accepted facts with promotion and
-session hypotheses, the timeline view, RDF-star export and live SPARQL from a Lambda. Exit: the known Grenfell timing disputes
-appear in the matrix without hand-tuning.
-
-### Phase 6: conversation layer and media (F12)
-
-Threads and forks with their own filters and session facts, interruption mid-stream, voice input
-through Transcribe streaming, Transcribe
-transcripts with word timestamps as derived objects, the media player with transcript sync and
-seek, the image viewer with boxes, export of the transcript with its bibliography. Exit: the
-10-step demo script runs end to end on the deployed page.
+event registers, alignment by claim similarity and entity overlap, Haiku labelling of the aligned
+pairs, grouping, the contradiction matrix, self-consistency ordered by statement date, accepted
+facts with promotion and session hypotheses, the timeline view: landed (F9, D5 to D26, on `main`
+by 2026-10-21). The remaining second half (NLI labelling with a dedicated model, the RDF-star
+export and live SPARQL from a Lambda) is dropped (the operator's word, 2026-10-21).
 
 ### Phase 7: demo and polish (F13)
 
@@ -186,16 +179,21 @@ request through an internal draft, write and review cycle, stored with versions,
   confirmation first; the request form takes topic, documents and filename. A chat message that
   names an existing filename is an edit request.
 - Routes: HTTP `GET /reports`, `GET /reports/{filename}` (versions), `DELETE /reports/{filename}`;
-  the WebSocket carries the request and the status frames. Export (F12's bibliography shape)
+  the WebSocket carries the request and the status frames. Export (the transcript's bibliography shape)
   includes reports.
 
 Exit: on the deployed page, a report over two named statements is requested, written, reviewed
 and listed; an edit by chat stores version 2; delete removes it after confirmation; every
 sentence in the stored report carries a resolved citation or the abstention phrase.
 
-### Phase T: tools for the model over the store (T1, T2)
+### Phase T: tools for the model over the store (T1)
 
-The turn gives the model tools that compute over the stored data, so a question that needs a count, a timeline window, a witness's set of claims or a cell of the contradiction matrix is answered from the store with locators, under the closed-world rule (a tool result is evidence with chunk ids, never a fact). Cheapest first: Postgres views and the existing routes behind Bedrock Converse tool use in the turn Lambda (no new service); the inference tools come from F11's RDF-star export and live SPARQL on Lambda; an MCP server is the laptop form of the same tools for the operator's own assistant, not a second service for the deployed turn. Exit: a deployed turn answers a counting or timeline question through a tool call with citations; the eval gains tool-needing rows.
+The turn gives the model tools that compute over the stored data (counts, one witness's claims, a
+time window, the comparisons between two witnesses, corroborated contradictions, document facts,
+a search, the system's own usage) through Bedrock Converse tool use in the turn Lambda, under the
+closed-world rule: a tool result is evidence with chunk ids, never a fact. Landed on `main`
+(2026-10-20). The inference tools over an RDF-star export and the MCP twin are dropped (the
+operator's word, 2026-10-21).
 
 ### Phase L: the laptop port check (L1)
 
