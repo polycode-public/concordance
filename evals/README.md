@@ -59,10 +59,11 @@ has none.
 | abstention correctness    | 0.960 |
 
 The figures are not comparable with the run below: that run matched whole-page locators and this
-one matches paragraphs, and 15 of the 34 gold locators still name a page only, so a citation of
+one matches paragraphs, and 15 of its 34 gold locators named a page only, so a citation of
 the right paragraph on a page the gold row does not name counts as a miss. The same run with the
 whole-object key scored precision 0.028 and recall 0.059 (two runs, about $0.35 each by the day's
 Sonnet rate; Cost Explorer lags by hours).
+The gold set now holds 37 locators, each with a paragraph; the next run scores against them.
 
 ### 2026-10-20, bedrock, `answer-closed-world-v2`, `ingest-v1`
 
