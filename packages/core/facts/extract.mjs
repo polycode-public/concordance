@@ -529,7 +529,10 @@ export async function extractAssertions({
   } = await db.query("SELECT id, witness_id, corpus FROM documents WHERE id = $1", [documentId]);
   if (!document) throw new Error(`${documentId} is not ingested`);
   const sentences = await loadSentences(db, documentId);
-  if (!sentences.length) throw new Error(`${documentId} has no sentence chunks`);
+  if (!sentences.length)
+    throw new Error(
+      `${documentId} has no sentence chunks; its pages had no text layer (scanned pages need OCR)`,
+    );
   const events = sharedEventsFor(document.corpus);
   stage("sentences-loaded", sentences.length);
 

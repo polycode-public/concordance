@@ -125,8 +125,8 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
       abstract: "fake abstract",
       pipeline_version: "ingest-v2",
     });
-    const witnesses = await db.query("SELECT id, role FROM witnesses");
-    expect(witnesses.rows).toEqual([{ id: META.witnessId, role: META.role }]);
+    const witnesses = await db.query("SELECT id, role, cipher_only FROM witnesses");
+    expect(witnesses.rows).toEqual([{ id: META.witnessId, role: META.role, cipher_only: false }]);
   });
 
   it("chains passages by prev_id and next_id in ordinal order", async () => {
@@ -240,5 +240,19 @@ describe.skipIf(!enabled)("ingestDocument (CONCORDANCE_DB_TESTS=1)", () => {
     expect(await levelCounts()).toEqual(EXPECTED);
     const versions = await db.query("SELECT DISTINCT pipeline_version FROM chunks");
     expect(versions.rows).toEqual([{ pipeline_version: "ingest-test-v2" }]);
+  });
+
+  it("updates the witness role and cipher flag on a later ingest", async () => {
+    const changed = {
+      ...META,
+      role: "resident, floor 19",
+      cipherOnly: true,
+      sha256: "e".repeat(64),
+    };
+    await ingestDocument({ pages: PAGES, meta: changed, provider, db, log: () => {} });
+    const witnesses = await db.query("SELECT id, role, cipher_only FROM witnesses");
+    expect(witnesses.rows).toEqual([
+      { id: META.witnessId, role: "resident, floor 19", cipher_only: true },
+    ]);
   });
 });

@@ -17,6 +17,9 @@
 // - A document with no numbered paragraph is located by page alone: one section per page or
 //   per cut of a long page, each with paragraph null.
 //
+// A document whose pages carry no text layer (a scan) is refused. OCR is a horizon; candidates are
+// Amazon Textract and a page-image pass through a vision model.
+//
 // Library: ingestDocument() takes extracted pages, so a test needs no PDF.
 // CLI: node packages/core/ingest/run.mjs --corpus grenfell
 import { createHash } from "node:crypto";
@@ -37,6 +40,7 @@ export const CONTEXT_PROMPT_VERSION = "context-v1";
 export const ABSTRACT_PROMPT_VERSION = "abstract-v1";
 export const EMBED_BATCH_SIZE = 32;
 export const ABSTRACT_INPUT_CHARS = 12000;
+export const MIN_TEXT_PAGE_FRACTION = 0.25;
 export const LEVEL_BATCH_BYTES = 60 * 1024;
 export const LEVELS = Object.freeze(["document", "section", "passage", "sentence"]);
 
@@ -210,7 +214,7 @@ export async function readManifest(file) {
 
 /**
  * Parses sources.json: an array of { evidence_id, url, role, floor, statement_date, file },
- * optionally with witness_id. Returns a Map keyed by evidence id.
+ * optionally with witness_id and cipher_only. Returns a Map keyed by evidence id.
  * @param {string} text
  * @param {string} [source]
  */
@@ -236,6 +240,9 @@ export function parseSources(text, source = "sources.json") {
     for (const field of ["url", "role", "file", "witness_id"]) optionalString(field);
     if (entry.floor != null && !["string", "number"].includes(typeof entry.floor)) {
       throw new Error(`${where}: floor must be a string or a number`);
+    }
+    if (entry.cipher_only != null && typeof entry.cipher_only !== "boolean") {
+      throw new Error(`${where}: cipher_only must be a boolean`);
     }
     if (entry.statement_date != null && !ISO_DATE.test(entry.statement_date)) {
       throw new Error(`${where}: statement_date must be YYYY-MM-DD`);
@@ -284,6 +291,7 @@ export function documentMeta(corpus, row, source) {
     licence: row.licence,
     witnessId: source?.witness_id ?? row.evidence_id,
     role: roleText(source),
+    cipherOnly: source?.cipher_only ?? false,
     statementDate: source?.statement_date ?? null,
   };
 }
@@ -417,6 +425,13 @@ export async function ingestDocument({
     return { status: "skipped", counts: zero };
   }
 
+  const emptyPages = pages.filter((p) => !p.text?.trim()).length;
+  if (!pages.length || pages.length - emptyPages < pages.length * MIN_TEXT_PAGE_FRACTION) {
+    throw new Error(
+      `${id}: no text layer; ${emptyPages} of ${pages.length} pages have no text (scanned pages need OCR)`,
+    );
+  }
+
   const info = corpusInfo(meta.corpus);
   const headerFor = (locator, heading) =>
     buildHeader({
@@ -514,8 +529,9 @@ export async function ingestDocument({
     }
     if (meta.witnessId) {
       await client.query(
-        "INSERT INTO witnesses (id, role) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-        [meta.witnessId, meta.role],
+        `INSERT INTO witnesses (id, role, cipher_only) VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, cipher_only = EXCLUDED.cipher_only`,
+        [meta.witnessId, meta.role, meta.cipherOnly ?? false],
       );
     }
     await client.query(

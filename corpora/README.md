@@ -14,6 +14,10 @@ only its `README.md` and `manifest.jsonl`.
 4. Store the licence for each document.
 5. Never re-host material in a way that could pair a cipher with an identity.
 
+## Scanned documents
+
+The ingest refuses a document whose pages carry no text layer. OCR is a horizon; the candidates are Amazon Textract and a page-image pass through a vision model.
+
 ## Layout
 
 ```
