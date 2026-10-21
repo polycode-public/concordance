@@ -2,7 +2,9 @@
 // Copyright 2026 Polycode Limited
 //
 // One Map item of the ingest state machine: one manifest row of one corpus, from the original
-// PDF in the corpus bucket to its chunks in the store. A throw fails this item only.
+// PDF in the corpus bucket to its chunks in the store. A throw fails this item only. A run that
+// reaches the margin before the context lines are done returns status "partial" with the lines
+// it stored; the state machine invokes the item again until the status is not "partial".
 
 import { createHash } from "node:crypto";
 import {
@@ -14,6 +16,9 @@ import {
 } from "../core/ingest/run.mjs";
 import { pdfjsTool, pdfToPagesFromBuffer } from "../core/ingest/pdfText.mjs";
 import { corpusObjects } from "./listManifest.mjs";
+
+/** The time kept back from the model calls for the abstract, the embeddings and the write. */
+export const FINISH_MARGIN_MS = 6 * 60_000;
 
 /** The bucket key of a corpus document's original. */
 export const originalKey = (corpus, evidenceId) => `${corpus}/raw/${evidenceId}.pdf`;
@@ -34,7 +39,7 @@ export function createHandler({
   now = Date.now,
   log = console.log,
 }) {
-  return async (event) => {
+  return async (event, context) => {
     const started = now();
     const corpus = event?.corpus;
     corpusInfo(corpus);
@@ -55,21 +60,30 @@ export function createHandler({
       ? parseSources(new TextDecoder().decode(sourcesBytes), sourcesKey)
       : new Map();
 
+    const remaining = context?.getRemainingTimeInMillis?.();
+    const budget = remaining === undefined ? undefined : remaining - FINISH_MARGIN_MS;
+    const signal =
+      budget === undefined
+        ? undefined
+        : budget <= 0
+          ? AbortSignal.abort()
+          : AbortSignal.timeout(budget);
     const pages = await extractPages(bytes);
     const meta = documentMeta(corpus, row, sources.get(row.evidence_id));
     const provider = await providerFor();
     const db = await openDb();
     try {
-      const { status, counts } = await ingestDocument({
+      const { status, counts, contexts } = await ingestDocument({
         pages,
         meta,
         provider,
         db,
         textTool: await textTool(),
+        signal,
         log,
       });
       log(JSON.stringify({ evidenceId: row.evidence_id, status, ms: now() - started }));
-      return { evidenceId: row.evidence_id, status, counts };
+      return { evidenceId: row.evidence_id, status, counts, ...(contexts && { contexts }) };
     } finally {
       await db.close();
     }

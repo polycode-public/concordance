@@ -5,7 +5,8 @@
 // the corpus bucket and maps over its rows one document at a time. Each row is one Lambda run
 // that extracts the PDF text with pdf.js, calls Bedrock and writes to Aurora over the Data API.
 // A second map, after a second budget check, runs assertion extraction over the same rows, one
-// Lambda run a document. A failed document is recorded in the result and the map goes on.
+// Lambda run a document. A failed document is recorded in the result and the map goes on. A
+// document whose context lines outlast one run is invoked again until it finishes.
 // Nothing runs or costs money until an execution starts.
 
 import path from "node:path";
@@ -177,6 +178,7 @@ export class IngestStack extends Stack {
     const ingestDocument = new tasks.LambdaInvoke(this, "IngestDocument", {
       lambdaFunction: ingestDocumentFn,
       payloadResponseOnly: true,
+      resultPath: "$.result",
     });
     ingestDocument.addRetry({
       errors: ["ThrottlingException"],
@@ -193,6 +195,15 @@ export class IngestStack extends Stack {
       },
     });
     ingestDocument.addCatch(recordFailure, { resultPath: "$.error" });
+    // A partial result holds the context lines stored so far; the document is invoked again.
+    const documentResult = sfn.Pass.jsonata(this, "DocumentResult", {
+      outputs: "{% $states.input.result %}",
+    });
+    ingestDocument.next(
+      new sfn.Choice(this, "DocumentComplete")
+        .when(sfn.Condition.stringEquals("$.result.status", "partial"), ingestDocument)
+        .otherwise(documentResult),
+    );
 
     const documents = new sfn.Map(this, "IngestDocuments", {
       itemsPath: "$.items",
