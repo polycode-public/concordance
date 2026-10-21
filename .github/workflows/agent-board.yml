@@ -225,6 +225,13 @@ jobs:
             head -c 4000 /tmp/board.json
             exit 1
           fi
+          # The render starts at its marker line. Any prose the agent prints before it is cut here.
+          marked=$(printf '%s\n' "$result" | awk 'found || /^# Board$/ { found = 1; print }')
+          if [ -n "$marked" ]; then
+            result="$marked"
+          else
+            echo "::warning::no line of the result is exactly # Board; the whole result is kept"
+          fi
           { echo "$result"; } >> "$GITHUB_STEP_SUMMARY"
 
       # THE GUARD. The agent is trusted to decide whether NEXT.md should change; it is not trusted
