@@ -832,6 +832,32 @@ body[data-viewer="open"] .desk {
   display: none;
 }
 
+.viewer-sheet {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.viewer-marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.viewer-mark {
+  position: absolute;
+  background: var(--highlight);
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+}
+
+@media (prefers-color-scheme: dark) {
+  .viewer-mark {
+    mix-blend-mode: normal;
+    opacity: 0.4;
+  }
+}
+
 button.icon {
   min-width: var(--target);
   padding: 0;
@@ -976,6 +1002,50 @@ button.pill {
 
 button.pill:hover {
   background: var(--paper-deep);
+}
+
+.filters {
+  margin: 0 0 var(--unit);
+}
+
+.filters summary {
+  display: inline-block;
+  min-height: var(--target);
+  padding: calc(var(--unit) / 2) var(--unit);
+  cursor: pointer;
+}
+
+.filters-body {
+  display: grid;
+  gap: calc(var(--unit) / 2);
+  max-width: 24rem;
+}
+
+.filters-body select,
+.filters-body input {
+  min-height: var(--target);
+  padding: calc(var(--unit) / 2) var(--unit);
+  background: var(--paper);
+  color: var(--ink);
+  border: var(--rule-width) solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.filters-body select {
+  min-height: 0;
+}
+
+.filters .message {
+  margin: 0;
+  color: var(--red-ink);
+}
+
+.filters .message:empty {
+  display: none;
+}
+
+#filter-chips {
+  margin: var(--unit) 0 0;
 }
 
 .ask form {

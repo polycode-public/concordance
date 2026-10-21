@@ -95,6 +95,27 @@
         </section>
         <div class="ask">
           <ul id="suggestions" class="suggestions" aria-label="Suggested questions" hidden></ul>
+          <details id="filters" class="filters">
+            <summary class="small">Filters</summary>
+            <div class="filters-body">
+              <label for="filter-witnesses" class="small">Witnesses (none chosen: all)</label>
+              <select id="filter-witnesses" multiple size="5"></select>
+              <label for="filter-role" class="small">Role</label>
+              <input
+                id="filter-role"
+                maxlength="200"
+                autocomplete="off"
+                placeholder="role or floor"
+                aria-describedby="filter-role-hint"
+              />
+              <span id="filter-role-hint" class="small soft">role or floor</span>
+              <label for="filter-from" class="small">From (statement date)</label>
+              <input id="filter-from" type="date" />
+              <label for="filter-to" class="small">To (statement date)</label>
+              <input id="filter-to" type="date" />
+            </div>
+            <p id="filter-message" class="message small" role="status"></p>
+          </details>
           <form id="ask">
             <textarea
               id="question"
@@ -108,6 +129,7 @@
               <button type="button" id="cancel" class="quiet" disabled>Cancel</button>
             </div>
           </form>
+          <ul id="filter-chips" class="suggestions" aria-label="Active filters" hidden></ul>
           <p class="keys small">
             Keys: <kbd>]</kbd> next citation, <kbd>[</kbd> previous, <kbd>o</kbd> open the source,
             <kbd>Esc</kbd> close the viewer, <kbd>/</kbd> ask
@@ -130,7 +152,12 @@
           <button type="button" id="viewer-close" class="quiet">Close</button>
         </div>
         <p id="viewer-message" class="viewer-message small" role="status"></p>
-        <div class="viewer-body"><canvas id="viewer-canvas"></canvas></div>
+        <div class="viewer-body">
+          <div class="viewer-sheet">
+            <canvas id="viewer-canvas"></canvas>
+            <div id="viewer-marks" class="viewer-marks" aria-hidden="true"></div>
+          </div>
+        </div>
       </aside>
       <aside class="bundle" aria-label="Evidence bundle">
         <section aria-labelledby="documents-title">
