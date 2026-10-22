@@ -56,7 +56,12 @@ describe.skipIf(!enabled)("the store tools (CONCORDANCE_DB_TESTS=1)", () => {
         log: () => {},
       });
     }
-    real = buildTools({ db, corpus: CORPUS, provider: {} });
+    real = buildTools({
+      db,
+      corpus: CORPUS,
+      provider: compareProvider({ dimensions: 1024 }).provider,
+      question: "What did the witness see in the lobby?",
+    });
     fake = buildTools({ db: toolStore(store), corpus: CORPUS, provider: {} });
   });
   afterAll(async () => {

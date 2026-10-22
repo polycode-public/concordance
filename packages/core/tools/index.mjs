@@ -33,8 +33,10 @@ export const STORE_TOOLS = Object.freeze([
  */
 
 /**
- * The tools bound to one turn's store, corpus and provider.
- * @param {{ db: { query: Function }, corpus: string, provider: object, signal?: AbortSignal }} context
+ * The tools bound to one turn's store, corpus, provider and question.
+ * @param {{ db: { query: Function }, corpus: string, provider: object, signal?: AbortSignal,
+ *   question?: string }} context
+ *   witness_claims ranks by the question and throws without one.
  * @returns {StoreTool[]}
  */
 export function buildTools(context) {

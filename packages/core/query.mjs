@@ -219,6 +219,7 @@ export async function runQuery({
   const rewrite = await rewriteQueries({ question, history, provider, signal });
   signal?.throwIfAborted();
   endStage("rewriting");
+  const rankQuestion = rewrite.rewrites.length ? rewrite.rewrites.join("\n") : question;
   onStage?.("retrieving");
   const {
     fused,
@@ -227,7 +228,7 @@ export async function runQuery({
   } = await retrieveEvidence({
     question,
     queries: rewrite.queries,
-    rerankQuestion: rewrite.rewrites.length ? rewrite.rewrites.join("\n") : question,
+    rerankQuestion: rankQuestion,
     filters,
     corpus,
     provider,
@@ -248,7 +249,7 @@ export async function runQuery({
     onToken?.(answer);
   } else {
     const tools = chatTools(
-      buildTools({ db, corpus, provider, signal }),
+      buildTools({ db, corpus, provider, signal, question: rankQuestion }),
       registry,
       ({ name, rows, added }) => {
         onStage?.("tool", { name, rows });
