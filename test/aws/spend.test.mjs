@@ -128,6 +128,8 @@ describe("spend history route", () => {
         requests: 1,
         input_tokens: 1_000_000,
         output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
       },
       {
         corpus: "ucpi",
@@ -137,6 +139,8 @@ describe("spend history route", () => {
         requests: 1,
         input_tokens: 0,
         output_tokens: 1_000_000,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
       },
     ]);
     const res = await get(handler, "2");
@@ -144,10 +148,12 @@ describe("spend history route", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
     const body = JSON.parse(res.body);
     expect(body.days).toEqual(["2026-10-18", "2026-10-19"]);
-    expect(body.series.map((s) => [s.corpus, s.points.map((p) => p.cost)])).toEqual([
-      ["grenfell", [0, 3]],
-      ["ucpi", [15, 0]],
-    ]);
+    expect(body.series.map((s) => s.corpus)).toEqual(["grenfell", "ucpi"]);
+    const [grenfell, ucpi] = body.series.map((s) => s.points.map((p) => p.cost));
+    expect(grenfell[0]).toBe(0);
+    expect(grenfell[1]).toBeCloseTo(3 * 1.1, 10);
+    expect(ucpi[0]).toBeCloseTo(15 * 1.1, 10);
+    expect(ucpi[1]).toBe(0);
     expect(db.calls[0].params).toEqual([2]);
     expect(db.closed).toBe(1);
     expect(calls).toEqual([]);

@@ -913,6 +913,8 @@ describe("the spend history on the laptop", () => {
               requests: 1,
               input_tokens: 1_000_000,
               output_tokens: 0,
+              cache_read_tokens: 0,
+              cache_write_tokens: 0,
             },
           ],
         };
@@ -926,15 +928,23 @@ describe("the spend history on the laptop", () => {
     const base = `http://127.0.0.1:${app.port}/spend/history`;
     const body = await (await fetch(`${base}?days=2`)).json();
     expect(body.days).toEqual(["2026-10-19", "2026-10-20"]);
-    expect(body.series).toEqual([
-      {
-        corpus: "ucpi",
-        points: [
-          { day: "2026-10-19", cost: 0, inputTokens: 0, outputTokens: 0, requests: 0 },
-          { day: "2026-10-20", cost: 1, inputTokens: 1_000_000, outputTokens: 0, requests: 1 },
-        ],
-      },
-    ]);
+    expect(body.series).toHaveLength(1);
+    const [ucpi] = body.series;
+    expect(ucpi.corpus).toBe("ucpi");
+    expect(ucpi.points[0]).toEqual({
+      day: "2026-10-19",
+      cost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+    });
+    expect(ucpi.points[1]).toMatchObject({
+      day: "2026-10-20",
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      requests: 1,
+    });
+    expect(ucpi.points[1].cost).toBeCloseTo(1.1, 10);
     expect((await fetch(`${base}?days=0`)).status).toBe(400);
   });
 

@@ -31,6 +31,8 @@ export const usageSummary = {
       .map((r) => {
         const inputTokens = Number(r.input_tokens);
         const outputTokens = Number(r.output_tokens);
+        const cacheReadTokens = Number(r.cache_read_tokens);
+        const cacheWriteTokens = Number(r.cache_write_tokens);
         return {
           day: r.day,
           model: r.model ?? null,
@@ -38,7 +40,15 @@ export const usageSummary = {
           requests: Number(r.requests),
           inputTokens,
           outputTokens,
-          cost: costOf({ model: r.model, inputTokens, outputTokens }),
+          cacheReadTokens,
+          cacheWriteTokens,
+          cost: costOf({
+            model: r.model,
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+          }),
         };
       });
     return {

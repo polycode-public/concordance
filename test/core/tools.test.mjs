@@ -398,6 +398,8 @@ describe("usage_summary", () => {
               requests: "2",
               input_tokens: "1000000",
               output_tokens: "0",
+              cache_read_tokens: "1000000",
+              cache_write_tokens: "0",
             },
             {
               corpus: "ucpi",
@@ -431,7 +433,8 @@ describe("usage_summary", () => {
       ["2026-10-20", "report", 1, true],
       ["2026-10-19", "turn", 2, false],
     ]);
-    expect(result.rows[1].cost).toBeGreaterThan(0);
+    expect(result.rows[1]).toMatchObject({ cacheReadTokens: 1_000_000, cacheWriteTokens: 0 });
+    expect(result.rows[1].cost).toBeCloseTo(0.3 * 1.1, 10);
     await expect(usage.run({ days: 0 })).rejects.toThrow(/days/);
   });
 });

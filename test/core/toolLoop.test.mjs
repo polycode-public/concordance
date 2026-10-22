@@ -104,7 +104,7 @@ describe("the bedrock tool loop", () => {
     expect(result).toMatchObject({
       text: "Two [E3].",
       promptVersion: "v",
-      usage: { inputTokens: 30, outputTokens: 5 },
+      usage: { inputTokens: 30, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
       toolCalls: [{ name: "count_assertions", input: { groupBy: "witness" }, rows: 1 }],
     });
     expect(result.toolCalls[0].ms).toBeGreaterThanOrEqual(0);
@@ -219,7 +219,7 @@ describe("the bedrock tool loop", () => {
       text: "Hi.",
       model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
       promptVersion: "v",
-      usage: { inputTokens: 20, outputTokens: 3 },
+      usage: { inputTokens: 20, outputTokens: 3, cacheReadTokens: 0, cacheWriteTokens: 0 },
     });
   });
 });
@@ -354,5 +354,20 @@ describe("addUsage", () => {
     expect(
       addUsage({ inputTokens: 1, outputTokens: 2 }, { inputTokens: 3, outputTokens: 4 }),
     ).toEqual({ inputTokens: 4, outputTokens: 6 });
+  });
+
+  it("sums the cache tokens when either record has them", () => {
+    expect(
+      addUsage(
+        { inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 8 },
+        { inputTokens: 10, outputTokens: 1, cacheReadTokens: 8, cacheWriteTokens: 0 },
+      ),
+    ).toEqual({ inputTokens: 20, outputTokens: 2, cacheReadTokens: 8, cacheWriteTokens: 8 });
+    expect(
+      addUsage(
+        { inputTokens: 1, outputTokens: 1 },
+        { inputTokens: 1, outputTokens: 1, cacheReadTokens: 1 },
+      ),
+    ).toEqual({ inputTokens: 2, outputTokens: 2, cacheReadTokens: 1 });
   });
 });

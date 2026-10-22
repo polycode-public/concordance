@@ -204,13 +204,18 @@ function checkSection(raw, blocks) {
 
 const flaggedOf = (paragraphs) => paragraphs.flat().filter((m) => !m.supported && !m.abstains);
 
-const sumUsage = (a, b) =>
-  b
-    ? {
-        inputTokens: (a?.inputTokens ?? 0) + (b.inputTokens ?? 0),
-        outputTokens: (a?.outputTokens ?? 0) + (b.outputTokens ?? 0),
-      }
-    : a;
+const sumUsage = (a, b) => {
+  if (!b) return a;
+  const sum = {
+    inputTokens: (a?.inputTokens ?? 0) + (b.inputTokens ?? 0),
+    outputTokens: (a?.outputTokens ?? 0) + (b.outputTokens ?? 0),
+  };
+  for (const field of ["cacheReadTokens", "cacheWriteTokens"]) {
+    if (a && field in a) sum[field] = a[field];
+    if (field in b) sum[field] = (sum[field] ?? 0) + b[field];
+  }
+  return sum;
+};
 
 /**
  * Runs the cycle and returns the report to store.

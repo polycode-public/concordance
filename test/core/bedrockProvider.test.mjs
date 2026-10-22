@@ -111,7 +111,93 @@ describe("bedrock provider", () => {
     const client = fakeClient({ ConverseStreamCommand: () => ({ stream: withMetadata() }) });
     const p = createBedrockProvider({}, { sdk, client });
     const result = await p.chat({ messages: [{ role: "user", content: "hi" }] });
-    expect(result.usage).toEqual({ inputTokens: 1204, outputTokens: 310 });
+    expect(result.usage).toEqual({
+      inputTokens: 1204,
+      outputTokens: 310,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  describe("prompt caching", () => {
+    const longSystem = "Answer from the evidence. ".repeat(200);
+    const tool = {
+      name: "count",
+      description: "Counts rows. ".repeat(500),
+      inputSchema: { type: "object", properties: {} },
+      run: async () => ({ content: "0", rows: 0 }),
+    };
+    const turn = (client, extra = {}, env = {}) =>
+      createBedrockProvider(env, { sdk, client }).chat({
+        messages: [
+          { role: "system", content: longSystem },
+          { role: "user", content: "[E1] evidence\n\nQuestion: who?" },
+        ],
+        ...extra,
+      });
+    const streamClient = () =>
+      fakeClient({ ConverseStreamCommand: () => ({ stream: deltas(["Hi"]) }) });
+
+    it("puts one cache point after the system text and before the evidence", async () => {
+      const client = streamClient();
+      await turn(client, { tools: [tool] });
+      const { system, messages } = client.calls[0].input;
+      expect(system).toEqual([{ text: longSystem }, { cachePoint: { type: "default" } }]);
+      expect(JSON.stringify(messages)).not.toContain("cachePoint");
+    });
+
+    it("counts the tool definitions toward the cache minimum", async () => {
+      const short = "Answer from the evidence.";
+      const client = streamClient();
+      const p = createBedrockProvider({}, { sdk, client });
+      const messages = [
+        { role: "system", content: short },
+        { role: "user", content: "q" },
+      ];
+      await p.chat({ messages });
+      await p.chat({ messages, tools: [tool] });
+      expect(client.calls[0].input.system).toEqual([{ text: short }]);
+      expect(client.calls[1].input.system).toEqual([
+        { text: short },
+        { cachePoint: { type: "default" } },
+      ]);
+    });
+
+    it("sets no cache point under the model's minimum", async () => {
+      const client = streamClient();
+      await turn(client, {}, { BEDROCK_CHAT_MODEL: "eu.anthropic.claude-haiku-4-5-20251001-v1:0" });
+      expect(client.calls[0].input.system).toEqual([{ text: longSystem }]);
+    });
+
+    it("sets no cache point for a model with no known minimum", async () => {
+      const client = streamClient();
+      await turn(client, {}, { BEDROCK_CHAT_MODEL: "eu.amazon.nova-pro-v1:0" });
+      expect(client.calls[0].input.system).toEqual([{ text: longSystem }]);
+    });
+
+    it("reports the cache tokens inside inputTokens and beside it", async () => {
+      async function* withCache() {
+        yield { contentBlockDelta: { delta: { text: "Hi" } } };
+        yield {
+          metadata: {
+            usage: {
+              inputTokens: 50,
+              outputTokens: 10,
+              cacheReadInputTokens: 2000,
+              cacheWriteInputTokens: 300,
+            },
+          },
+        };
+      }
+      const client = fakeClient({ ConverseStreamCommand: () => ({ stream: withCache() }) });
+      const result = await turn(client);
+      expect(result.usage).toEqual({
+        inputTokens: 2350,
+        outputTokens: 10,
+        cacheReadTokens: 2000,
+        cacheWriteTokens: 300,
+      });
+    });
   });
 
   it("rejects with AbortError when the signal aborts mid-stream", async () => {

@@ -44,10 +44,14 @@ export async function runToolCall(tools, name, input) {
 export function addUsage(total, usage) {
   if (!usage) return total;
   if (!total) return { ...usage };
-  return {
+  const sum = {
     inputTokens: total.inputTokens + usage.inputTokens,
     outputTokens: total.outputTokens + usage.outputTokens,
   };
+  for (const field of ["cacheReadTokens", "cacheWriteTokens"]) {
+    if (field in total || field in usage) sum[field] = (total[field] ?? 0) + (usage[field] ?? 0);
+  }
+  return sum;
 }
 
 /**

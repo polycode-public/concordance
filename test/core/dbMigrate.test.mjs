@@ -200,6 +200,21 @@ describe("splitStatements", () => {
       expect(usage).toContain(part);
   });
 
+  it("splits 0014_usage_cache_tokens.sql into the one view with the cache sums", async () => {
+    const sql = await readFile(path.join(MIGRATIONS_DIR, "0014_usage_cache_tokens.sql"), "utf8");
+    const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
+    expect(statements).toHaveLength(1);
+    const [view] = statements;
+    expect(view).toMatch(/^CREATE OR REPLACE VIEW usage_daily AS/);
+    for (const part of [
+      "sum(u.output_tokens)::bigint AS output_tokens,\n       sum(u.cache_read_tokens)::bigint AS cache_read_tokens,\n       sum(u.cache_write_tokens)::bigint AS cache_write_tokens",
+      "coalesce((t.checks -> 'usage' ->> 'cacheReadTokens')::bigint, 0) AS cache_read_tokens",
+      "coalesce((r.checks -> 'usage' ->> 'cacheWriteTokens')::bigint, 0)",
+      "GROUP BY u.corpus, u.day, u.model, u.source",
+    ])
+      expect(view).toContain(part);
+  });
+
   it("splits 0005_comparisons.sql into the run table, the comparison columns and the indexes", async () => {
     const sql = await readFile(path.join(MIGRATIONS_DIR, "0005_comparisons.sql"), "utf8");
     const statements = splitStatements(sql).map((s) => s.replace(/^(\s*--[^\n]*\n)*\s*/, ""));
