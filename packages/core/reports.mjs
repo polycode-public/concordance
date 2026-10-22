@@ -4,6 +4,7 @@
 // Generated reports: a longer answer over a topic, built in one request through a draft, write
 // and review cycle, and stored with versions. The model writes [En] tags over the evidence
 // blocks it was given; the server resolves them with checkAnswer, as it does for a turn.
+import { TAG, tagNumbers } from "./checks/citations.mjs";
 import { CorpusError, requireCorpusId } from "./corpora.mjs";
 import { ABSTAIN_PHRASE } from "./prompt.mjs";
 import { isReportFilename } from "./protocol.mjs";
@@ -70,8 +71,6 @@ export const OUTLINE_SCHEMA = Object.freeze({
   },
 });
 
-const TAG = /\[E(\d+(?:\s*,\s*E?\d+)*)\]/g;
-
 /** Removes every [En] tag; the previous version's numbers name blocks of an older retrieval. */
 export const stripTags = (text) =>
   text
@@ -88,8 +87,8 @@ export const stripTags = (text) =>
  */
 export function keepKnownTags(text, allowed) {
   let dropped = 0;
-  const out = text.replace(TAG, (_, inner) => {
-    const numbers = inner.split(",").map((part) => Number(part.replace(/\D/g, "")));
+  const out = text.replace(TAG, (...match) => {
+    const numbers = tagNumbers(match);
     const known = numbers.filter((n) => allowed.has(n));
     dropped += numbers.length - known.length;
     return known.map((n) => `[E${n}]`).join("");

@@ -106,6 +106,14 @@ describe("verifyQuote", () => {
 });
 
 describe("joined citation tags", () => {
+  it("reads a range tag as every number in it, and supports the sentence", () => {
+    expect(citationTags("All of them [E13-E16].")).toEqual([13, 14, 15, 16]);
+    expect(citationTags("Grouped [E13-E15, E44].")).toEqual([13, 14, 15, 44]);
+    expect(
+      markUnsupported("The corpus holds 38 statements [E13-E50].").sentences[0].tags,
+    ).toHaveLength(38);
+  });
+
   it("reads [E3, E4] and [E3][E4] as two tags", () => {
     expect(citationTags("Both saw it [E3, E4].")).toEqual([3, 4]);
     expect(citationTags("Both saw it [E3][E4].")).toEqual([3, 4]);

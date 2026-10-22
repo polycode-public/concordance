@@ -2,8 +2,33 @@
 // Copyright 2026 Polycode Limited
 import { splitSentences } from "../chunking/sentences.mjs";
 
-const TAG = /\[E(\d+(?:\s*,\s*E?\d+)*)\]/g;
-const LEADING = /^((?:\[E\d+(?:\s*,\s*E?\d+)*\]\s*)+)(.*)$/s;
+/**
+ * One bracket of evidence numbers: [E3], [E3, E4], [E3, 4], or a range such as [E13-E30] or
+ * [E13-E30, E44]. The same grammar is in packages/ui/tags.mjs, because the page and the server
+ * must read the same numbers from an answer.
+ */
+const TAG_BODY = String.raw`E\d+(?:\s*[-\u2013]\s*E?\d+)?(?:\s*,\s*E?\d+(?:\s*[-\u2013]\s*E?\d+)?)*`;
+export const TAG = new RegExp(String.raw`\[(${TAG_BODY})\]`, "g");
+const LEADING = new RegExp(String.raw`^((?:\[${TAG_BODY}\]\s*)+)(.*)$`, "s");
+
+/** A range wider than this many numbers reads as its two ends. */
+export const MAX_RANGE = 100;
+
+/**
+ * The evidence numbers in one TAG match, in order.
+ * @param {RegExpMatchArray} match
+ * @returns {number[]}
+ */
+export function tagNumbers(match) {
+  return match[1].split(",").flatMap((part) => {
+    const [from, to] = part.match(/\d+/g).map(Number);
+    if (to === undefined) return [from];
+    const low = Math.min(from, to);
+    const high = Math.max(from, to);
+    if (high - low >= MAX_RANGE) return [from, to];
+    return Array.from({ length: high - low + 1 }, (_, i) => low + i);
+  });
+}
 
 const BULLET = /^(?:[-*\u2022]|\d+[.)])\s+/;
 
@@ -40,10 +65,7 @@ export function splitAnswerSentences(text) {
 export function citationTags(sentence) {
   const tags = [];
   for (const match of sentence.matchAll(TAG)) {
-    for (const part of match[1].split(",")) {
-      const n = Number(part.replace(/\D/g, ""));
-      if (!tags.includes(n)) tags.push(n);
-    }
+    for (const n of tagNumbers(match)) if (!tags.includes(n)) tags.push(n);
   }
   return tags;
 }
