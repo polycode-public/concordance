@@ -25,6 +25,11 @@ const UCPI_DOCUMENT_ID = /^(UCPI|MPS)/;
 const GRENFELL_DOCUMENT_ID = /^(IWS|MET)/;
 const OFF_CORPUS = "What is the capital of France?";
 
+const WARM_UP_QUESTION = "What did Behailu Kebede do when the smoke alarm in his kitchen woke him?";
+const MEASURED_QUESTION =
+  "What did Behailu Kebede tell the fire brigade operator in his 999 call, and where did he say the fire was?";
+const FIRST_TOKEN_LIMIT_MS = 2_000;
+
 const REPORT_FILENAME = "first-awareness.md";
 const REPORT_DOCUMENTS = ["IWS00000913", "IWS00000990"];
 const REPORT_EDIT = `Add a short section on the 999 calls to ${REPORT_FILENAME}`;
@@ -36,6 +41,29 @@ test.skip(
 );
 
 const report = [];
+
+// Chat frames are read from the socket, so the page needs no timing hook. A turn's clock runs from
+// its first status frame to its first token frame.
+function watchTurns(page) {
+  const turns = new Map();
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      const at = performance.now();
+      let frame;
+      try {
+        frame = JSON.parse(String(payload));
+      } catch {
+        return;
+      }
+      if (!frame.turnId) return;
+      const turn = turns.get(frame.turnId) ?? {};
+      if (frame.type === "status") turn.status ??= at;
+      if (frame.type === "token") turn.token ??= at;
+      turns.set(frame.turnId, turn);
+    });
+  });
+  return () => [...turns.values()].filter((turn) => turn.status !== undefined).at(-1);
+}
 
 function emit(markdown) {
   console.log(markdown);
@@ -126,12 +154,28 @@ async function deleteReport(page) {
 
 test("signs in, clicks every pill and asks one off-corpus question", async ({ page }) => {
   test.setTimeout(20 * 60_000);
+  const lastTurn = watchTurns(page);
   await page.goto(`${SITE_URL}/`);
   await signIn(page);
   await expect(page.locator("#question")).toBeVisible();
   await expect(page.locator("#suggestions button.pill").first()).toBeVisible({ timeout: 30_000 });
 
   emit("## concordance deployed page\n");
+
+  // The first query resumes a paused database, so one turn runs first and is not measured.
+  await ask(page, () => typeQuestion(page, WARM_UP_QUESTION), WARM_UP_QUESTION);
+  await newConversation(page);
+  await ask(page, () => typeQuestion(page, MEASURED_QUESTION), MEASURED_QUESTION);
+  const measured = lastTurn();
+  expect(measured?.token, "the measured turn streamed a token").toBeDefined();
+  const firstTokenMs = Math.round(measured.token - measured.status);
+  emit(`first token ${firstTokenMs} ms\n`);
+  // Retrieval latency spreads widely between turns, so one slow turn warns and does not fail
+  // the deploy; the figure is read from the log.
+  if (firstTokenMs > FIRST_TOKEN_LIMIT_MS)
+    console.log(`::warning::first token ${firstTokenMs} ms, above ${FIRST_TOKEN_LIMIT_MS} ms`);
+  await newConversation(page);
+
   let firstChip = null;
   let started = false;
 
