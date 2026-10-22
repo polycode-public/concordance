@@ -27,8 +27,6 @@ The board runs in five sections, in this order. The section is the classificatio
 
 ## Human-driven
 
-- [ ] **O6. Record the demo and run the dry run.** On the deployed page (`https://concordance.polycode.co.uk`), follow `docs/DEMO.md`; the deck is https://claude.ai/artifact/H3yaRrvpB3wUhSEdbunhjZ end to end: record the screen as the fallback for a live demo, then run the demo once as it will be given. Where it lands: the recording's location and the dry run's notes in this row. **Size** 0 files. **Model** operator.
-
 ## Blocked
 
 - [ ] **A15. Activate `concordance` as a cost allocation tag.** The operator's word (2026-10-22): `concordance` is to be an active cost allocation tag. `aws --profile polycode-management ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=concordance,Status=Active` refused it ("Tag keys not found: concordance") because no resource carried the key; PR #76 tags every resource with `concordance=sandbox`. Remainder: after PR #76 deploys, check for the key with `aws --profile polycode-management ce list-cost-allocation-tags --tag-keys concordance` (the key appears within about a day of the first tagged usage), then run the activation command above and read the status back. Blocked on the key reaching the billing data. **Size** 0 files. **Model** Haiku.
