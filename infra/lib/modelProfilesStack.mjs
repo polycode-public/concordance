@@ -32,7 +32,10 @@ export class ModelProfilesStack extends Stack {
         inferenceProfileName: `${project}-${envName}-${kind}`,
         description: `${project} ${envName} ${kind} model tagged for cost allocation`,
         modelSource: { copyFrom },
-        tags: [{ key: "project", value: project }],
+        tags: [
+          { key: "project", value: project },
+          { key: project, value: envName },
+        ],
       });
       new CfnOutput(this, `${logicalId}Arn`, { value: resource.attrInferenceProfileArn });
       return { arn: resource.attrInferenceProfileArn, modelId };
