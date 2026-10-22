@@ -47,7 +47,7 @@ describe("GuardrailsStack", () => {
 
   it("gives both budgets the same limit and the same email subscriber at 80 and 100 percent", () => {
     for (const b of budgets) {
-      expect(b.Budget.BudgetLimit).toEqual({ Amount: 100, Unit: "USD" });
+      expect(b.Budget.BudgetLimit).toEqual({ Amount: 175, Unit: "USD" });
       expect(
         b.NotificationsWithSubscribers.map((n) => [
           n.Notification.Threshold,
