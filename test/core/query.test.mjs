@@ -20,6 +20,7 @@ import {
   halfvecLiteral,
   namedWitnessScope,
   namedWitnesses,
+  residentFlats,
   quotedPhrases,
   retrieve,
 } from "../../packages/core/retrieval/hybrid.mjs";
@@ -640,6 +641,49 @@ describe("witness names and quoted phrases", () => {
     expect(namedWitnesses("flat 999 and flatmates 131", people).witnessIds).toEqual([]);
   });
 
+  it("reads the flats of a resident's role and none of another role that names a flat", () => {
+    expect(residentFlats("resident, floor 16, flat 133, floor 16")).toEqual(["133"]);
+    expect(residentFlats("Resident of Flat 136")).toEqual(["136"]);
+    expect(residentFlats("London Fire Brigade, firefighter; Flat 133")).toEqual([]);
+    expect(
+      residentFlats(
+        "London Fire Brigade, control room officer; took Sener Macit's call from Flat 133, floor 16",
+      ),
+    ).toEqual([]);
+    expect(residentFlats("relative of the Flat 175 household, floor 20, floor 20")).toEqual([]);
+    expect(residentFlats(null)).toEqual([]);
+  });
+
+  it("names the residents of a flat and not a firefighter whose role names it", () => {
+    const people = [
+      {
+        id: "IWS1",
+        names: ["IWS1", "Sener Macit"],
+        role: "resident, floor 16, flat 133, floor 16",
+      },
+      {
+        id: "MET1",
+        names: ["MET1", "Dean Nelson"],
+        role: "London Fire Brigade, firefighter; Flat 133",
+      },
+      {
+        id: "MET2",
+        names: ["MET2", "Aldo Diana"],
+        role: "London Fire Brigade, crew manager; Flat 133",
+      },
+    ];
+    expect(namedWitnesses("Why did Crew Manager Diana's crew not reach Flat 133?", people)).toEqual(
+      {
+        rest: "why did crew manager s crew not reach flat 133",
+        nameGroups: [
+          ["MET2", "Aldo Diana"],
+          ["IWS1", "Sener Macit"],
+        ],
+        witnessIds: ["MET2", "IWS1"],
+      },
+    );
+  });
+
   it("reads straight and curly quoted phrases", () => {
     expect(quotedPhrases('the "fire door" and \u201cstay put\u201d policy, ""')).toEqual([
       "fire door",
@@ -674,12 +718,23 @@ describe("witness names and quoted phrases", () => {
     expect(Object.keys(rankings[0])).toEqual([
       "lexicalPassage",
       "lexicalSection",
+      "namedLexicalPassage",
+      "namedLexicalSection",
       "phrasePassage",
       "phraseSection",
       "vectorPassage",
       "vectorSection",
       "namedPassage",
       "namedSection",
+    ]);
+    const corpusWide = calls.filter(
+      (c) => /websearch_to_tsquery/.test(c.text) && !/plainto_tsquery/.test(c.text),
+    );
+    expect(corpusWide).toHaveLength(2);
+    expect(corpusWide[0].text).toContain("(SELECT websearch_to_tsquery('english', $2) AS q)");
+    expect(corpusWide[0].params.slice(0, 2)).toEqual([
+      "grenfell",
+      "did or ada or lovelace or see or the or fire or door",
     ]);
     const lexical = calls.filter((c) => /plainto_tsquery/.test(c.text));
     expect(lexical).toHaveLength(2);
@@ -744,16 +799,24 @@ describe("named witness scope", () => {
       expect(text).toMatch(/ORDER BY embedding <=> \$\d+::halfvec\n/);
     }
     for (const { text } of lexical) expect(text).not.toContain("d.witness_id");
-    for (const r of result.rankings) {
-      expect(Object.keys(r)).toEqual([
-        "lexicalPassage",
-        "lexicalSection",
-        "vectorPassage",
-        "vectorSection",
-        "namedPassage",
-        "namedSection",
-      ]);
-    }
+    expect(Object.keys(result.rankings[0])).toEqual([
+      "lexicalPassage",
+      "lexicalSection",
+      "namedLexicalPassage",
+      "namedLexicalSection",
+      "vectorPassage",
+      "vectorSection",
+      "namedPassage",
+      "namedSection",
+    ]);
+    expect(Object.keys(result.rankings[1])).toEqual([
+      "lexicalPassage",
+      "lexicalSection",
+      "vectorPassage",
+      "vectorSection",
+      "namedPassage",
+      "namedSection",
+    ]);
   });
 
   it("leaves the rankings of a query that names no witness as they are", async () => {
@@ -821,11 +884,39 @@ describe("named witness scope", () => {
     );
     expect(scoped).toHaveLength(2);
     for (const { params } of scoped) expect(params).toContainEqual(["IWS9"]);
-    const lexical = calls.filter((c) => /websearch_to_tsquery/.test(c.text));
+    const lexical = calls.filter((c) => /plainto_tsquery/.test(c.text));
+    expect(lexical).toHaveLength(2);
     for (const { params } of lexical) {
       expect(params).toContain("IWS9");
       expect(params).not.toContain("C1");
     }
+  });
+
+  it("fuses a lexical match that never names the named witness", async () => {
+    const db = {
+      query: async (text) => {
+        if (/FROM witnesses/.test(text)) return { rows: witnessRows };
+        if (/websearch_to_tsquery/.test(text) && !/plainto_tsquery/.test(text)) {
+          return { rows: [{ id: 7 }] };
+        }
+        return { rows: [] };
+      },
+    };
+    const provider = {
+      name: "p",
+      embedModel: "m",
+      embedDim: 1024,
+      embed: async (texts) => texts.map(() => new Array(1024).fill(0.5)),
+    };
+    const { fused, rankings } = await retrieve({
+      queries: ["What did Ada Lovelace see?"],
+      corpus: "grenfell",
+      provider,
+      db,
+    });
+    expect(rankings[0].lexicalPassage).toEqual(["7"]);
+    expect(rankings[0].namedLexicalPassage).toEqual([]);
+    expect(fused.map(({ id }) => id)).toEqual(["7"]);
   });
 
   it("keeps the other filters and the scope when it names witnesses", () => {

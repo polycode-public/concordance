@@ -212,11 +212,22 @@ const flatNumbers = (textWords) =>
   );
 
 /**
+ * The flats where the holder of a role lives: the flats a role names when it starts with the word
+ * "resident". A firefighter's or a relative's role can name a flat that is not theirs.
+ * @param {string | null | undefined} role
+ * @returns {string[]}
+ */
+export function residentFlats(role) {
+  const roleWords = role ? words(role) : [];
+  return roleWords[0] === "resident" ? flatNumbers(roleWords) : [];
+}
+
+/**
  * Finds the witnesses a query names by id, by any alias, by the surname of an alias or by the
  * first and last words of an alias, compared word by word without case. The longest name is
  * matched first, a full name before a part of a name of the same length, and each word of the
  * query is part of at most one name; a name that several witnesses share names them all. When
- * the query names "flat <number>", the witnesses whose role names that flat are named too, as
+ * the query names "flat <number>", the residents of that flat by their role are named too, as
  * one group; the flat words stay in the query.
  * @param {string} query
  * @param {{ id: string, names: string[], role?: string | null }[]} witnesses
@@ -258,7 +269,7 @@ export function namedWitnesses(query, witnesses) {
   const nameGroups = [...matched.values()];
   const witnessIds = [...matched.keys()];
   for (const flat of new Set(flatNumbers(queryWords))) {
-    const residents = witnesses.filter((w) => w.role && flatNumbers(words(w.role)).includes(flat));
+    const residents = witnesses.filter((w) => residentFlats(w.role).includes(flat));
     if (!residents.length) continue;
     nameGroups.push(residents.flatMap((w) => w.names));
     for (const w of residents) if (!witnessIds.includes(w.id)) witnessIds.push(w.id);
@@ -303,27 +314,37 @@ const requireCorpus = (corpus) => {
 };
 
 /**
- * The lexical rankings of one query at both levels: the words with the witness names expanded,
- * and, when the query quotes a phrase, the exact phrases beside them.
+ * The lexical rankings of one query at both levels: the words over the corpus and, when the
+ * query names witnesses, the other words with a name of each named witness beside them, so that
+ * a chunk that names the witness ranks first and a chunk that does not can still rank. When the
+ * query quotes a phrase, the exact phrases are ranked too.
  */
 async function lexicalRankings(db, query, { rest, nameGroups }, scope) {
-  const text = nameGroups.length ? rest : query;
   const phrases = quotedPhrases(query);
-  const [lexicalPassage, lexicalSection, phrasePassage, phraseSection] = await Promise.all([
-    lexicalRanking(db, text, "passage", RANK_LIMITS.passage, scope, nameGroups),
-    lexicalRanking(db, text, "section", RANK_LIMITS.section, scope, nameGroups),
-    ...(phrases.length
-      ? [
-          phraseRanking(db, phrases, "passage", RANK_LIMITS.passage, scope),
-          phraseRanking(db, phrases, "section", RANK_LIMITS.section, scope),
-        ]
-      : []),
-  ]);
-  return {
-    lexicalPassage,
-    lexicalSection,
-    ...(phrases.length ? { phrasePassage, phraseSection } : {}),
-  };
+  const ranked = [
+    ["lexicalPassage", lexicalRanking(db, query, "passage", RANK_LIMITS.passage, scope)],
+    ["lexicalSection", lexicalRanking(db, query, "section", RANK_LIMITS.section, scope)],
+  ];
+  if (nameGroups.length) {
+    ranked.push(
+      [
+        "namedLexicalPassage",
+        lexicalRanking(db, rest, "passage", RANK_LIMITS.passage, scope, nameGroups),
+      ],
+      [
+        "namedLexicalSection",
+        lexicalRanking(db, rest, "section", RANK_LIMITS.section, scope, nameGroups),
+      ],
+    );
+  }
+  if (phrases.length) {
+    ranked.push(
+      ["phrasePassage", phraseRanking(db, phrases, "passage", RANK_LIMITS.passage, scope)],
+      ["phraseSection", phraseRanking(db, phrases, "section", RANK_LIMITS.section, scope)],
+    );
+  }
+  const ids = await Promise.all(ranked.map(([, ranking]) => ranking));
+  return Object.fromEntries(ranked.map(([key], i) => [key, ids[i]]));
 }
 
 /**
@@ -346,8 +367,9 @@ export function namedWitnessScope(scope, witnessIds) {
  * every query by reciprocal rank. A non-empty `documentIds` limits every ranking to those
  * documents, and `filters` to the documents that pass them. When any query names a witness,
  * each query adds vector rankings that read only the documents of the named witnesses beside
- * its vector rankings over the corpus, so that their passages rank first and no document is
- * kept out.
+ * its vector rankings over the corpus, and a query that names a witness adds a lexical ranking
+ * that needs a name of the witness beside its lexical ranking over the corpus, so that their
+ * passages rank first and no document is kept out.
  * @param {{ queries: string[], corpus: string, provider: object, db: { query: Function },
  *   signal?: AbortSignal, documentIds?: string[] | null, filters?: RetrievalFilters | null }} args
  * @returns {Promise<{ fused: { id: string, score: number }[], rankings: Record<string, string[]>[] }>}
