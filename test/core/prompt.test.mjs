@@ -16,8 +16,14 @@ describe("the closed-world prompt", () => {
     expect(SYSTEM_PROMPT.toLowerCase()).toContain(ABSTAIN_PHRASE);
   });
 
+  it("keeps the answer to the question and each citation to the block that states it", () => {
+    expect(SYSTEM_PROMPT).toMatch(/Answer only what the question asks/);
+    expect(SYSTEM_PROMPT).toMatch(/never cite a block for its context/);
+    expect(SYSTEM_PROMPT).toMatch(/the figure of the thing the question names/);
+  });
+
   it("carries its version and the evidence under the question", () => {
-    expect(PROMPT_VERSION).toBe("answer-closed-world-v4");
+    expect(PROMPT_VERSION).toBe("answer-closed-world-v5");
     const [system, user] = answerMessages("Who called 999?", [
       { header: "[h]", text: "I called 999." },
     ]);
