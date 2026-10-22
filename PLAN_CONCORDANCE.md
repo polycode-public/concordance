@@ -17,7 +17,7 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 - "Please create a task to give this a domain name. I think concordance.polycode.co.uk" (2026-10-20; row A6)
 
 - "add a task for keyed-by-corpus … including the drop list and we'll have the 2 data sets as grenfel and undercover policing and include in that task splitting the budget allocation per corpus for tracking with a click through the billing banner to see this split in a historic graph but still having a shared application cap." (2026-10-20; row C6)
-- "Drop A14, A13" (2026-10-22: the failed-ingest diagnosis and the shorter extraction output); "Drop A12" (2026-10-22: the model calls stay on the `eu.` profiles)
+- "Drop A14, A13" (2026-10-22: the failed-ingest diagnosis and the shorter extraction output); "Drop A12" (2026-10-22: the model calls stay on the `eu.` profiles); "Drop F13" (2026-10-22: Phase 7 ends with `docs/DEMO.md`, the deck and the first-token measure at 3,968 ms)
 - "Drop O5 and A11" (2026-10-22: the AWS Support case for Bedrock batch inference and the batch proof job; the batch code stays on `main`, and a corpus run extracts on demand unless its input asks for batch)
 - "Mark F7 as done, we have spent enough time and money on this. \"0.620 to 0.640\" is good enough it's all made up numbers with no real goal and drop F8 too." (2026-10-22; Phase 3 closed, Phase 4 dropped)
 - "And also add a task to the board to do an AWS cost analysis, separate costs by: ingest, usage, styanding charges. Advise where we could reduce future costs and create tasks for these each held as machine-ask." (2026-10-21, evening; rows A7, A9 to A14)
@@ -150,8 +150,7 @@ export and live SPARQL from a Lambda) is dropped (the operator's word, 2026-10-2
 
 ### Phase 7: demo and polish (F13)
 
-First token under 2 seconds on the deployed page, the demo script (`docs/DEMO.md`) and the slides
-(F13). The screen recording and the dry run are dropped (the operator's word, 2026-10-22).
+Closed on the operator's word (2026-10-22): `docs/DEMO.md`, the deck, and the deployed smoke's first-token measure (3,968 ms; the 2-second target is dropped).
 
 ### Phase R: generated reports (R1)
 
