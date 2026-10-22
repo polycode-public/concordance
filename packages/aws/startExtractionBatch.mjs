@@ -2,10 +2,9 @@
 // Copyright 2026 Polycode Limited
 //
 // The extraction pass of the ingest state machine, first state: the windows the run's documents
-// still need, then the mode. A run of BATCH_MIN_RECORDS records or more, or one that asks for
-// "batch", writes one JSONL file a document under the corpus bucket's batch prefix and starts a
-// Bedrock batch inference job over them; a smaller run, or one that asks for "on-demand", returns
-// mode "on-demand" and the state machine maps the on-demand extraction over the rows. The job
+// still need, then the mode. A run that asks for "batch" writes one JSONL file a document under
+// the corpus bucket's batch prefix and starts a Bedrock batch inference job over them; any other
+// run returns mode "on-demand" and the state machine maps the on-demand extraction over the rows. The job
 // reads the stored chunk text through its records; the evidence is not read or written here.
 
 import { corpusInfo } from "../core/ingest/run.mjs";
@@ -28,6 +27,7 @@ const requireValue = (value, name) => {
  * @param {{ providerFor: () => Promise<object> | object, openDb: () => Promise<object> | object,
  *   putObject: (key: string, body: string) => Promise<void>,
  *   createJob: (input: object) => Promise<{ jobArn: string }>, bucket: string, roleArn: string,
+ *   extractProfileArn: string,
  *   now?: () => number, log?: (line: string) => void }} deps
  */
 export function createHandler({
@@ -37,6 +37,7 @@ export function createHandler({
   createJob,
   bucket,
   roleArn,
+  extractProfileArn,
   now = Date.now,
   log = console.log,
 }) {
@@ -79,6 +80,7 @@ export function createHandler({
       log(JSON.stringify(summary));
       return { mode, records: plan.records, failures: plan.failures };
     }
+    requireValue(extractProfileArn, "BEDROCK_EXTRACT_PROFILE_ARN");
     const jobName = batchJobName(corpus, now());
     const prefix = `${BATCH_PREFIX}/${corpus}/${jobName}`;
     for (const document of plan.documents) {
@@ -92,8 +94,9 @@ export function createHandler({
       jobName,
       clientRequestToken: jobName,
       roleArn: requireValue(roleArn, "the batch service role"),
-      modelId: extractModel,
+      modelId: extractProfileArn,
       modelInvocationType: "Converse",
+      tags: [{ key: "project", value: "concordance" }],
       timeoutDurationInHours: BATCH_TIMEOUT_HOURS,
       inputDataConfig: {
         s3InputDataConfig: {
@@ -148,4 +151,5 @@ export const handler = createHandler({
   },
   bucket: process.env.CORPUS_BUCKET,
   roleArn: process.env.BATCH_ROLE_ARN,
+  extractProfileArn: process.env.BEDROCK_EXTRACT_PROFILE_ARN,
 });

@@ -146,16 +146,15 @@ export function batchReplies(records, { documentId, model }) {
 }
 
 /**
- * The extraction mode of a run. "on-demand" and "batch" are taken as asked; with neither, a run
- * of at least BATCH_MIN_RECORDS records is a batch. A batch under the minimum or over the
- * maximum throws, because Bedrock refuses the job.
+ * The extraction mode of a run: "batch" only when asked, otherwise "on-demand". A batch under
+ * BATCH_MIN_RECORDS or over BATCH_MAX_RECORDS records throws, because Bedrock refuses the job.
  * @param {{ requested?: string | null, records: number }} args
  */
 export function extractionMode({ requested, records }) {
   if (requested != null && !EXTRACTION_MODES.includes(requested)) {
     throw new Error(`extraction ${JSON.stringify(requested)} is not one of ${EXTRACTION_MODES}`);
   }
-  const mode = requested ?? (records >= BATCH_MIN_RECORDS ? "batch" : "on-demand");
+  const mode = requested ?? "on-demand";
   if (mode === "batch" && records < BATCH_MIN_RECORDS) {
     throw new Error(
       `a batch job needs at least ${BATCH_MIN_RECORDS} records; this run has ${records}`,

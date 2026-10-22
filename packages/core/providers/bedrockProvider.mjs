@@ -138,6 +138,11 @@ export function createBedrockProvider(
   const embedDim = env.BEDROCK_EMBED_DIM ? Number(env.BEDROCK_EMBED_DIM) : 1024;
   const chatModel = env.BEDROCK_CHAT_MODEL || "eu.anthropic.claude-sonnet-4-5-20250929-v1:0";
   const extractModel = env.BEDROCK_EXTRACT_MODEL || "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+  // The model names above are what rows record and what prices are read by. A profile ARN, when
+  // set, is what the calls address, so the usage is tagged on the profile.
+  const embedTarget = env.BEDROCK_EMBED_PROFILE_ARN || embedModel;
+  const chatTarget = env.BEDROCK_CHAT_PROFILE_ARN || chatModel;
+  const extractTarget = env.BEDROCK_EXTRACT_PROFILE_ARN || extractModel;
 
   let ready;
   function connect() {
@@ -209,7 +214,7 @@ export function createBedrockProvider(
 
   async function embedOne(text, { mod, runtime }) {
     const command = new mod.InvokeModelCommand({
-      modelId: embedModel,
+      modelId: embedTarget,
       contentType: "application/json",
       accept: "application/json",
       body: JSON.stringify({ inputText: text, dimensions: embedDim, normalize: true }),
@@ -290,7 +295,7 @@ export function createBedrockProvider(
       let usage = null;
       for (let round = 0; ; round++) {
         const command = new mod.ConverseStreamCommand({
-          modelId: chatModel,
+          modelId: chatTarget,
           ...(system.length ? { system } : {}),
           messages: [...history],
           inferenceConfig: { temperature },
@@ -335,7 +340,7 @@ export function createBedrockProvider(
         ? `Answer with exactly one JSON object matching this schema:\n${JSON.stringify(schema)}`
         : "Answer with exactly one JSON object.";
       const command = new mod.ConverseCommand({
-        modelId: extractModel,
+        modelId: extractTarget,
         messages: [{ role: "user", content: [{ text: `${prompt}\n\n${instruction}` }] }],
         inferenceConfig: { temperature: 0, maxTokens: EXTRACT_MAX_TOKENS },
       });

@@ -157,9 +157,9 @@ describe("batchReplies", () => {
 });
 
 describe("extractionMode", () => {
-  it("runs a batch from the minimum record count, and on demand below it", () => {
-    expect(extractionMode({ records: BATCH_MIN_RECORDS })).toBe("batch");
-    expect(extractionMode({ records: BATCH_MIN_RECORDS - 1 })).toBe("on-demand");
+  it("runs on demand unless a batch is asked for", () => {
+    expect(extractionMode({ records: BATCH_MIN_RECORDS })).toBe("on-demand");
+    expect(extractionMode({ requested: null, records: 5000 })).toBe("on-demand");
     expect(extractionMode({ requested: "on-demand", records: 5000 })).toBe("on-demand");
     expect(extractionMode({ requested: "batch", records: 159 })).toBe("batch");
   });

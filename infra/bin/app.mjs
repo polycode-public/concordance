@@ -18,6 +18,7 @@ import { GuardrailsStack, budgetNamesFor } from "../lib/guardrailsStack.mjs";
 import { StoreStack } from "../lib/storeStack.mjs";
 import { AppStack, DEFAULT_CORPORA } from "../lib/appStack.mjs";
 import { IngestStack } from "../lib/ingestStack.mjs";
+import { ModelProfilesStack } from "../lib/modelProfilesStack.mjs";
 
 export const WORKLOAD_REGION = "eu-west-2";
 export const PROJECT = "concordance";
@@ -44,6 +45,13 @@ const storeStack = new StoreStack(app, stackName("store"), {
   description: `${PROJECT} ${envName}: the Aurora Serverless v2 Postgres store behind the RDS Data API`,
 });
 
+const modelProfilesStack = new ModelProfilesStack(app, stackName("model-profiles"), {
+  env,
+  envName,
+  project: PROJECT,
+  description: `${PROJECT} ${envName}: one tagged Bedrock application inference profile per model`,
+});
+
 const corpora = corporaContext(optionalContext("corpora")) ?? DEFAULT_CORPORA;
 
 const appStack = new AppStack(app, stackName("app"), {
@@ -53,6 +61,7 @@ const appStack = new AppStack(app, stackName("app"), {
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
   budgetNames: budgetNamesFor({ project: PROJECT, envName }),
+  modelProfiles: modelProfilesStack,
   corpora,
   domainName: optionalContext("domainName"),
   certificateArn: optionalContext("certificateArn"),
@@ -67,6 +76,7 @@ const ingestStack = new IngestStack(app, stackName("ingest"), {
   dbSecretArn: storeStack.secret.secretArn,
   dbName: "concordance",
   budgetNames: budgetNamesFor({ project: PROJECT, envName }),
+  modelProfiles: modelProfilesStack,
   description: `${PROJECT} ${envName}: the ingest state machine over a corpus manifest, one Lambda per document`,
 });
 

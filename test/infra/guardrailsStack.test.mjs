@@ -39,9 +39,12 @@ describe("GuardrailsStack", () => {
     });
   });
 
-  it("filters the models budget on the Bedrock services alone", () => {
+  it("filters the models budget on the Bedrock services and the project tag", () => {
     const { Budget } = named("concordance-sandbox-models");
-    expect(Budget.CostFilters).toEqual({ Service: [...MODEL_SERVICES] });
+    expect(Budget.CostFilters).toEqual({
+      Service: [...MODEL_SERVICES],
+      TagKeyValue: ["user:project$concordance"],
+    });
     expect(MODEL_SERVICES).toContain("Amazon Bedrock");
   });
 

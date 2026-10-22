@@ -4,7 +4,8 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { beforeAll, describe, expect, it } from "vitest";
-import { EXTRACT_PROFILE, IngestStack } from "../../infra/lib/ingestStack.mjs";
+import { IngestStack } from "../../infra/lib/ingestStack.mjs";
+import { EXTRACT_MODEL, ModelProfilesStack } from "../../infra/lib/modelProfilesStack.mjs";
 
 const env = { account: "111111111111", region: "eu-west-2" };
 const CLUSTER = "arn:aws:rds:eu-west-2:111111111111:cluster:concordance";
@@ -23,6 +24,11 @@ beforeAll(() => {
     dbSecretArn: SECRET,
     dbName: "concordance",
     budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
+    modelProfiles: new ModelProfilesStack(app, "Profiles", {
+      env,
+      envName: "sandbox",
+      project: "concordance",
+    }),
     corpora: ["grenfell", "ucpi"],
   });
   template = Template.fromStack(stack);
@@ -232,11 +238,34 @@ describe("IngestStack", () => {
       expect.objectContaining({
         Action: "bedrock:InvokeModel",
         Resource: [
-          "arn:aws:bedrock:*::foundation-model/*",
-          "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/*",
+          { "Fn::ImportValue": expect.stringContaining("ChatProfileInferenceProfileArn") },
+          "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+          { "Fn::ImportValue": expect.stringContaining("ExtractProfileInferenceProfileArn") },
+          "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+          { "Fn::ImportValue": expect.stringContaining("EmbedProfileInferenceProfileArn") },
+          "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
         ],
       }),
     );
+  });
+
+  it("points the model Lambdas at the profile ARNs and the batch start at the extract profile", () => {
+    const fns = Object.values(template.findResources("AWS::Lambda::Function"));
+    const withProfiles = fns.filter(
+      (f) => f.Properties.Environment?.Variables?.BEDROCK_CHAT_PROFILE_ARN,
+    );
+    expect(withProfiles).toHaveLength(3);
+    for (const f of withProfiles) {
+      expect(f.Properties.Environment.Variables.BEDROCK_EMBED_PROFILE_ARN).toBeDefined();
+      expect(f.Properties.Environment.Variables.BEDROCK_EXTRACT_PROFILE_ARN).toBeDefined();
+    }
+    const start = fns.find((f) => f.Properties.Environment?.Variables?.BATCH_ROLE_ARN);
+    expect(start.Properties.Environment.Variables).toMatchObject({
+      BEDROCK_EXTRACT_MODEL: EXTRACT_MODEL,
+    });
+    expect(start.Properties.Environment.Variables.BEDROCK_EXTRACT_PROFILE_ARN).toBeDefined();
   });
 
   it("keeps logs for one month and outputs the state machine and function names", () => {
@@ -363,7 +392,8 @@ describe("IngestStack", () => {
       "/extraction-batch/*",
     );
     expect(byAction["bedrock:InvokeModel"].Resource).toEqual([
-      `arn:aws:bedrock:eu-west-2:111111111111:inference-profile/${EXTRACT_PROFILE}`,
+      { "Fn::ImportValue": expect.stringContaining("ExtractProfileInferenceProfileArn") },
+      `arn:aws:bedrock:eu-west-2:111111111111:inference-profile/${EXTRACT_MODEL}`,
       "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
     ]);
   });
@@ -372,10 +402,11 @@ describe("IngestStack", () => {
     const all = statements();
     expect(all).toContainEqual(
       expect.objectContaining({
-        Action: "bedrock:CreateModelInvocationJob",
+        Action: ["bedrock:CreateModelInvocationJob", "bedrock:TagResource"],
         Resource: [
           "arn:aws:bedrock:eu-west-2:111111111111:model-invocation-job/*",
-          `arn:aws:bedrock:eu-west-2:111111111111:inference-profile/${EXTRACT_PROFILE}`,
+          { "Fn::ImportValue": expect.stringContaining("ExtractProfileInferenceProfileArn") },
+          `arn:aws:bedrock:eu-west-2:111111111111:inference-profile/${EXTRACT_MODEL}`,
           "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
         ],
       }),
@@ -405,7 +436,7 @@ describe("IngestStack", () => {
       Environment: {
         Variables: Match.objectLike({
           MODEL_PROVIDER: "bedrock",
-          BEDROCK_EXTRACT_MODEL: EXTRACT_PROFILE,
+          BEDROCK_EXTRACT_MODEL: EXTRACT_MODEL,
           CORPUS_BUCKET: Match.anyValue(),
           BATCH_ROLE_ARN: Match.anyValue(),
         }),
@@ -415,7 +446,7 @@ describe("IngestStack", () => {
       Timeout: 900,
       MemorySize: 1024,
       Environment: {
-        Variables: Match.objectLike({ BEDROCK_EXTRACT_MODEL: EXTRACT_PROFILE }),
+        Variables: Match.objectLike({ BEDROCK_EXTRACT_MODEL: EXTRACT_MODEL }),
       },
     });
   });
