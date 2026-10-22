@@ -30,8 +30,10 @@ const profiles = () =>
 describe("ModelProfilesStack", () => {
   it("creates one profile per model, each tagged project=concordance", () => {
     expect(profiles()).toHaveLength(3);
-    for (const p of profiles())
+    for (const p of profiles()) {
       expect(p.Tags).toContainEqual({ Key: "project", Value: "concordance" });
+      expect(p.Tags).toContainEqual({ Key: "concordance", Value: "sandbox" });
+    }
     expect(profiles().map((p) => p.InferenceProfileName)).toEqual([
       "concordance-sandbox-chat",
       "concordance-sandbox-extract",
