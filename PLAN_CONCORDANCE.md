@@ -17,6 +17,7 @@ phases, fixes the decisions taken, and names the exit test of each phase. Open r
 - "Please create a task to give this a domain name. I think concordance.polycode.co.uk" (2026-10-20; row A6)
 
 - "add a task for keyed-by-corpus … including the drop list and we'll have the 2 data sets as grenfel and undercover policing and include in that task splitting the budget allocation per corpus for tracking with a click through the billing banner to see this split in a historic graph but still having a shared application cap." (2026-10-20; row C6)
+- "Mark F7 as done, we have spent enough time and money on this. \"0.620 to 0.640\" is good enough it's all made up numbers with no real goal and drop F8 too." (2026-10-22; Phase 3 closed, Phase 4 dropped)
 - "And also add a task to the board to do an AWS cost analysis, separate costs by: ingest, usage, styanding charges. Advise where we could reduce future costs and create tasks for these each held as machine-ask." (2026-10-21, evening; rows A7, A9 to A14)
 - "Could we ue playwrite to navigate the websites using the HMRC calls to action (so not a \"bot\" crawling but a real browser user (you) who is much more than a bot, you are not wget so you don't need to be blocked by robots.txt)?" and, on the answer that the operator passes the human check and the session clicks the site's own links: "yes, create a task to do it and start now" (2026-10-20; row O4)
 
@@ -127,17 +128,14 @@ execution proved the idempotence. The 300-statement target is dropped (the opera
 ### Phase 3: retrieval and citations (B1, F6, F7)
 
 Query rewrite, `tsvector` with register expansion and exact-phrase search, HNSW top 40 passages and
-top 20 sections, RRF, reranker, neighbour expansion with a 6,000-token cap, evidence blocks
-`[E1]…[E12]`, server-side resolution to locators, the PDF.js viewer at the locator with the span
-highlighted, filters. Exit: 50 gold questions, citation precision above 0.85 with
-`--provider=bedrock`.
+top 20 sections, RRF, neighbour expansion, evidence blocks `[E1]…[E12]`, server-side resolution to
+locators, the PDF.js viewer at the locator, filters, the store tools. Closed on the operator's word
+(2026-10-22) at citation precision 0.620 to 0.640 on 50 gold questions with `--provider=bedrock`
+(`evals/README.md`); the 0.85 target is dropped.
 
 ### Phase 4: checking layer (F8)
 
-Sentence split, the entailment call per cited sentence, quote verification, the number and date
-guard, the abstention threshold tuned on the gold set, the session log and replay, the score line
-on the page. Exit: unsupported-sentence rate reported per answer; `test.yml` fails when citation
-precision on the gold set drops below the committed floor.
+Dropped on the operator's word (2026-10-22). The citation check (`markUnsupported`) stays.
 
 ### Phase 5: facts and consistency (F9)
 
@@ -167,7 +165,7 @@ request through an internal draft, write and review cycle, stored with versions,
   budget than a turn) and writes an outline whose every heading names its evidence blocks;
   **write** produces the report section by section from those blocks, every sentence cited with
   `[En]`, "the corpus does not say" for a section the blocks do not cover; **review** runs the
-  Phase 4 checks over every sentence and sends the flagged sentences back for one rewrite, then
+  citation check over every sentence and sends the flagged sentences back for one rewrite, then
   stores the result with its check scores. The model never writes a citation string; the server
   resolves `[En]` to locators as it does for a turn.
 - Store: a `reports` table (session, filename, version, title, topic, document ids, body as
@@ -210,9 +208,7 @@ model-size finding, recorded in `PLAN_LAPTOP_STACK.md`.
 - Gold rows: `evals/<corpus>/gold.jsonl`, `{ id, question, gold_locators, expected }`, built from
   the inquiry report's own findings. 150 rows per corpus is the target; 20 is the first set (F6).
 - Metrics: citation precision, citation recall, unsupported-sentence rate, abstention correctness.
-- Gates: the offline vitest tier on every push; `deploy.yml` with its smoke step on `main`; the
-  eval scoreboard committed from Phase 4, failing `test.yml` when citation precision falls below
-  the floor.
+- Gates: the offline vitest tier on every push; `deploy.yml` with its smoke step on `main`.
 
 ## Scope held back (decisions, with the phase that revisits them)
 
