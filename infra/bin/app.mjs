@@ -91,6 +91,7 @@ appStack.addDependency(guardrailsStack);
 ingestStack.addDependency(guardrailsStack);
 
 Tags.of(app).add("project", PROJECT);
+Tags.of(app).add(PROJECT, envName);
 Tags.of(app).add("env", envName);
 
 app.synth();
