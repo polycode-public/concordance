@@ -3,10 +3,12 @@
 import { describe, expect, it } from "vitest";
 import {
   CLIENT_FRAME_TYPES,
+  MAX_FRAME_BYTES,
   ProtocolError,
   REPORT_STAGES,
   SERVER_FRAME_TYPES,
   STAGES,
+  newEvidenceFrames,
   parseClientFrame,
   serverFrame,
 } from "../../packages/core/protocol.mjs";
@@ -180,6 +182,53 @@ describe("the tool frame", () => {
 describe("the evidence frame", () => {
   it("refuses a block without document facts", () => {
     expect(() => serverFrame.evidence("t", "u", [{ evidence: 1 }])).toThrow(ProtocolError);
+  });
+});
+
+describe("the new evidence frames", () => {
+  const DOC = { title: null, witnessId: "W1", cipherOnly: true, type: "pdf", pages: 1 };
+  const block = (n, size = 10) => ({
+    evidence: n,
+    documentId: "D",
+    locator: {},
+    header: null,
+    text: "x".repeat(size),
+    document: DOC,
+  });
+  const bytes = (frame) => Buffer.byteLength(JSON.stringify(frame));
+
+  it("sends only the blocks not sent before and records them", () => {
+    const sent = new Set();
+    const first = newEvidenceFrames("t", "u", [block(1), block(2)], sent);
+    expect(first.map((f) => f.blocks.map((b) => b.evidence))).toEqual([[1, 2]]);
+    const second = newEvidenceFrames("t", "u", [block(1), block(2), block(3)], sent);
+    expect(second.map((f) => f.blocks.map((b) => b.evidence))).toEqual([[3]]);
+    expect(newEvidenceFrames("t", "u", [block(1), block(3)], sent)).toEqual([]);
+  });
+
+  it("splits the new blocks into frames under the byte cap, in order", () => {
+    const blocks = [1, 2, 3, 4, 5].map((n) => block(n, 40_000));
+    const frames = newEvidenceFrames("t", "u", blocks, new Set());
+    expect(frames.length).toBeGreaterThan(1);
+    for (const f of frames) expect(bytes(f)).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+    expect(frames.flatMap((f) => f.blocks.map((b) => b.evidence))).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("measures the cap in UTF-8 bytes", () => {
+    const frames = newEvidenceFrames(
+      "t",
+      "u",
+      [1, 2].map((n) => ({ ...block(n, 0), text: "\u00e9".repeat(30_000) })),
+      new Set(),
+    );
+    expect(frames).toHaveLength(2);
+  });
+
+  it("throws and names a block that alone passes the cap", () => {
+    const sent = new Set();
+    expect(() => newEvidenceFrames("t", "u", [block(1), block(7, MAX_FRAME_BYTES)], sent)).toThrow(
+      /evidence block 7 is larger/,
+    );
   });
 });
 

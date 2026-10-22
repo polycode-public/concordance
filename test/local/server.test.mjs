@@ -204,6 +204,25 @@ describe("local server", () => {
     expect((await fetch(`${base}/fonts/missing.woff2`)).status).toBe(404);
   });
 
+  it("sends each evidence block once when a tool adds blocks", async () => {
+    const stub = stubQuery();
+    const second = { ...BLOCKS[0], evidence: 2, text: "The lift stopped." };
+    const withAdded = (args) => {
+      args.onEvidence(BLOCKS);
+      args.onEvidence([...BLOCKS, second]);
+      return stub(args);
+    };
+    app = await turnServer(createFakeProvider({ tokens: TOKENS, delayMs: 1 }), {
+      runQuery: withAdded,
+    });
+    const client = await connect(app.port);
+    client.send({ type: "turn", thread: "t1", turnId: "u1", text: "What did W1 say?" });
+    await client.until((f) => f.type === "done");
+    client.ws.close();
+    const posted = client.frames.filter((f) => f.type === "evidence");
+    expect(posted.map((f) => f.blocks.map((b) => b.evidence))).toEqual([[1], [2]]);
+  });
+
   it("sends a tool frame for each tool call of the answer", async () => {
     const stub = stubQuery();
     const withTool = (args) =>

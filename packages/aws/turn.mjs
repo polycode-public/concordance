@@ -8,7 +8,7 @@
 // to the session log.
 
 import { requireKnownCorpus } from "../core/corpora.mjs";
-import { serverFrame } from "../core/protocol.mjs";
+import { newEvidenceFrames, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
 import { REWRITE_TURNS } from "../core/retrieval/rewrite.mjs";
 import { recordSession, recordTurn, sessionIdFor, threadHistory } from "../core/sessions.mjs";
@@ -100,6 +100,7 @@ export function createHandler({
         limit: REWRITE_TURNS,
       });
       const provider = await providerFor();
+      const sentBlocks = new Set();
       const result = await runQuery({
         question: text,
         corpus,
@@ -118,7 +119,9 @@ export function createHandler({
           );
         },
         onEvidence: (blocks) => {
-          if (live()) send(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));
+          if (!live()) return;
+          for (const frame of newEvidenceFrames(thread, turnId, blocks.map(blockFrame), sentBlocks))
+            send(frame);
         },
         onToken: (piece) => {
           poll();

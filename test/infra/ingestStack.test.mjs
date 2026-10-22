@@ -291,6 +291,12 @@ describe("IngestStack", () => {
       Default: "WaitForExtractionBatch",
     });
     expect(definition.States.RecordBatchFailure.Next).toBe("ExtractionBatchFailed");
+    const failure = definition.States.RecordBatchFailure.Output;
+    expect(failure.jobArn).toBe(
+      "{% $exists($states.input.batch.jobArn) ? $states.input.batch.jobArn : null %}",
+    );
+    expect(failure.error).toBe("{% $states.input.error.Error %}");
+    expect(failure.cause).toBe("{% $substring($states.input.error.Cause, 0, 300) %}");
     expect(definition.States.ExtractionBatchFailed).toEqual({
       Type: "Fail",
       ErrorPath: "$.error",
