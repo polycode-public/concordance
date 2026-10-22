@@ -5,7 +5,7 @@
 // evidence block of a stored chunk, and the side of an assertion as a tool row shows it.
 import { EVENING_FROM_HOUR } from "../facts/timeline.mjs";
 import { blockFromRow, loadDocuments, withDocuments } from "../retrieval/expand.mjs";
-import { loadChunks } from "../retrieval/hybrid.mjs";
+import { halfvecLiteral, loadChunks } from "../retrieval/hybrid.mjs";
 
 /** A tool returns at most this many rows. */
 export const MAX_TOOL_ROWS = 50;
@@ -79,6 +79,25 @@ export function clockRange(input) {
 /** True when a parsed time window shares a minute with a clock range. */
 export const overlaps = (window, range) =>
   window.endMinutes >= range.from && window.startMinutes <= range.to;
+
+const questionVectors = new WeakMap();
+
+/**
+ * The halfvec literal of the turn's question, embedded once for all the tool calls of the turn.
+ * @param {{ question?: string, provider: { embed: Function } }} context
+ * @returns {Promise<string>}
+ */
+export function questionVector(context) {
+  if (typeof context.question !== "string" || !context.question.trim()) {
+    throw new Error("the tool needs the turn's question");
+  }
+  let vector = questionVectors.get(context);
+  if (!vector) {
+    vector = context.provider.embed([context.question]).then(([v]) => halfvecLiteral(v));
+    questionVectors.set(context, vector);
+  }
+  return vector;
+}
 
 /**
  * The id of the event that a name names, case-insensitively, or null for no name. A name that

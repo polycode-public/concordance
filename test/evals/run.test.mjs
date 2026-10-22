@@ -8,6 +8,7 @@ import {
   classifyRow,
   locatorMatches,
   missReport,
+  totalUsage,
   parseArgs,
   requireProfileArns,
   parseGold,
@@ -262,6 +263,18 @@ describe("evals runner", () => {
     });
   });
 
+  it("sums the token use of every row and gives null when no row reports any", () => {
+    const withUsage = (usage) => ({ result: { checks: { usage } } });
+    expect(
+      totalUsage([
+        withUsage({ inputTokens: 10, outputTokens: 2 }),
+        withUsage(null),
+        withUsage({ inputTokens: 5, outputTokens: 1, cacheReadTokens: 3 }),
+      ]),
+    ).toEqual({ inputTokens: 15, outputTokens: 3, cacheReadTokens: 3 });
+    expect(totalUsage([withUsage(null), { result: { checks: {} } }])).toBeNull();
+  });
+
   it("writes the miss report to the --report path and prints that path", async () => {
     const gold = path.join(dir, "gold.jsonl");
     await writeFile(gold, row("g1", "answer", [loc("A", 1, 1)]) + "\n");
@@ -273,13 +286,15 @@ describe("evals runner", () => {
       runQuery: async () => ({
         abstained: false,
         citations: [{ locator: loc("A", 1, 2) }],
-        checks: { sentences: 1, supported: 1 },
+        checks: { sentences: 1, supported: 1, usage: { inputTokens: 1200, outputTokens: 80 } },
         evidenceBlocks: [block("A", 1, 2)],
       }),
     });
     expect(metrics.citationPrecision).toBe(0);
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     expect(report.metrics).toEqual(metrics);
+    expect(report.usage).toEqual({ inputTokens: 1200, outputTokens: 80 });
+    expect(JSON.parse(log.mock.calls[0][0]).usage).toEqual(report.usage);
     expect(report.summary.citedByKind.paragraph).toBe(1);
     expect(report.rows[0].id).toBe("g1");
     expect(JSON.parse(log.mock.calls[0][0]).report).toBe(reportPath);

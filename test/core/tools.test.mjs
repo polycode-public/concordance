@@ -5,13 +5,11 @@ import { runComparison } from "../../packages/core/facts/compare.mjs";
 import { STORE_TOOLS, buildTools } from "../../packages/core/tools/index.mjs";
 import { countSql } from "../../packages/core/tools/countAssertions.mjs";
 import { DOCUMENT_FACTS_SQL } from "../../packages/core/tools/documentFacts.mjs";
+import { ToolInputError, chunkIdsOf, clockMinutes } from "../../packages/core/tools/shared.mjs";
 import {
-  MAX_TOOL_ROWS,
-  ToolInputError,
-  chunkIdsOf,
-  clockMinutes,
-} from "../../packages/core/tools/shared.mjs";
-import { WITNESS_CLAIMS_SQL } from "../../packages/core/tools/witnessClaims.mjs";
+  MAX_WITNESS_CLAIMS,
+  WITNESS_CLAIMS_SQL,
+} from "../../packages/core/tools/witnessClaims.mjs";
 import { HISTORY_SQL } from "../../packages/core/spend.mjs";
 import { toNamedParameters } from "../../packages/core/db.mjs";
 import { createCompareStore } from "./compareFakeStore.mjs";
@@ -226,37 +224,66 @@ describe("count_assertions", () => {
 });
 
 describe("witness_claims", () => {
-  it("lists a witness's assertions with their sentences and marks a cut list", async () => {
-    const many = Array.from({ length: MAX_TOOL_ROWS + 1 }, (_, i) => ({
-      id: String(i + 1),
-      witness_id: "IWS-A",
-      document_id: "IWS-A1",
-      subject_text: "I",
-      predicate: "saw",
-      object_text: "smoke",
-      time_text: null,
-      place_text: "the lobby",
-      polarity: "positive",
-      modality: null,
-      event: "smoke in the lobby",
-      source_chunk_id: "101",
-    }));
-    let params;
+  const QUESTION = "What did the witness see in the lobby?";
+  const vector = new Array(1024).fill(0.25);
+  const embedProvider = () => {
+    const texts = [];
+    return {
+      texts,
+      provider: {
+        name: "p",
+        embedModel: "m",
+        embedDim: 1024,
+        embed: async (batch) => {
+          texts.push(...batch);
+          return [vector];
+        },
+      },
+    };
+  };
+  const claimRow = (i, overrides = {}) => ({
+    id: String(i),
+    witness_id: "IWS-A",
+    document_id: "IWS-A1",
+    subject_text: "I",
+    predicate: "saw",
+    object_text: "smoke",
+    time_text: null,
+    place_text: "the lobby",
+    polarity: "positive",
+    modality: null,
+    event: "smoke in the lobby",
+    source_chunk_id: "101",
+    ordinal: i,
+    ...overrides,
+  });
+  const claimsTool = (rows, provider, question = QUESTION) => {
+    const calls = [];
     const sqlDb = {
       async query(text, p) {
         if (text === WITNESS_CLAIMS_SQL) {
-          params = p;
-          return { rows: many };
+          calls.push(p);
+          return { rows };
         }
         return db.query(text, p);
       },
     };
-    const claims = buildTools({ db: sqlDb, corpus: CORPUS, provider: {} }).find(
+    const claims = buildTools({ db: sqlDb, corpus: CORPUS, provider, question }).find(
       (x) => x.name === "witness_claims",
     );
+    return { claims, calls };
+  };
+
+  it("ranks a witness's assertions by the question and marks a cut list", async () => {
+    const many = Array.from({ length: MAX_WITNESS_CLAIMS + 1 }, (_, i) => claimRow(i + 1));
+    const { provider, texts } = embedProvider();
+    const { claims, calls } = claimsTool(many, provider);
     const result = await claims.run({ witness: "IWS-A", predicate: "saw" });
-    expect(params).toEqual([CORPUS, "IWS-A", "saw", null]);
-    expect(result.rows).toHaveLength(MAX_TOOL_ROWS);
+    expect(texts).toEqual([QUESTION]);
+    expect(calls[0]).toEqual([CORPUS, "IWS-A", "saw", null, `[${vector.join(",")}]`, "m"]);
+    expect(WITNESS_CLAIMS_SQL).toMatch(/ORDER BY CASE WHEN c\.embedding_model = \$6 THEN/);
+    expect(WITNESS_CLAIMS_SQL).toContain(`LIMIT ${MAX_WITNESS_CLAIMS + 1}`);
+    expect(result.rows).toHaveLength(MAX_WITNESS_CLAIMS);
     expect(result.truncated).toBe(true);
     expect(result.rows[0]).toEqual({
       assertionId: "1",
@@ -274,6 +301,34 @@ describe("witness_claims", () => {
     });
     expect(result.evidence).toHaveLength(1);
     await expect(claims.run({})).rejects.toThrow(/needs witness/);
+  });
+
+  it("shows the nearest assertions in document order", async () => {
+    const nearestFirst = [
+      claimRow(3, { ordinal: 30, source_chunk_id: "104" }),
+      claimRow(1, { ordinal: 10, source_chunk_id: "102" }),
+      claimRow(4, { document_id: "IWS-A0", ordinal: 50, source_chunk_id: "101" }),
+      claimRow(2, { ordinal: 10, source_chunk_id: "102" }),
+    ];
+    const { claims } = claimsTool(nearestFirst, embedProvider().provider);
+    const result = await claims.run({ witness: "IWS-A" });
+    expect(result.rows.map((r) => r.assertionId)).toEqual(["4", "1", "2", "3"]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("embeds the question once for every call of the turn", async () => {
+    const { provider, texts } = embedProvider();
+    const { claims, calls } = claimsTool([claimRow(1)], provider);
+    await claims.run({ witness: "IWS-A" });
+    await claims.run({ witness: "IWS-B" });
+    expect(texts).toEqual([QUESTION]);
+    expect(calls.map((p) => p[1])).toEqual(["IWS-A", "IWS-B"]);
+  });
+
+  it("needs the turn's question", async () => {
+    const { claims, calls } = claimsTool([claimRow(1)], embedProvider().provider, null);
+    await expect(claims.run({ witness: "IWS-A" })).rejects.toThrow(/needs the turn's question/);
+    expect(calls).toEqual([]);
   });
 });
 

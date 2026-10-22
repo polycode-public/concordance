@@ -8,6 +8,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { addUsage } from "../packages/core/providers/toolLoop.mjs";
 
 const EXPECTED = new Set(["answer", "abstain"]);
 
@@ -203,6 +204,14 @@ export function score(scored) {
   };
 }
 
+/**
+ * The summed token use of every row's model calls, or null when no row reports any.
+ * @param {{ result: { checks: { usage?: object | null } } }[]} scored
+ */
+export function totalUsage(scored) {
+  return scored.reduce((total, { result }) => addUsage(total, result.checks.usage ?? null), null);
+}
+
 function defaultReportPath(goldPath, provider) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const rerank = process.env.RERANK || "off";
@@ -247,12 +256,14 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
       scored.push({ row, result });
     }
     const metrics = score(scored);
+    const usage = totalUsage(scored);
     const reportPath = path.resolve(args.report ?? defaultReportPath(goldPath, args.provider));
     const header = {
       provider: args.provider,
       corpus: args.corpus,
       gold: args.gold,
       rerank: process.env.RERANK || "off",
+      usage,
     };
     await mkdir(path.dirname(reportPath), { recursive: true });
     await writeFile(
@@ -266,6 +277,7 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
           corpus: args.corpus,
           gold: args.gold,
           ...metrics,
+          usage,
           report: reportPath,
         },
         null,

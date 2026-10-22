@@ -57,6 +57,97 @@ invented, paraphrased from memory or written from model output.
 
 ## Results
 
+### 2026-10-22, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, ranked witness claims and whole findings
+
+The same command and store as the run of 2026-10-21 23:30Z below, with `RERANK=off`, after three
+changes. One run, from 08:05:03Z to 08:14:59Z. The run printed its tokens: 903,382 input, 14,052
+output, 178,092 cache read, 1,746 cache write, about $2.98 at the Sonnet 4.5 list price; Cost
+Explorer lags by hours. The run report is `evals/grenfell/runs/2026-10-22T08-14-59-700Z-bedrock-rerank-off.json`.
+
+1. Four gold rows quote the whole finding and add the locators that say its other sentences: row
+   0001 IWS00000490 p12 ¶66 (finding 10.10), row 0003 IWS00000490 p13 ¶72 (10.17), row 0039
+   MET00008044 p4 (10.106), row 0048 MET00018800 p11 (18.20 b). Row 0034 stays: its question
+   asks what finding 11.68's first sentence says, and ¶48 holds it. The gold set holds 75 locators.
+2. `witness_claims` gives the 12 claims of a witness whose sentences are nearest the question by
+   embedding, in document order. It gave up to 50 claims in document order, so 39 of its 41 calls
+   in the 23:30Z run added the claims of a statement's first pages.
+3. The run prints and records its summed token use.
+
+Row 0013's ¶103 stays out of retrieval, and retrieval is unchanged. In the corpus lexical
+rankings of the question, ¶103's passages rank 122nd and 172nd and its section 71st (the walk
+reads 40 and 20); ¶102 and ¶105 rank 12th and 13th. ¶103 shares only "Hanife" and the header's
+"flat 133" with the question; "bucket", "water" and "bathroom" are not in it. The question names
+¶103 by its order before ¶105, which is in the evidence, and the model's searches name the
+bedroom fire of ¶105.
+
+| Metric                    | Value |
+| ------------------------- | ----- |
+| citation precision        | 0.550 |
+| citation recall           | 0.813 |
+| unsupported-sentence rate | 0.175 |
+| abstention correctness    | 0.980 |
+
+The 111 distinct cited locators by miss kind:
+
+| `kind`        | Count |
+| ------------- | ----- |
+| `gold`        | 61    |
+| `paragraph`   | 23    |
+| `page`        | 22    |
+| `document`    | 4     |
+| `abstain-row` | 1     |
+
+The 75 gold locators: 61 cited, 13 retrieved but not cited (4 of them with the gold paragraph
+itself in the evidence blocks), 1 not retrieved at all (row 0022).
+
+Against the 23:30Z run (precision 0.540, recall 0.859, unsupported 0.143, abstention 0.980; 113
+citations: 61 gold, 27 paragraph, 21 page, 3 document, 1 abstain-row; 71 gold: 61 cited, 9
+retrieved not cited, 1 not retrieved: row 0022), precision rises 0.010, recall falls 0.046 on 4
+more gold locators, the unsupported rate rises 0.032 and abstention is the same. Gold citations
+stay at 61: 3 of the 4 new gold locators are cited (rows 0003, 0039, 0048), and 3 are lost. Row
+0007's p4 ¶16 and row 0011's p2 ¶6 are no longer in the evidence; the claims of the first pages
+had added them. Row 0015's IWS00001157 ¶55 is in the evidence and not cited. Non-gold citations
+fall from 52 to 50: rows 0003, 0004, 0013, 0022, 0025, 0034 and 0039 lose 10, and rows 0007,
+0008, 0011, 0016, 0023, 0043 and 0048 gain 8. The evidence blocks of the 50 rows fall from 2,823 to 1,468;
+`witness_claims` runs 51 times in 40 rows. The unsupported sentences rise from 41 to 50 of 285,
+by at most 3 in a row (row 0002).
+
+The rows that still miss:
+
+| id            | miss                                                 | cause in the run                                                                                                      |
+| ------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| grenfell-0023 | 11 `page` and `paragraph`                            | a list across two statements; every gold locator is cited                                                             |
+| grenfell-0001 | 4 `page` and `paragraph`, 1 gold not in the evidence | cites IWS00000490 ¶68, ¶71, ¶76 and p18 ¶103 beside ¶67; ¶66 (the beeping) is not in the evidence                     |
+| grenfell-0012 | 4 `paragraph`, 1 gold in the evidence not cited      | cites IWS00000069 ¶85, ¶86, ¶88 and ¶89 around the gold ¶87 (cited); IWS00001156 ¶14 is in the evidence and not cited |
+| grenfell-0022 | 1 gold not retrieved, 3 misses                       | names no witness and no flat; Petra Doulova's statement (IWS00000835 p9 ¶61) is not retrieved                         |
+| grenfell-0048 | 3 `page`                                             | cites MET00018800 p8 (the task), p9 and p10 beside both gold pages, after `search_chunks`                             |
+| grenfell-0007 | 2 `page` and `paragraph`, 1 gold not in the evidence | cites IWS00000913 ¶17 and ¶25; p4 ¶16 (the bedroom window) is not in the evidence                                     |
+| grenfell-0008 | 2 `page` and `document`                              | cites IWS00000913 ¶34 and Jamal Stern's MET00012483 p12 beside both gold locators                                     |
+| grenfell-0009 | 2 `page` and `paragraph`, 1 gold not in the evidence | cites IWS00000913 ¶102 and IWS00000990 ¶72; IWS00000913 p7 ¶37 is not in the evidence                                 |
+| grenfell-0024 | 2 `page` and `paragraph`, 1 gold not in the evidence | the same two paragraphs as row 0009, from `matrix_cell`                                                               |
+| grenfell-0011 | 2 `paragraph`, 1 gold not in the evidence            | cites IWS00001156 ¶5 and ¶7 around the gold ¶6, which is not in the evidence                                          |
+| grenfell-0015 | 2 `document`, 1 gold in the evidence not cited       | cites Edward Daffarn's IWS00000169 ¶50 and ¶51; IWS00001157 ¶55 is not cited                                          |
+| grenfell-0016 | 2 `paragraph`                                        | cites IWS00000835 ¶62 and ¶64 beside the gold                                                                         |
+| grenfell-0017 | 2 `paragraph`                                        | cites IWS00000835 ¶54 and ¶56 beside the gold                                                                         |
+| grenfell-0013 | 1 `paragraph`, 2 gold not in the evidence            | ¶103 (the buckets of water) is not retrieved for a question that names it by its order; cites ¶105                    |
+| grenfell-0010 | 1 `page`, 1 gold not in the evidence                 | cites IWS00001156 p1 ¶4; p2 ¶5 is not in the evidence                                                                 |
+| grenfell-0020 | 1 `abstain-row`                                      | an abstain row that the model answers from the improvement works budget in IWS00000169 p126                           |
+
+Rows 0002, 0003, 0025, 0032, 0039 and 0043 have one `page` or `paragraph` miss each; rows 0002,
+0005 and 0014 have one gold locator that is not cited.
+
+The next changes the evidence names:
+
+1. Rows 0001, 0007, 0009, 0010 and 0011: the gold paragraph is not in the evidence. Read the
+   fused rank of each gold chunk for its question; the claims of the first pages had covered 0007
+   and 0011 by chance.
+2. Row 0013: a tool that gives the paragraphs before and after a locator in the evidence, so that
+   the model can read what comes before ¶105. Measure it against the `paragraph` misses of rows
+   0012 and 0016, which cite neighbours of their gold.
+3. Row 0023: check its gold against the whole finding paragraph, as rows 0001 to 0048 were here.
+4. Row 0020: decide whether a question about a part of a cost is answered by the whole budget, then
+   change the prompt or the row.
+
 ### 2026-10-21, bedrock, `answer-closed-world-v4`, `ingest-v2`, 38 statements, 50 rows, reranker off, blocks at one locator and a longer walk
 
 The same command and store as the lexical-boost run below, with `RERANK=off`, after four changes.
