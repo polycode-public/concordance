@@ -2,10 +2,10 @@
 // Copyright 2026 Polycode Limited
 //
 // Turns fused hits into numbered evidence blocks: each passage hit takes its
-// previous and next passage, hits that share a section become that section, and
-// the context stops at a character budget.
+// previous and next passage at the same locator, hits that share a section become
+// that section, and the walk down the hits stops at a block count or a character budget.
 
-export const MAX_HITS = 12;
+export const MAX_HITS = 40;
 export const MAX_BLOCKS = 12;
 export const CHARS_PER_TOKEN = 4;
 export const MAX_CONTEXT_TOKENS = 6000;
@@ -24,6 +24,12 @@ export function joinOverlapping(a, b) {
     if (a.endsWith(b.slice(0, k))) return a + b.slice(k);
   }
   return `${a} ${b}`;
+}
+
+/** True when two chunks resolve to the same page, paragraph and every other locator field. */
+export function sameLocator(a, b) {
+  const keys = new Set([...Object.keys(a.locator ?? {}), ...Object.keys(b.locator ?? {})]);
+  return [...keys].every((key) => (a.locator?.[key] ?? null) === (b.locator?.[key] ?? null));
 }
 
 /** The size of a block in characters as the prompt sends it. */
@@ -46,7 +52,8 @@ export function neighbourIds(hits, loaded) {
 }
 
 /**
- * Builds the evidence blocks in fusion order.
+ * Builds the evidence blocks in fusion order. A block shows text of its own locator only, so a
+ * citation of any of its text resolves to the page and paragraph that hold it.
  * @param {string[]} hitIds fused ids, best first
  * @param {Map<string, object>} rows every hit, neighbour and parent row by id
  * @param {{ maxHits?: number, maxBlocks?: number, maxChars?: number }} [limits]
@@ -105,7 +112,11 @@ export function buildEvidence(
     const parts = [hit.prev_id, hit.id, hit.next_id]
       .filter((id) => id != null)
       .map(row)
-      .filter((r) => r.id === hit.id || (r.document_id === hit.document_id && !isCovered(r)));
+      .filter(
+        (r) =>
+          r.id === hit.id ||
+          (r.document_id === hit.document_id && sameLocator(r, hit) && !isCovered(r)),
+      );
     const text = parts.map((r) => r.text).reduce(joinOverlapping);
     add(
       blockFromRow(hit, text),
