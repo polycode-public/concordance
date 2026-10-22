@@ -85,12 +85,14 @@ function citedKind(golds, cited) {
 }
 
 /**
- * Classifies one scored row for the miss report: each distinct cited locator gets a kind, and each
+ * Classifies one scored row for the miss report: each distinct cited locator gets a kind, each
  * gold locator records whether the answer cites it and whether retrieval returned its document
- * and its paragraph.
+ * and its paragraph, and the row lists its evidence blocks and the tool calls that added any.
  * @param {{ row: object, result: { abstained: boolean, citations: { locator: unknown }[],
- *   checks: { sentences: number, supported: number },
- *   evidenceBlocks?: { documentId: string, locator: { paragraph?: unknown } }[] } }} scored
+ *   checks: { sentences: number, supported: number,
+ *     tools?: { name: string, input: object, rows: number }[] },
+ *   evidenceBlocks?: { evidence: number, documentId: string,
+ *     locator: { page?: unknown, paragraph?: unknown } }[] } }} scored
  */
 export function classifyRow({ row, result }) {
   const golds = row.gold_locators;
@@ -117,6 +119,8 @@ export function classifyRow({ row, result }) {
       };
     }),
     cited: citations.map((c) => ({ locator: c, kind: citedKind(golds, c) })),
+    evidence: blocks.map((b) => ({ evidence: b.evidence, document: b.documentId, ...b.locator })),
+    tools: (result.checks.tools ?? []).map(({ name, input, rows }) => ({ name, input, rows })),
   };
 }
 
