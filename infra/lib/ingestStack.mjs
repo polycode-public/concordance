@@ -373,7 +373,7 @@ export class IngestStack extends Stack {
     });
     const recordBatchFailure = sfn.Pass.jsonata(this, "RecordBatchFailure", {
       outputs: {
-        jobArn: "{% $states.input.batch.jobArn %}",
+        jobArn: "{% $exists($states.input.batch.jobArn) ? $states.input.batch.jobArn : null %}",
         error: "{% $states.input.error.Error %}",
         cause: "{% $substring($states.input.error.Cause, 0, 300) %}",
       },

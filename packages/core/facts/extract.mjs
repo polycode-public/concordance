@@ -488,10 +488,20 @@ const ASSERTION_COLUMNS = [
 ];
 
 /**
+ * Forgets where an extraction of one document stopped, so the next run starts at window 0.
+ * @param {{ query: Function }} db
+ * @param {string} documentId
+ */
+export const clearExtractionProgress = (db, documentId) => db.query(DELETE_PROGRESS, [documentId]);
+
+/**
  * What an extraction of one document starts from: its row, its sentences and their windows, the
  * hash of its sentence set, whether that set is already extracted under this model, prompt and
  * pipeline version, and the first window still to run. With replace, a finished extraction counts
- * as not done, so the document runs again from its first window; stored progress still resumes.
+ * as not done, so the document runs again from its first window; stored progress still resumes,
+ * because a replace run deletes the old rows in the transaction that stores its first window and
+ * that transaction writes the progress row, so progress past zero belongs to the replace run in
+ * hand. A run that plans a replace from the start clears the row first (clearExtractionProgress).
  * @param {object} args
  * @param {string} args.documentId
  * @param {{ query: Function }} args.db

@@ -11,7 +11,12 @@
 
 import { parseJsonReply } from "../providers/jsonReply.mjs";
 import { ReplyTruncatedError } from "../providers/modelProvider.mjs";
-import { ASSERTION_SCHEMA, extractPrompt, extractionState } from "./extract.mjs";
+import {
+  ASSERTION_SCHEMA,
+  clearExtractionProgress,
+  extractPrompt,
+  extractionState,
+} from "./extract.mjs";
 
 /** The Bedrock quota "Minimum number of records per batch inference job" for Claude Haiku 4.5. */
 export const BATCH_MIN_RECORDS = 100;
@@ -177,7 +182,8 @@ export function batchJobName(corpus, at) {
 /**
  * The windows each document of a run still needs, as batch records. A document whose sentence
  * set is already extracted is left out unless replace is set; one with stored progress starts
- * after it. A document that cannot be planned, such as one whose ingest failed, is listed under
+ * after it. A replace plans every window from 0 and clears the stored progress, so the load's
+ * first window deletes the old rows and the load resumes only within this run. A document that cannot be planned, such as one whose ingest failed, is listed under
  * failures and left out, so it fails alone.
  * @param {{ db: { query: Function }, documentIds: string[], extractModel: string,
  *   replace?: boolean }} args
@@ -189,6 +195,7 @@ export async function planExtractionBatch({ db, documentIds, extractModel, repla
   for (const documentId of documentIds) {
     let state;
     try {
+      if (replace) await clearExtractionProgress(db, documentId);
       state = await extractionState({ documentId, db, extractModel, replace });
     } catch (err) {
       failures.push({ evidenceId: documentId, error: err.message.slice(0, 300) });
