@@ -148,9 +148,9 @@ export and live SPARQL from a Lambda) is dropped (the operator's word, 2026-10-2
 
 ### Phase 7: demo and polish (F13)
 
-The slice sized to the $25 cap, first token under 2 seconds on the deployed page, the eval
-scoreboard, the slides, the screen recording as the fallback, the dry run. Exit: the demo script
-recorded end to end.
+First token under 2 seconds on the deployed page, the demo script (`docs/DEMO.md`), the slides,
+the screen recording as the fallback, the dry run (F13, O6). Exit: the demo script recorded end to
+end.
 
 ### Phase R: generated reports (R1)
 
