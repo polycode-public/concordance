@@ -3,6 +3,7 @@
 //
 // The closed-world answer prompt. The server and the eval send the same text, and
 // every response stores PROMPT_VERSION.
+import { TAG } from "./checks/citations.mjs";
 
 export const PROMPT_VERSION = "answer-closed-world-v4";
 
@@ -82,7 +83,7 @@ export const REWRITE_SYSTEM_PROMPT = [
 export function rewriteMessages(question, history) {
   const turns = history.map((turn, i) => {
     const answer = turn.answer
-      .replace(/\s*\[E\d+\]/g, "")
+      .replace(new RegExp(String.raw`\s*${TAG.source}`, "g"), "")
       .replace(/\s+/g, " ")
       .trim();
     return `Turn ${i + 1} question: ${turn.question}\nTurn ${i + 1} answer: ${answer.slice(0, REWRITE_ANSWER_CHARS)}`;
