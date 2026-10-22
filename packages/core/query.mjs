@@ -178,7 +178,8 @@ export function chatTools(tools, registry, onTool) {
  *   tool?: { name: string, rows: number }) => void} [args.onStage]
  *   A tool call during the answer comes as the stage 'tool' with its name and row count.
  * @param {(blocks: object[]) => void} [args.onEvidence]
- *   Hears the retrieved blocks, then the whole list again each time a tool adds blocks.
+ *   Hears the retrieved blocks, then the whole list again each time a tool adds blocks; a listener
+ *   that posts them sends each evidence number once.
  * @returns {Promise<{ answer: string, abstained: boolean,
  *   citations: { evidence: number, locator: { document: string, page: unknown, paragraph: unknown } }[],
  *   checks: { sentences: number, supported: number, flaggedRatio: number, warning: boolean,

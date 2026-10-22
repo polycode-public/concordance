@@ -176,7 +176,7 @@ function onFrame(frame) {
       renderTool(turn, frame);
       break;
     case "evidence":
-      turn.blocks = new Map(frame.blocks.map((b) => [b.evidence, b]));
+      for (const b of frame.blocks) turn.blocks.set(b.evidence, b);
       renderEvidence(turn, new Set());
       break;
     case "token":

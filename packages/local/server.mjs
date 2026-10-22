@@ -14,7 +14,7 @@ import { WebSocketServer } from "ws";
 import { isCorpusId, requireKnownCorpus } from "../core/corpora.mjs";
 import { InvalidThread, NothingToExport, exportConversation, isNoteKey } from "../core/export.mjs";
 import { factsResponse } from "../core/facts/views.mjs";
-import { parseClientFrame, serverFrame } from "../core/protocol.mjs";
+import { newEvidenceFrames, parseClientFrame, serverFrame } from "../core/protocol.mjs";
 import { runQuery as defaultRunQuery } from "../core/query.mjs";
 import {
   reportScores,
@@ -646,6 +646,7 @@ export async function createServer({
           limit: REWRITE_TURNS,
         });
         signal.throwIfAborted();
+        const sentBlocks = new Set();
         const result = await runQuery({
           question: text,
           corpus,
@@ -663,7 +664,14 @@ export async function createServer({
             );
           },
           onEvidence: (blocks) => {
-            if (live()) emit(serverFrame.evidence(thread, turnId, blocks.map(blockFrame)));
+            if (!live()) return;
+            for (const frame of newEvidenceFrames(
+              thread,
+              turnId,
+              blocks.map(blockFrame),
+              sentBlocks,
+            ))
+              emit(frame);
           },
           onToken: (piece) => {
             if (live()) emit(serverFrame.token(thread, turnId, piece));

@@ -22,6 +22,8 @@ export const STAGES = Object.freeze(["rewriting", "retrieving", "answering", "ch
 export const REPORT_STAGES = Object.freeze(["drafting", "writing", "reviewing", "done"]);
 
 const MAX_TEXT = 8000;
+/** The API Gateway WebSocket message limit is 128 KiB; a frame stays well under it. */
+export const MAX_FRAME_BYTES = 96 * 1024;
 export const MAX_REPORT_DOCUMENTS = 50;
 
 export const REPORT_FILENAME = /^[a-z0-9][a-z0-9-]*\.md$/;
@@ -250,3 +252,36 @@ export const serverFrame = {
     locator,
   }),
 };
+
+/**
+ * The evidence frames for the blocks a turn has not sent yet, in order. Each frame stays under
+ * MAX_FRAME_BYTES serialized in UTF-8; `sent` holds the evidence numbers already posted and
+ * gains the numbers of the blocks returned.
+ * @param {string} thread
+ * @param {string} turnId
+ * @param {EvidenceFrameBlock[]} blocks
+ * @param {Set<number>} sent
+ */
+export function newEvidenceFrames(thread, turnId, blocks, sent) {
+  const frames = [];
+  let batch = [];
+  const flush = () => {
+    if (batch.length) frames.push(serverFrame.evidence(thread, turnId, batch));
+    batch = [];
+  };
+  const size = (list) =>
+    Buffer.byteLength(JSON.stringify(serverFrame.evidence(thread, turnId, list)));
+  for (const block of blocks) {
+    if (sent.has(block.evidence)) continue;
+    if (size([block]) > MAX_FRAME_BYTES) {
+      throw new ProtocolError(
+        `evidence block ${block.evidence} is larger than the ${MAX_FRAME_BYTES} byte frame limit`,
+      );
+    }
+    if (batch.length && size([...batch, block]) > MAX_FRAME_BYTES) flush();
+    batch.push(block);
+    sent.add(block.evidence);
+  }
+  flush();
+  return frames;
+}
