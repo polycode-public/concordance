@@ -13,6 +13,11 @@ import {
   planExtractionBatch,
   recordIdFor,
 } from "../../packages/core/facts/batch.mjs";
+import {
+  EXTRACT_PIPELINE_VERSION,
+  EXTRACT_PROMPT_VERSION,
+  EXTRACT_WINDOW,
+} from "../../packages/core/facts/extract.mjs";
 import { createFakeProvider } from "../../packages/core/providers/fakeProvider.mjs";
 import { createFactsStore } from "../core/factsFakeStore.mjs";
 
@@ -120,6 +125,38 @@ describe("startExtractionBatch", () => {
     });
     expect(result).toMatchObject({ mode: "batch", replace: true, records: 100 });
     expect(puts.map((p) => p.key.split("/").at(-1))).toEqual(["IWS1.jsonl"]);
+  });
+
+  it("plans every window of a replace though the document holds stored progress", async () => {
+    const store = storeWith({ IWS1: 1000 });
+    const [{ sourceSha256 }] = (
+      await planExtractionBatch({
+        db: store,
+        documentIds: ["IWS1"],
+        extractModel: "fake-extract",
+      })
+    ).documents;
+    store.tables.extraction_progress = [
+      {
+        document_id: "IWS1",
+        source_sha256: sourceSha256,
+        tool_version: EXTRACT_PIPELINE_VERSION,
+        model: "fake-extract",
+        prompt_version: EXTRACT_PROMPT_VERSION,
+        window_size: EXTRACT_WINDOW,
+        windows_done: 60,
+      },
+    ];
+    const { handler } = startDeps(store);
+    const result = await handler({
+      corpus: "grenfell",
+      manifest: { items: [row("IWS1")] },
+      extraction: "batch",
+      replace: true,
+      evidenceIds: ["IWS1"],
+    });
+    expect(result).toMatchObject({ mode: "batch", records: 100 });
+    expect(store.tables.extraction_progress).toEqual([]);
   });
 
   it("refuses a batch under the minimum, and evidenceIds on an on-demand run", async () => {

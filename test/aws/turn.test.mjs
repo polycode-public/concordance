@@ -144,6 +144,20 @@ const EVENT = {
 };
 
 describe("turn function", () => {
+  it("posts each evidence block once when a tool adds blocks", async () => {
+    const second = { ...BLOCKS[0], evidence: 2, text: "The lift stopped." };
+    const runQuery = async (args) => {
+      args.onEvidence(BLOCKS);
+      args.onEvidence([...BLOCKS, second]);
+      args.onEvidence([...BLOCKS, second]);
+      return stubQuery(args);
+    };
+    const { handler, frames } = setup({ runQuery });
+    await handler(EVENT);
+    const posted = frames.filter((f) => f.type === "evidence");
+    expect(posted.map((f) => f.blocks.map((b) => b.evidence))).toEqual([[1], [2]]);
+  });
+
   it("posts the frames of a turn in the laptop server's order", async () => {
     const { handler, db, cancels, frames, targets } = setup();
     await handler(EVENT);

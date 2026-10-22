@@ -18,6 +18,9 @@ import {
 import {
   ASSERTION_SCHEMA,
   extractAssertions,
+  EXTRACT_PIPELINE_VERSION,
+  EXTRACT_PROMPT_VERSION,
+  EXTRACT_WINDOW,
   extractPrompt,
   sentenceWindows,
 } from "../../packages/core/facts/extract.mjs";
@@ -209,6 +212,47 @@ describe("planExtractionBatch", () => {
       replace: true,
     });
     expect(replace.records).toBe(1);
+  });
+
+  it("plans a replace from window 0 and clears the stored progress, a plain run from the progress", async () => {
+    const data = seed();
+    data.sentences = Array.from({ length: 25 }, (_, i) => ({
+      id: String(100 + i),
+      document_id: "IWS1",
+      ordinal: i,
+      text: `${S0} ${i}`,
+      header: "[H]",
+    }));
+    const store = createFactsStore(data);
+    const args = { db: store, documentIds: ["IWS1"], extractModel: "fake-extract" };
+    const [first] = (await planExtractionBatch(args)).documents;
+    expect(first).toMatchObject({ first: 0, windows: 3 });
+    const setProgress = () => {
+      store.tables.extraction_progress = [
+        {
+          document_id: "IWS1",
+          source_sha256: first.sourceSha256,
+          tool_version: EXTRACT_PIPELINE_VERSION,
+          model: "fake-extract",
+          prompt_version: EXTRACT_PROMPT_VERSION,
+          window_size: EXTRACT_WINDOW,
+          windows_done: 2,
+        },
+      ];
+    };
+
+    setProgress();
+    const [plain] = (await planExtractionBatch(args)).documents;
+    expect(plain.records.map((r) => r.recordId)).toEqual(["IWS1_00002"]);
+
+    setProgress();
+    const [replace] = (await planExtractionBatch({ ...args, replace: true })).documents;
+    expect(replace.records.map((r) => r.recordId)).toEqual([
+      "IWS1_00000",
+      "IWS1_00001",
+      "IWS1_00002",
+    ]);
+    expect(store.tables.extraction_progress).toEqual([]);
   });
 });
 
