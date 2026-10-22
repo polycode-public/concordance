@@ -19,6 +19,12 @@ locator, another paragraph), `page` (the document of a gold locator, another pag
 `retrieved` (an evidence block comes from its document) and `retrievedParagraph`. The `summary`
 block counts both over all rows.
 
+The `bedrock` provider calls the models through the stack's tagged application inference profiles and
+refuses to start unless `BEDROCK_CHAT_PROFILE_ARN`, `BEDROCK_EXTRACT_PROFILE_ARN` and
+`BEDROCK_EMBED_PROFILE_ARN` are set. After `aws sso login --sso-session polycode`, run
+`eval "$(scripts/model-profile-env.sh)"` once in the shell; it reads the three ARNs from the
+`concordance-sandbox-model-profiles` stack outputs.
+
 The default provider is `laptop`. With an empty gold file the runner prints
 `0 gold rows in <path>; nothing to score` and exits 0.
 

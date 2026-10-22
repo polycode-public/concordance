@@ -37,7 +37,10 @@ const storeWith = (counts) =>
   });
 const row = (evidence_id) => ({ evidence_id });
 
-function startDeps(store) {
+const PROFILE_ARN =
+  "arn:aws:bedrock:eu-west-2:111111111111:application-inference-profile/abc123def456";
+
+function startDeps(store, overrides = {}) {
   const puts = [];
   const jobs = [];
   const lines = [];
@@ -51,18 +54,32 @@ function startDeps(store) {
     },
     bucket: "corpus-bucket",
     roleArn: "arn:aws:iam::111111111111:role/batch",
+    extractProfileArn: PROFILE_ARN,
     now: () => Date.UTC(2026, 9, 22, 1, 2, 3),
     log: (line) => lines.push(JSON.parse(line)),
+    ...overrides,
   });
   return { handler, puts, jobs, lines };
 }
 
 describe("startExtractionBatch", () => {
+  it("refuses to start without the extract profile ARN, before any write", async () => {
+    const { handler, puts, jobs } = startDeps(storeWith({ IWS1: 1000 }), {
+      extractProfileArn: undefined,
+    });
+    await expect(
+      handler({ corpus: "grenfell", extraction: "batch", manifest: { items: [row("IWS1")] } }),
+    ).rejects.toThrow(/BEDROCK_EXTRACT_PROFILE_ARN/);
+    expect(puts).toEqual([]);
+    expect(jobs).toEqual([]);
+  });
+
   it("writes one JSONL a document and starts a Converse batch job over the input prefix", async () => {
     const store = storeWith({ IWS1: 600, IWS2: 410 });
     const { handler, puts, jobs } = startDeps(store);
     const result = await handler({
       corpus: "grenfell",
+      extraction: "batch",
       manifest: { items: [row("IWS1"), row("IWS2")] },
     });
     const prefix = "extraction-batch/grenfell/concordance-extract-grenfell-20261022T010203";
@@ -78,8 +95,9 @@ describe("startExtractionBatch", () => {
         jobName: "concordance-extract-grenfell-20261022T010203",
         clientRequestToken: "concordance-extract-grenfell-20261022T010203",
         roleArn: "arn:aws:iam::111111111111:role/batch",
-        modelId: "fake-extract",
+        modelId: PROFILE_ARN,
         modelInvocationType: "Converse",
+        tags: [{ key: "project", value: "concordance" }],
         timeoutDurationInHours: 24,
         inputDataConfig: {
           s3InputDataConfig: {
@@ -103,6 +121,14 @@ describe("startExtractionBatch", () => {
       ],
     });
     expect(store.closed).toBe(1);
+  });
+
+  it("returns on-demand for a large run that does not ask for a batch, and writes nothing", async () => {
+    const { handler, puts, jobs } = startDeps(storeWith({ IWS1: 1000 }));
+    const result = await handler({ corpus: "grenfell", manifest: { items: [row("IWS1")] } });
+    expect(result).toMatchObject({ mode: "on-demand", records: 100 });
+    expect(puts).toEqual([]);
+    expect(jobs).toEqual([]);
   });
 
   it("returns on-demand under the minimum and writes nothing", async () => {

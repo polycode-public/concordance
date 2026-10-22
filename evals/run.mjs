@@ -26,6 +26,27 @@ export function parseArgs(argv) {
   return args;
 }
 
+const PROFILE_VARIABLES = [
+  "BEDROCK_CHAT_PROFILE_ARN",
+  "BEDROCK_EXTRACT_PROFILE_ARN",
+  "BEDROCK_EMBED_PROFILE_ARN",
+];
+
+/**
+ * Throws unless the three application inference profile ARNs are set, so that every Bedrock
+ * call of an eval carries the project tag.
+ * @param {Record<string, string | undefined>} env
+ */
+export function requireProfileArns(env) {
+  const missing = PROFILE_VARIABLES.filter((name) => !env[name]);
+  if (missing.length) {
+    throw new Error(
+      `the Bedrock eval needs ${PROFILE_VARIABLES.join(", ")}; unset: ${missing.join(", ")}. ` +
+        'Set them with: eval "$(scripts/model-profile-env.sh)"',
+    );
+  }
+}
+
 /** Parses gold JSONL and validates each row. */
 export function parseGold(text, source = "gold") {
   const rows = [];
@@ -204,11 +225,13 @@ export async function run(argv, { runQuery, providerFor, db, openDb } = {}) {
     return null;
   }
   runQuery ??= (await import("../packages/core/query.mjs")).runQuery;
-  providerFor ??= async (kind) =>
-    (await import("../packages/core/providers/index.mjs")).providerFromEnv({
+  providerFor ??= async (kind) => {
+    if (kind === "bedrock") requireProfileArns(process.env);
+    return (await import("../packages/core/providers/index.mjs")).providerFromEnv({
       ...process.env,
       MODEL_PROVIDER: kind,
     });
+  };
   const provider = await providerFor(args.provider);
   openDb ??= async () => (await import("../packages/core/db.mjs")).openDbFromEnv();
   const owned = db ? null : await openDb();

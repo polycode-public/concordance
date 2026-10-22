@@ -9,6 +9,7 @@ import {
   locatorMatches,
   missReport,
   parseArgs,
+  requireProfileArns,
   parseGold,
   run,
   score,
@@ -302,5 +303,33 @@ describe("evals runner", () => {
     const files = await readdir(path.join(dir, "runs"));
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[\d-]+Z-bedrock-rerank-off\.json$/);
+  });
+});
+
+describe("requireProfileArns", () => {
+  const set = {
+    BEDROCK_CHAT_PROFILE_ARN: "c",
+    BEDROCK_EXTRACT_PROFILE_ARN: "e",
+    BEDROCK_EMBED_PROFILE_ARN: "m",
+  };
+
+  it("accepts the three variables", () => {
+    expect(() => requireProfileArns(set)).not.toThrow();
+  });
+
+  it("names the three variables, the unset one and the script that sets them", () => {
+    const partial = { ...set, BEDROCK_EMBED_PROFILE_ARN: undefined };
+    expect(() => requireProfileArns(partial)).toThrow(
+      /BEDROCK_CHAT_PROFILE_ARN, BEDROCK_EXTRACT_PROFILE_ARN, BEDROCK_EMBED_PROFILE_ARN; unset: BEDROCK_EMBED_PROFILE_ARN.*model-profile-env\.sh/,
+    );
+  });
+
+  it("stops a bedrock run before any provider is built", async () => {
+    const gold = path.join(dir, "gold.jsonl");
+    await writeFile(gold, row("g1", "abstain") + "\n");
+    for (const name of Object.keys(set)) vi.stubEnv(name, "");
+    await expect(
+      run([`--gold=${gold}`, "--provider=bedrock"], { db: { query: vi.fn() } }),
+    ).rejects.toThrow(/needs BEDROCK_CHAT_PROFILE_ARN/);
   });
 });

@@ -282,6 +282,35 @@ describe("bedrock provider", () => {
     expect(p.extractModel).toBe("e");
   });
 
+  it("addresses the calls to the profile ARNs and keeps the model names for the rows", async () => {
+    const arn = (kind) =>
+      `arn:aws:bedrock:eu-west-2:111111111111:application-inference-profile/${kind}`;
+    const client = fakeClient({
+      InvokeModelCommand: titan(1024),
+      ConverseCommand: converseReply('{"a":1}'),
+      ConverseStreamCommand: () => ({ stream: deltas(["hi"]) }),
+    });
+    const p = createBedrockProvider(
+      {
+        BEDROCK_EMBED_PROFILE_ARN: arn("embed"),
+        BEDROCK_CHAT_PROFILE_ARN: arn("chat"),
+        BEDROCK_EXTRACT_PROFILE_ARN: arn("extract"),
+      },
+      { sdk, client },
+    );
+    await p.embed(["x"]);
+    await p.extractJson({ prompt: "x" });
+    const result = await p.chat({ messages: [{ role: "user", content: "q" }], onToken: () => {} });
+    expect(client.calls.map((c) => c.input.modelId)).toEqual([
+      arn("embed"),
+      arn("extract"),
+      arn("chat"),
+    ]);
+    expect(p.embedModel).toBe("amazon.titan-embed-text-v2:0");
+    expect(p.extractModel).toBe("eu.anthropic.claude-haiku-4-5-20251001-v1:0");
+    expect(result.model).toBe("eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
+  });
+
   it("is selected by providerFromEnv without loading the SDK", () => {
     const p = createBedrockProvider({ MODEL_PROVIDER: "bedrock" }, { sdk });
     expect(assertProvider(p).name).toBe("bedrock");

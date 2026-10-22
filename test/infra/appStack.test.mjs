@@ -7,6 +7,7 @@ import { Match, Template } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AppStack, pageCorpora, siteDomain } from "../../infra/lib/appStack.mjs";
+import { ModelProfilesStack } from "../../infra/lib/modelProfilesStack.mjs";
 
 const env = { account: "111111111111", region: "eu-west-2" };
 const CLUSTER = "arn:aws:rds:eu-west-2:111111111111:cluster:concordance";
@@ -37,11 +38,61 @@ beforeAll(() => {
     dbSecretArn: SECRET,
     dbName: "concordance",
     budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
+    modelProfiles: new ModelProfilesStack(app, "Profiles", {
+      env,
+      envName: "sandbox",
+      project: "concordance",
+    }),
   });
   template = Template.fromStack(stack);
   dataTemplate = Template.fromStack(data);
   assembly = app.synth();
 }, 120000);
+
+describe("AppStack model profiles", () => {
+  const statementsOf = () =>
+    Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement,
+    );
+
+  it("lets the model Lambdas invoke the three profiles and their sources, nothing broader", () => {
+    const invokes = statementsOf().filter((st) =>
+      [st.Action].flat().includes("bedrock:InvokeModelWithResponseStream"),
+    );
+    expect(invokes).toHaveLength(3);
+    for (const st of invokes) {
+      const text = JSON.stringify(st.Resource);
+      expect(text).not.toContain("foundation-model/*");
+      expect(text).not.toContain("inference-profile/*");
+      expect(st.Resource).toEqual([
+        { "Fn::ImportValue": expect.stringContaining("ChatProfileInferenceProfileArn") },
+        "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        { "Fn::ImportValue": expect.stringContaining("ExtractProfileInferenceProfileArn") },
+        "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+        { "Fn::ImportValue": expect.stringContaining("EmbedProfileInferenceProfileArn") },
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
+      ]);
+    }
+  });
+
+  it("points the turn, report and compare Lambdas at the profile ARNs", () => {
+    const withProfiles = Object.values(template.findResources("AWS::Lambda::Function")).filter(
+      (f) => f.Properties.Environment?.Variables?.BEDROCK_CHAT_PROFILE_ARN,
+    );
+    expect(withProfiles).toHaveLength(3);
+    for (const f of withProfiles) {
+      expect(
+        Object.keys(f.Properties.Environment.Variables).filter((k) => /PROFILE_ARN$/.test(k)),
+      ).toEqual([
+        "BEDROCK_CHAT_PROFILE_ARN",
+        "BEDROCK_EXTRACT_PROFILE_ARN",
+        "BEDROCK_EMBED_PROFILE_ARN",
+      ]);
+    }
+  });
+});
 
 describe("AppStack", () => {
   it("routes the WebSocket API through a REQUEST authorizer on $connect", () => {
@@ -291,6 +342,9 @@ describe("AppStack", () => {
     expect(fn.ReservedConcurrentExecutions).toBe(1);
     expect(fn.Environment.Variables).toEqual({
       MODEL_PROVIDER: "bedrock",
+      BEDROCK_CHAT_PROFILE_ARN: expect.any(Object),
+      BEDROCK_EXTRACT_PROFILE_ARN: expect.any(Object),
+      BEDROCK_EMBED_PROFILE_ARN: expect.any(Object),
       DB_RESOURCE_ARN: CLUSTER,
       DB_SECRET_ARN: SECRET,
       DB_NAME: "concordance",
@@ -468,6 +522,11 @@ describe("AppStack", () => {
           dbSecretArn: SECRET,
           dbName: "concordance",
           budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
+          modelProfiles: new ModelProfilesStack(app, "Profiles", {
+            env,
+            envName: "sandbox",
+            project: "concordance",
+          }),
         }),
     ).toThrow(/CORS/);
   });
@@ -526,6 +585,11 @@ describe("AppStack with a domain", () => {
       dbSecretArn: SECRET,
       dbName: "concordance",
       budgetNames: ["concordance-sandbox-monthly", "concordance-sandbox-models"],
+      modelProfiles: new ModelProfilesStack(app, "Profiles", {
+        env,
+        envName: "sandbox",
+        project: "concordance",
+      }),
       domainName: DOMAIN,
       certificateArn: CERTIFICATE,
     });

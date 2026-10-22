@@ -32,6 +32,7 @@ import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import { profileEnvironment, profileInvokeResources } from "./modelProfilesStack.mjs";
 import { stagePageAssets } from "../../scripts/stage-page-assets.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -110,13 +111,18 @@ export class AppStack extends Stack {
    */
   constructor(scope, id, props) {
     super(scope, id, props);
-    const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetNames } = props;
+    const { corpusBucket, dbResourceArn, dbSecretArn, dbName, budgetNames, modelProfiles } = props;
     const corpora = pageCorpora(props.corpora ?? DEFAULT_CORPORA);
     if (typeof corpusBucket?.addCorsRule !== "function") {
       throw new Error("AppStack needs the corpus Bucket construct, to add its CORS rule");
     }
     if (!budgetNames?.length)
       throw new Error("AppStack needs the budgetNames the spend route reads");
+    if (!modelProfiles?.chat?.arn) {
+      throw new Error("AppStack needs the modelProfiles of the ModelProfilesStack");
+    }
+    const allModels = { chat: true, extract: true, embed: true };
+    const modelEnv = profileEnvironment(modelProfiles, allModels);
     const domain = siteDomain(props);
 
     const siteBucket = new s3.Bucket(this, "SiteBucket", {
@@ -223,12 +229,12 @@ export class AppStack extends Stack {
     const turnFn = fn("turn", {
       timeout: Duration.minutes(10),
       memorySize: 1024,
-      environment: dbEnv,
+      environment: { ...dbEnv, ...modelEnv },
     });
     const reportFn = fn("report", {
       timeout: Duration.minutes(15),
       memorySize: 1024,
-      environment: dbEnv,
+      environment: { ...dbEnv, ...modelEnv },
     });
     const wsRoutesFn = fn("wsRoutes", {
       environment: {
@@ -263,6 +269,7 @@ export class AppStack extends Stack {
       memorySize: 1769,
       environment: {
         MODEL_PROVIDER: "bedrock",
+        ...modelEnv,
         DB_RESOURCE_ARN: dbResourceArn,
         DB_SECRET_ARN: dbSecretArn,
         DB_NAME: dbName,
@@ -357,10 +364,7 @@ export class AppStack extends Stack {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-          resources: [
-            "arn:aws:bedrock:*::foundation-model/*",
-            `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
-          ],
+          resources: profileInvokeResources(this, modelProfiles, allModels),
         }),
       );
     }

@@ -8,13 +8,11 @@
 // Lambda run a document. A failed document is recorded in the result and the map goes on. A
 // document whose context lines outlast one run is invoked again until it finishes.
 //
-// The extraction runs in one of two modes. A run with at least the Bedrock minimum of batch
-// records (one record a window of ten sentences), or one whose input says "extraction": "batch",
-// writes one JSONL file a document under the corpus bucket's batch prefix and starts a Bedrock
+// The extraction runs in one of two modes. A run whose input says "extraction": "batch" (the
+// Bedrock minimum is 100 records, one a window of ten sentences) writes one JSONL file a document under the corpus bucket's batch prefix and starts a Bedrock
 // batch inference job, which bills half the on-demand price. The state machine polls the job,
 // then maps a load over the documents through the same checks and writer as the on-demand path.
-// A smaller run, such as a single new document, or one that says "on-demand", maps the on-demand
-// extraction over the rows. A job that fails, or outlasts its deadline, ends the execution failed.
+// Any other run maps the on-demand extraction over the rows. A job that fails, or outlasts its deadline, ends the execution failed.
 // Nothing runs or costs money until an execution starts.
 
 import path from "node:path";
@@ -27,13 +25,16 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { EXTRACTION_BATCH_PREFIX } from "./dataStack.mjs";
+import {
+  EXTRACT_MODEL,
+  profileEnvironment,
+  profileInvokeResources,
+} from "./modelProfilesStack.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AWS_DIR = path.join(ROOT, "packages", "aws");
 
 export const MAX_CONCURRENT_DOCUMENTS = 1;
-/** The extraction model: the EU cross-Region inference profile, which batch inference takes. */
-export const EXTRACT_PROFILE = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 /** The wait between two status polls of the batch job. */
 export const BATCH_POLL_INTERVAL = Duration.minutes(5);
 
@@ -47,6 +48,7 @@ export class IngestStack extends Stack {
    * @param {string} id
    * @param {import('aws-cdk-lib').StackProps & { corpusBucket: import('aws-cdk-lib/aws-s3').IBucket,
    *   dbResourceArn: string, dbSecretArn: string, dbName: string, budgetNames: string[],
+   *   modelProfiles: import('./modelProfilesStack.mjs').ModelProfilesStack,
    *   corpora?: string[] }} props
    */
   constructor(scope, id, props) {
@@ -57,14 +59,21 @@ export class IngestStack extends Stack {
       dbSecretArn,
       dbName,
       budgetNames,
+      modelProfiles,
       corpora = ["grenfell"],
     } = props;
+    if (!modelProfiles?.extract?.arn) {
+      throw new Error("IngestStack needs the modelProfiles of the ModelProfilesStack");
+    }
     if (!corpusBucket || !dbResourceArn || !dbSecretArn || !dbName || !budgetNames?.length) {
       throw new Error(
         "IngestStack needs corpusBucket, dbResourceArn, dbSecretArn, dbName and budgetNames",
       );
     }
 
+    const allModels = { chat: true, extract: true, embed: true };
+    const modelEnv = profileEnvironment(modelProfiles, allModels);
+    const invokeResources = profileInvokeResources(this, modelProfiles, allModels);
     const fn = (name, { timeout = Duration.seconds(30), memorySize = 256, environment }) =>
       new NodejsFunction(this, `${name[0].toUpperCase()}${name.slice(1)}Function`, {
         entry: path.join(AWS_DIR, `${name}.mjs`),
@@ -107,6 +116,7 @@ export class IngestStack extends Stack {
       memorySize: 2048,
       environment: {
         MODEL_PROVIDER: "bedrock",
+        ...modelEnv,
         DB_RESOURCE_ARN: dbResourceArn,
         DB_SECRET_ARN: dbSecretArn,
         DB_NAME: dbName,
@@ -119,17 +129,15 @@ export class IngestStack extends Stack {
       memorySize: 512,
       environment: {
         MODEL_PROVIDER: "bedrock",
+        ...modelEnv,
         DB_RESOURCE_ARN: dbResourceArn,
         DB_SECRET_ARN: dbSecretArn,
         DB_NAME: dbName,
       },
     });
 
-    const extractFoundationModel = EXTRACT_PROFILE.slice(EXTRACT_PROFILE.indexOf(".") + 1);
-    const extractModelArns = [
-      `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${EXTRACT_PROFILE}`,
-      `arn:aws:bedrock:*::foundation-model/${extractFoundationModel}`,
-    ];
+    // The batch job and its service role call through the tagged extract profile.
+    const extractModelArns = profileInvokeResources(this, modelProfiles, { extract: true });
     const batchObjects = corpusBucket.arnForObjects(`${EXTRACTION_BATCH_PREFIX}*`);
     const jobArns = `arn:aws:bedrock:${this.region}:${this.account}:model-invocation-job/*`;
 
@@ -162,7 +170,7 @@ export class IngestStack extends Stack {
 
     const batchEnvironment = {
       MODEL_PROVIDER: "bedrock",
-      BEDROCK_EXTRACT_MODEL: EXTRACT_PROFILE,
+      BEDROCK_EXTRACT_MODEL: EXTRACT_MODEL,
       DB_RESOURCE_ARN: dbResourceArn,
       DB_SECRET_ARN: dbSecretArn,
       DB_NAME: dbName,
@@ -171,20 +179,24 @@ export class IngestStack extends Stack {
     const startExtractionBatchFn = fn("startExtractionBatch", {
       timeout: Duration.minutes(5),
       memorySize: 1024,
-      environment: { ...batchEnvironment, BATCH_ROLE_ARN: batchRole.roleArn },
+      environment: {
+        ...batchEnvironment,
+        ...profileEnvironment(modelProfiles, { extract: true }),
+        BATCH_ROLE_ARN: batchRole.roleArn,
+      },
     });
     const getExtractionBatchFn = fn("getExtractionBatch", { environment: {} });
     const loadExtractionBatchFn = fn("loadExtractionBatch", {
       timeout: Duration.minutes(15),
       memorySize: 1024,
-      environment: batchEnvironment,
+      environment: { ...batchEnvironment, ...modelEnv },
     });
     startExtractionBatchFn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ["s3:PutObject"], resources: [batchObjects] }),
     );
     startExtractionBatchFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["bedrock:CreateModelInvocationJob"],
+        actions: ["bedrock:CreateModelInvocationJob", "bedrock:TagResource"],
         resources: [jobArns, ...extractModelArns],
       }),
     );
@@ -262,10 +274,7 @@ export class IngestStack extends Stack {
       f.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock:InvokeModel"],
-          resources: [
-            "arn:aws:bedrock:*::foundation-model/*",
-            `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
-          ],
+          resources: invokeResources,
         }),
       );
     }

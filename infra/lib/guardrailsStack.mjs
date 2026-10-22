@@ -7,9 +7,9 @@
 // - A monthly cost budget for the resources tagged project=<project>. The tag filter reads
 //   only what Cost Explorer knows as a cost allocation tag, so the operator activates the
 //   `project` tag in the management account first (AWS_ACCOUNT.md, operator steps).
-// - A second budget on the Bedrock model services. Model usage carries no cost allocation tag,
-//   so the tag budget cannot see it; a budget that filtered on both the tag and the service
-//   would need both to match.
+// - A second budget on the Bedrock model services, narrowed to the tag. Model calls carry the tag
+//   when they go through the application inference profiles (ModelProfilesStack); both filters
+//   must match, so other projects' calls to the same models stop counting.
 // - The agent kill switch, /<project>/<env>/agents/kill-switch. Every agent workflow reads it
 //   through .github/actions/agent-kill-switch and stops when it is on. This stack creates it
 //   with the value off; agent-kill-switch.yml only overwrites it.
@@ -70,7 +70,7 @@ export class GuardrailsStack extends Stack {
         budgetType: "COST",
         timeUnit: "MONTHLY",
         budgetLimit: { amount: MONTHLY_LIMIT_USD, unit: "USD" },
-        costFilters: { Service: [...MODEL_SERVICES] },
+        costFilters: { Service: [...MODEL_SERVICES], TagKeyValue: [`user:project$${project}`] },
       },
       notificationsWithSubscribers: subscribers(budgetEmail),
     });
