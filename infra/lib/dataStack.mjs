@@ -4,12 +4,15 @@
 // The corpus bucket: off-site copies of the corpus files the laptop path builds, under the
 // prefixes raw/ (the source documents), text/ (the extracted text), chunks/ (the retrieval
 // chunks) and media/ (images and audio). Versioned, so an overwrite keeps the old copy for 30
+// days. The extraction's batch inference files sit under extraction-batch/ and expire after 30
 // days. The stack is a sandbox: a destroy removes the bucket and its objects.
 
 import { CfnOutput, Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 
 export const CORPUS_PREFIXES = ["raw/", "text/", "chunks/", "media/"];
+/** The batch inference records and results of the assertion extraction. */
+export const EXTRACTION_BATCH_PREFIX = "extraction-batch/";
 
 export class DataStack extends Stack {
   constructor(scope, id, props) {
@@ -24,6 +27,11 @@ export class DataStack extends Stack {
       autoDeleteObjects: true,
       lifecycleRules: [
         { id: "ExpireNoncurrentVersions", noncurrentVersionExpiration: Duration.days(30) },
+        {
+          id: "ExpireExtractionBatchFiles",
+          prefix: EXTRACTION_BATCH_PREFIX,
+          expiration: Duration.days(30),
+        },
       ],
     });
 
