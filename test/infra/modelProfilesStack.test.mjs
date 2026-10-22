@@ -39,6 +39,14 @@ describe("ModelProfilesStack", () => {
     ]);
   });
 
+  it("gives every profile a name and a description that CloudFormation accepts", () => {
+    const pattern = /^([0-9a-zA-Z:.][ _-]?)+$/;
+    for (const p of profiles()) {
+      expect(p.InferenceProfileName).toMatch(/^([0-9a-zA-Z][ _-]?)+$/);
+      expect(p.Description).toMatch(pattern);
+    }
+  });
+
   it("copies the EU system profiles for Claude and the foundation model for Titan", () => {
     expect(profiles().map((p) => p.ModelSource.CopyFrom)).toEqual([
       "arn:aws:bedrock:eu-west-2:111111111111:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",

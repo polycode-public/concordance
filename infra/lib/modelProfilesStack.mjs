@@ -30,7 +30,7 @@ export class ModelProfilesStack extends Stack {
     const profile = (logicalId, kind, modelId, copyFrom) => {
       const resource = new bedrock.CfnApplicationInferenceProfile(this, logicalId, {
         inferenceProfileName: `${project}-${envName}-${kind}`,
-        description: `${project} ${envName} ${kind} model, tagged for cost allocation`,
+        description: `${project} ${envName} ${kind} model tagged for cost allocation`,
         modelSource: { copyFrom },
         tags: [{ key: "project", value: project }],
       });
